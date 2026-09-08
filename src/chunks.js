@@ -130,13 +130,19 @@ function fuse(lists, k = 60) {
  * Falls back to keyword-only if embedding is unavailable, so retrieval degrades
  * rather than failing.
  */
-export async function retrieve({ principalId, dossierId, query, limit = 6 }) {
-  const keyword = store.searchChunks(principalId, dossierId, query, 20);
+export async function retrieve({ principalId, dossierId, query, limit = 6, includeLinked = true }) {
+  // Two dossiers can be separate subjects that touch in places, so a linked dossier's
+  // passages are searched too — and each result carries which dossier it came from.
+  const scope = includeLinked
+    ? store.dossierScope(principalId, Array.isArray(dossierId) ? dossierId[0] : dossierId)
+    : (Array.isArray(dossierId) ? dossierId : [dossierId]);
+
+  const keyword = store.searchChunks(principalId, scope, query, 20);
 
   let semantic = [];
   try {
     const { vectors } = await embed([query]);
-    if (vectors[0]) semantic = vectorSearch(principalId, dossierId, vectors[0], 20);
+    if (vectors[0]) semantic = vectorSearch(principalId, scope, vectors[0], 20);
   } catch (err) {
     console.warn('[chunks] semantic search unavailable:', err.message);
   }
@@ -146,10 +152,49 @@ export async function retrieve({ principalId, dossierId, query, limit = 6 }) {
 }
 
 /** Renders retrieved passages for a prompt, with their source labelled. */
-export function renderPassages(principalId, rows) {
+export function renderPassages(principalId, rows, homeDossierId = null) {
   return rows.map((r, i) => {
     const doc = store.getDocument(principalId, r.document_id);
-    const where = [doc?.filename ?? 'سند', r.page ? `ص ${r.page}` : null].filter(Boolean).join(' · ');
-    return `[${i + 1}] ${where}\n${r.text}`;
+    const parts = [doc?.filename ?? 'سند'];
+    if (r.page) parts.push(`ص ${r.page}`);
+    // Mark anything that came from a linked dossier, so its origin is never implicit.
+    if (homeDossierId && r.dossier_id && r.dossier_id !== homeDossierId) {
+      const d = store.getDossier(principalId, r.dossier_id);
+      parts.push(`از پرونده‌ی مرتبط #${r.dossier_id}${d ? ` «${d.topic}»` : ''}`);
+    }
+    return `[${i + 1}] ${parts.join(' · ')}\n${r.text}`;
   }).join('\n\n');
+}
+
+/**
+ * Dossiers whose material is closest to this one, by comparing chunk vectors.
+ * Used to suggest a link rather than to make one.
+ */
+export function relatedDossiers(principalId, dossierId, { limit = 5, sample = 40 } = {}) {
+  const mine = store.dossierChunks(principalId, dossierId)
+    .filter((c) => c.embedding).slice(0, sample);
+  if (!mine.length) return [];
+
+  const linked = new Set(store.dossierScope(principalId, dossierId));
+  const scores = new Map();
+
+  for (const other of store.listDossiers(principalId, 200)) {
+    if (linked.has(other.id)) continue;
+    const theirs = store.dossierChunks(principalId, other.id)
+      .filter((c) => c.embedding).slice(0, sample);
+    if (!theirs.length) continue;
+
+    // Best-pair similarity: two dossiers are related if any part of them is.
+    let best = 0;
+    for (const a of mine) {
+      const va = fromBlob(a.embedding);
+      for (const b of theirs) {
+        const s = cosine(va, fromBlob(b.embedding));
+        if (s > best) best = s;
+      }
+    }
+    if (best > 0.75) scores.set(other.id, { dossier: other, score: best });
+  }
+
+  return [...scores.values()].sort((a, b) => b.score - a.score).slice(0, limit);
 }

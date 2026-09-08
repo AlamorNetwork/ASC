@@ -195,6 +195,110 @@ await check('pdftotext presence is reported, not assumed', async () => {
   return ok ? 'installed' : 'NOT installed — PDFs will report this clearly instead of crashing';
 });
 
+await check('a repeated finding is not reported as new', async () => {
+  const { isNew } = await import('../src/intentions.js');
+  const existing = [
+    { text: 'میترائیسم رومی پدیده‌ای عمدتاً رومی بود و ادامه‌ی آیین ایرانی نیست', source_url: 'https://a.test/1' },
+    { text: 'میتراییوم‌ها بیشتر در مرزهای نظامی روم پراکنده بودند', source_url: 'https://b.test/2' },
+  ];
+  // Same source, so not news whatever the wording.
+  if (isNew({ text: 'یک چیز کاملاً متفاوت', sourceUrl: 'https://a.test/1' }, existing)) {
+    throw new Error('a claim from an already-cited source was called new');
+  }
+  // Same claim reworded, so not news either.
+  if (isNew({ text: 'میترائیسم رومی عمدتاً پدیده‌ای رومی بود و ادامه‌ی آیین ایرانی نیست', sourceUrl: 'https://c.test' }, existing)) {
+    throw new Error('a reworded duplicate was called new');
+  }
+  // Genuinely different, from a new source.
+  if (!isNew({ text: 'کتیبه‌ای تازه در سوریه کشف شد که تاریخ‌گذاری را جابه‌جا می‌کند', sourceUrl: 'https://d.test' }, existing)) {
+    throw new Error('a genuinely new finding was suppressed');
+  }
+  return 'same-source and reworded suppressed, new finding kept';
+});
+
+await check('intentions are due, expire, and record runs', async () => {
+  const { createWatch, nextRun, hasGoneQuiet, QUIET_RUNS_BEFORE_ASKING } = await import('../src/intentions.js');
+  const p = `intent-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'موضوع پیگیری' });
+  const id = createWatch({ principalId: p, dossierId, everyHours: 24, days: 60 });
+
+  const it = store.getIntention(p, id);
+  if (it.state !== 'armed') throw new Error(`state=${it.state}`);
+  if (!it.until_at) throw new Error('an intention without an expiry was created');
+
+  // Not due yet.
+  if (store.dueIntentions(new Date().toISOString()).some((r) => r.id === id)) {
+    throw new Error('a freshly scheduled intention was already due');
+  }
+  // Due once its time arrives.
+  const later = new Date(Date.now() + 25 * 3600 * 1000).toISOString();
+  if (!store.dueIntentions(later).some((r) => r.id === id)) throw new Error('never became due');
+
+  store.recordIntentionRun(p, id, {
+    ranAt: new Date().toISOString(), nextRunAt: nextRun(24),
+    state: 'nothing_new', nothingNew: true, costToman: 500,
+  });
+  const after = store.getIntention(p, id);
+  if (after.runs !== 1 || after.silent_runs !== 1) throw new Error('run counters did not move');
+  if (after.cost_toman !== 500) throw new Error('cost was not accumulated');
+
+  for (let i = 1; i < QUIET_RUNS_BEFORE_ASKING; i++) {
+    store.recordIntentionRun(p, id, {
+      ranAt: new Date().toISOString(), nextRunAt: nextRun(24),
+      state: 'nothing_new', nothingNew: true,
+    });
+  }
+  if (!hasGoneQuiet(store.getIntention(p, id))) throw new Error('a quiet watch was not flagged');
+
+  // A finding resets the silence counter.
+  store.recordIntentionRun(p, id, {
+    ranAt: new Date().toISOString(), nextRunAt: nextRun(24),
+    state: 'succeeded', newClaims: 2, nothingNew: false,
+  });
+  if (store.getIntention(p, id).silent_runs !== 0) throw new Error('silence counter did not reset');
+  return 'due, counted, quiet-flagged, reset';
+});
+
+await check('dossier links are undirected and widen the search scope', () => {
+  const p = `link-${Date.now()}`;
+  const a = store.insertDossier({ principalId: p, topic: 'الف' });
+  const b = store.insertDossier({ principalId: p, topic: 'ب' });
+  const c = store.insertDossier({ principalId: p, topic: 'ج' });
+
+  store.linkDossiers(p, b, a);            // deliberately out of order
+  store.linkDossiers(p, a, b);            // and duplicated
+  if (store.linkedDossiers(p, a).length !== 1) throw new Error('a duplicate link was stored twice');
+  if (store.linkedDossiers(p, b)[0]?.id !== a) throw new Error('the link is not undirected');
+
+  const scope = store.dossierScope(p, a);
+  if (!scope.includes(a) || !scope.includes(b)) throw new Error(`scope wrong: ${scope}`);
+  if (scope.includes(c)) throw new Error('an unlinked dossier leaked into scope');
+
+  try { store.linkDossiers(p, a, a); throw new Error('a dossier was linked to itself'); }
+  catch (e) { if (!/به خودش/.test(e.message)) throw e; }
+
+  if (store.unlinkDossiers(p, b, a) !== 1) throw new Error('unlink did not remove the row');
+  if (store.linkedDossiers(p, a).length !== 0) throw new Error('link survived unlink');
+  return 'ordered, deduped, self-link refused';
+});
+
+await check('keyword search spans linked dossiers', () => {
+  const p = `scope-${Date.now()}`;
+  const a = store.insertDossier({ principalId: p, topic: 'الف' });
+  const b = store.insertDossier({ principalId: p, topic: 'ب' });
+  const docA = store.insertDocument({ principalId: p, dossierId: a, filename: 'a.txt', kind: 'text', extraction: 'local' });
+  const docB = store.insertDocument({ principalId: p, dossierId: b, filename: 'b.txt', kind: 'text', extraction: 'local' });
+  store.insertChunks(p, a, docA, [{ seq: 0, text: 'دیالوگ در فیلم‌نامه ابزار اصلی شخصیت‌پردازی است.' }]);
+  store.insertChunks(p, b, docB, [{ seq: 0, text: 'زیرمتن همان چیزی است که شخصیت نمی‌گوید.' }]);
+
+  if (store.searchChunks(p, a, 'زیرمتن').length !== 0) throw new Error('found a chunk outside scope');
+  store.linkDossiers(p, a, b);
+  const wide = store.searchChunks(p, store.dossierScope(p, a), 'زیرمتن');
+  if (!wide.length) throw new Error('linked dossier was not searched');
+  if (wide[0].dossier_id !== b) throw new Error('result is not tagged with its dossier');
+  return 'linked material is reachable and labelled';
+});
+
 await check('conversation history round trips', () => {
   // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
   const p = `chat-test-${Date.now()}`;

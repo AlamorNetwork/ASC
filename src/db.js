@@ -132,6 +132,50 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE OF text ON chunks BEGIN
   INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
   INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
 END;
+
+CREATE TABLE IF NOT EXISTS intentions (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id  TEXT    NOT NULL,
+  title         TEXT    NOT NULL,
+  created_from  TEXT,                        -- the utterance that produced it
+  dossier_id    INTEGER REFERENCES dossiers(id),
+  trigger_kind  TEXT    NOT NULL,            -- schedule
+  every_hours   INTEGER NOT NULL,
+  body_kind     TEXT    NOT NULL,            -- watch_dossier
+  authority     TEXT    NOT NULL DEFAULT 'notify',
+  state         TEXT    NOT NULL DEFAULT 'armed',   -- armed | running | suspended | expired
+  next_run_at   TEXT    NOT NULL,
+  until_at      TEXT,                        -- nothing is immortal
+  last_run_at   TEXT,
+  runs          INTEGER NOT NULL DEFAULT 0,
+  silent_runs   INTEGER NOT NULL DEFAULT 0,  -- consecutive firings with nothing new
+  cost_toman    REAL    NOT NULL DEFAULT 0,
+  created_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_intentions_due ON intentions(state, next_run_at);
+
+CREATE TABLE IF NOT EXISTS intention_runs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id  TEXT    NOT NULL,
+  intention_id  INTEGER NOT NULL REFERENCES intentions(id),
+  state         TEXT    NOT NULL,            -- succeeded | nothing_new | failed
+  new_claims    INTEGER NOT NULL DEFAULT 0,
+  note          TEXT,
+  cost_toman    REAL    NOT NULL DEFAULT 0,
+  ran_at        TEXT    NOT NULL
+);
+
+-- Undirected: stored once with the lower id first, so a pair cannot be linked twice.
+CREATE TABLE IF NOT EXISTS dossier_links (
+  principal_id  TEXT    NOT NULL,
+  a_id          INTEGER NOT NULL REFERENCES dossiers(id),
+  b_id          INTEGER NOT NULL REFERENCES dossiers(id),
+  note          TEXT,
+  created_at    TEXT    NOT NULL,
+  PRIMARY KEY (principal_id, a_id, b_id),
+  CHECK (a_id < b_id)
+);
 `);
 
 export const getSetting = (key) =>
@@ -191,25 +235,110 @@ export const chunksWithoutEmbedding = (principalId, dossierId, limit = 200) =>
               WHERE principal_id = ? AND dossier_id = ? AND embedding IS NULL
               ORDER BY id LIMIT ?`).all(principalId, dossierId, limit);
 
-export const dossierChunks = (principalId, dossierId) =>
-  db.prepare(`SELECT id, document_id, seq, page, text, embedding FROM chunks
-              WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)
-    .all(principalId, dossierId);
+export function dossierChunks(principalId, dossierId) {
+  const ids = Array.isArray(dossierId) ? dossierId : [dossierId];
+  const holes = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT id, dossier_id, document_id, seq, page, text, embedding FROM chunks
+                     WHERE principal_id = ? AND dossier_id IN (${holes}) ORDER BY id`)
+    .all(principalId, ...ids);
+}
 
-/** FTS5 keyword search, scoped to one dossier. */
+// ------------------------------------------------------- links and intentions
+
+const orderPair = (a, b) => (a < b ? [a, b] : [b, a]);
+
+export function linkDossiers(principalId, x, y, note = null) {
+  if (x === y) throw new Error('یک پرونده را نمی‌شود به خودش وصل کرد');
+  const [a, b] = orderPair(Number(x), Number(y));
+  db.prepare(`INSERT OR IGNORE INTO dossier_links (principal_id, a_id, b_id, note, created_at)
+              VALUES (?,?,?,?,?)`).run(principalId, a, b, note, new Date().toISOString());
+}
+
+export function unlinkDossiers(principalId, x, y) {
+  const [a, b] = orderPair(Number(x), Number(y));
+  return db.prepare(`DELETE FROM dossier_links WHERE principal_id = ? AND a_id = ? AND b_id = ?`)
+    .run(principalId, a, b).changes;
+}
+
+/** The dossiers directly linked to this one. */
+export const linkedDossiers = (principalId, id) => db.prepare(`
+  SELECT d.*, l.note FROM dossier_links l
+  JOIN dossiers d ON d.id = CASE WHEN l.a_id = ? THEN l.b_id ELSE l.a_id END
+  WHERE l.principal_id = ? AND (l.a_id = ? OR l.b_id = ?)
+  ORDER BY d.id
+`).all(id, principalId, id, id);
+
+/** This dossier plus everything linked to it — the scope a question is answered from. */
+export const dossierScope = (principalId, id) =>
+  [Number(id), ...linkedDossiers(principalId, id).map((d) => d.id)];
+
+export const insertIntention = (i) => db.prepare(`
+  INSERT INTO intentions (principal_id, title, created_from, dossier_id, trigger_kind,
+                          every_hours, body_kind, authority, next_run_at, until_at, created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?)
+`).run(i.principalId, i.title, i.createdFrom ?? null, i.dossierId ?? null,
+       i.triggerKind ?? 'schedule', i.everyHours, i.bodyKind ?? 'watch_dossier',
+       i.authority ?? 'notify', i.nextRunAt, i.untilAt ?? null,
+       new Date().toISOString()).lastInsertRowid;
+
+export const listIntentions = (principalId) =>
+  db.prepare(`SELECT * FROM intentions WHERE principal_id = ? ORDER BY id DESC`).all(principalId);
+
+export const getIntention = (principalId, id) =>
+  db.prepare(`SELECT * FROM intentions WHERE principal_id = ? AND id = ?`).get(principalId, id);
+
+/** Armed, due, and not past its expiry. */
+export const dueIntentions = (nowIso) => db.prepare(`
+  SELECT * FROM intentions
+  WHERE state = 'armed' AND next_run_at <= ?
+    AND (until_at IS NULL OR until_at > ?)
+  ORDER BY next_run_at LIMIT 5
+`).all(nowIso, nowIso);
+
+export const expiredIntentions = (nowIso) => db.prepare(`
+  SELECT * FROM intentions WHERE state = 'armed' AND until_at IS NOT NULL AND until_at <= ?
+`).all(nowIso);
+
+export const setIntentionState = (principalId, id, state) =>
+  db.prepare(`UPDATE intentions SET state = ? WHERE principal_id = ? AND id = ?`)
+    .run(state, principalId, id);
+
+export const recordIntentionRun = (principalId, id, patch) => {
+  db.prepare(`
+    UPDATE intentions
+    SET state = 'armed', last_run_at = ?, next_run_at = ?, runs = runs + 1,
+        silent_runs = CASE WHEN ? THEN silent_runs + 1 ELSE 0 END,
+        cost_toman = cost_toman + ?
+    WHERE principal_id = ? AND id = ?
+  `).run(patch.ranAt, patch.nextRunAt, patch.nothingNew ? 1 : 0,
+         patch.costToman ?? 0, principalId, id);
+
+  db.prepare(`INSERT INTO intention_runs (principal_id, intention_id, state, new_claims, note, cost_toman, ran_at)
+              VALUES (?,?,?,?,?,?,?)`)
+    .run(principalId, id, patch.state, patch.newClaims ?? 0, patch.note ?? null,
+         patch.costToman ?? 0, patch.ranAt);
+};
+
+export const intentionRuns = (principalId, id, limit = 10) =>
+  db.prepare(`SELECT * FROM intention_runs WHERE principal_id = ? AND intention_id = ?
+              ORDER BY id DESC LIMIT ?`).all(principalId, id, limit);
+
+/** FTS5 keyword search, scoped to one dossier or a set of them. */
 export function searchChunks(principalId, dossierId, query, limit = 20) {
   // FTS5 treats punctuation as syntax, so the query is reduced to bare terms.
   const terms = String(query).replace(/["'()*:^-]/g, ' ').split(/\s+/)
     .filter((w) => w.length > 1).slice(0, 12);
   if (!terms.length) return [];
   const match = terms.map((t) => `"${t}"`).join(' OR ');
+  const ids = Array.isArray(dossierId) ? dossierId : [dossierId];
+  const holes = ids.map(() => '?').join(',');
   try {
     return db.prepare(`
-      SELECT c.id, c.document_id, c.seq, c.page, c.text, f.rank
+      SELECT c.id, c.dossier_id, c.document_id, c.seq, c.page, c.text, f.rank
       FROM chunks_fts f JOIN chunks c ON c.id = f.rowid
-      WHERE f.chunks_fts MATCH ? AND c.principal_id = ? AND c.dossier_id = ?
+      WHERE f.chunks_fts MATCH ? AND c.principal_id = ? AND c.dossier_id IN (${holes})
       ORDER BY f.rank LIMIT ?
-    `).all(match, principalId, dossierId, limit);
+    `).all(match, principalId, ...ids, limit);
   } catch {
     return []; // a malformed match expression should not take the answer down
   }

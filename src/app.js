@@ -6,6 +6,9 @@ import * as chat from './chat.js';
 import { captureFromAudio, captureFromText } from './capture.js';
 import { runResearch } from './research.js';
 import { ingestToDossier } from './ingest.js';
+import { createWatch } from './intentions.js';
+import { relatedDossiers } from './chunks.js';
+import { startScheduler } from './scheduler.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
@@ -265,6 +268,8 @@ async function handleCommand(chatId, principalId, text) {
        'اگر درخواست تحقیق باشد، دکمه‌اش را می‌زنی و در پس‌زمینه انجام می‌دهم.', '',
        'وقتی تحقیقی تمام شد، دکمه‌ی «بحث کنیم» را بزن تا درباره‌اش حرف بزنیم.', '',
        '/use — پرونده‌ها · /close — خروج از گفتگو',
+       '/watch — پیگیری خودکار · /intentions · /unwatch',
+       '/link · /unlink · /related — پیوند پرونده‌ها',
        '/model · /models · /budget',
        '/cost · /recent · /db'].join('\n'));
     return true;
@@ -375,6 +380,92 @@ async function handleCommand(chatId, principalId, text) {
     return true;
   }
 
+  if (text.startsWith('/watch')) {
+    const parts = text.slice(6).trim().split(/\s+/).filter(Boolean);
+    const dossierId = Number(parts[0]) || settings.activeDossier();
+    const everyHours = Number(parts[1]) || 24;
+    if (!dossierId) {
+      await tg.send(chatId, 'اول با <code>/use &lt;id&gt;</code> پرونده‌ای انتخاب کن، یا <code>/watch 3</code> بزن.');
+      return true;
+    }
+    try {
+      const id = createWatch({
+        principalId, dossierId, everyHours, createdFrom: text,
+      });
+      const it = store.getIntention(principalId, id);
+      await tg.send(chatId, ['👁 <b>نیت ماندگار ساخته شد</b>', '',
+        esc(it.title),
+        `هر ${everyHours} ساعت یک بار دنبال چیز تازه می‌گردم.`,
+        `تا ${it.until_at.slice(0, 10)} — بعدش می‌پرسم هنوز می‌خواهی یا نه.`, '',
+        '<i>اگر چیزی تازه نبود، چیزی نمی‌گویم.</i>'].join('\n'));
+    } catch (err) {
+      await tg.send(chatId, `❌ ${esc(err.message)}`);
+    }
+    return true;
+  }
+
+  if (text.startsWith('/intentions') || text.startsWith('/watches')) {
+    const rows = store.listIntentions(principalId);
+    if (!rows.length) return (await tg.send(chatId, 'هنوز نیت ماندگاری نیست. <code>/watch</code> بزن.'), true);
+    const mark = { armed: '👁', running: '⏳', suspended: '⏸', expired: '⌛' };
+    await tg.send(chatId, ['👁 <b>نیت‌های ماندگار</b>', '', ...rows.map((i) =>
+      `${mark[i.state] ?? '·'} #${i.id} ${esc(i.title)}\n` +
+      `   هر ${i.every_hours}س · ${i.runs} اجرا${i.silent_runs ? ` (${i.silent_runs} بی‌نتیجه)` : ''} · ` +
+      `${toman(i.cost_toman)} تومان · بعدی ${i.next_run_at.slice(5, 16).replace('T', ' ')}`
+    ), '', '<code>/unwatch &lt;id&gt;</code> برای توقف'].join('\n'));
+    return true;
+  }
+
+  if (text.startsWith('/unwatch')) {
+    const id = Number(text.slice(8).trim());
+    const it = store.getIntention(principalId, id);
+    if (!it) return (await tg.send(chatId, 'پیدا نشد.'), true);
+    store.setIntentionState(principalId, id, 'suspended');
+    await tg.send(chatId, `⏸ «${esc(it.title)}» متوقف شد.`);
+    return true;
+  }
+
+  if (text.startsWith('/link')) {
+    const [x, y] = text.slice(5).trim().split(/\s+/).map(Number);
+    const a = x || settings.activeDossier();
+    if (!a || !y) {
+      await tg.send(chatId, '<code>/link 3 7</code> — یا با پرونده‌ی فعال: <code>/link 7</code>');
+      return true;
+    }
+    const b = x && y ? y : x;
+    try {
+      store.linkDossiers(principalId, a, b);
+      const da = store.getDossier(principalId, a), db_ = store.getDossier(principalId, b);
+      if (!da || !db_) throw new Error('یکی از پرونده‌ها پیدا نشد');
+      await tg.send(chatId, `🔗 #${a} «${esc(da.topic)}» ↔ #${b} «${esc(db_.topic)}»\n\n<i>حالا وقتی در یکی سؤال کنی، متن آن یکی هم جست‌وجو می‌شود.</i>`);
+    } catch (err) {
+      await tg.send(chatId, `❌ ${esc(err.message)}`);
+    }
+    return true;
+  }
+
+  if (text.startsWith('/unlink')) {
+    const [x, y] = text.slice(7).trim().split(/\s+/).map(Number);
+    const a = x || settings.activeDossier();
+    const removed = store.unlinkDossiers(principalId, a, y || x);
+    await tg.send(chatId, removed ? '🔗 پیوند برداشته شد.' : 'چنین پیوندی نبود.');
+    return true;
+  }
+
+  if (text.startsWith('/related')) {
+    const id = Number(text.slice(8).trim()) || settings.activeDossier();
+    if (!id) return (await tg.send(chatId, 'اول پرونده‌ای انتخاب کن.'), true);
+    const rows = relatedDossiers(principalId, id);
+    if (!rows.length) {
+      await tg.send(chatId, 'پرونده‌ی مرتبطی پیدا نشد. <i>(بردارها لازم‌اند — سندی به پرونده‌ها داده‌ای؟)</i>');
+      return true;
+    }
+    await tg.send(chatId, ['🔗 <b>شاید مرتبط باشند</b>', '',
+      ...rows.map((r) => `#${r.dossier.id} ${esc(r.dossier.topic)} — شباهت ${Math.round(r.score * 100)}٪`),
+      '', `<code>/link ${id} &lt;id&gt;</code> برای وصل کردن`].join('\n'));
+    return true;
+  }
+
   // ------------------------------------------------------------ inspection
 
   if (text.startsWith('/db')) {
@@ -467,6 +558,55 @@ export async function run() {
     ? `[asc] owner: ${ownerChatId}`
     : '[asc] unclaimed — the first chat to message becomes the owner');
 
+  startScheduler({
+    // A watch that found something new. One that found nothing says nothing.
+    onReport: async ({ report, dossier, fresh, costToman, intention }) => {
+      if (!ownerChatId) return;
+      if (report) return void await tg.send(ownerChatId, report).catch(() => {});
+
+      await tg.send(ownerChatId, [
+        `👁 <b>${esc(intention.title)}</b>`, '',
+        `${fresh.length} چیز تازه درباره‌ی «${esc(dossier.topic)}»`,
+      ].join('\n'));
+
+      const verified = fresh.filter((c) => c.status === 'verified');
+      const found = fresh.filter((c) => c.status !== 'verified');
+      if (verified.length) await tg.send(ownerChatId, SECTION.verified({ verified }));
+      if (found.length) await tg.send(ownerChatId, SECTION.found({ found }));
+
+      await tg.send(ownerChatId, `💰 ${toman(costToman)} تومان · پرونده #${dossier.id}`, {
+        buttons: [[
+          { text: '💬 بحث کنیم', callback_data: `chat:${dossier.id}` },
+          { text: '⏸ بس کن', callback_data: `unwatch:${intention.id}` },
+        ]],
+      });
+    },
+
+    onExpired: async (intention) => {
+      if (!ownerChatId) return;
+      await tg.send(ownerChatId,
+        `⌛ «${esc(intention.title)}» به پایان مهلتش رسید و متوقف شد.`,
+        { buttons: [[{ text: '🔄 ۶۰ روز دیگر', callback_data: `renew:${intention.id}` }]] })
+        .catch(() => {});
+    },
+
+    // A watch that keeps finding nothing is probably done. Ask once rather than
+    // quietly spending money every day forever.
+    onQuiet: async (intention) => {
+      if (!ownerChatId) return;
+      await tg.send(ownerChatId, [
+        `👁 «${esc(intention.title)}»`, '',
+        `${intention.silent_runs} بار پشت‌سرهم چیز تازه‌ای نبود.`,
+        `تا حالا ${toman(intention.cost_toman)} تومان خرج کرده.`,
+      ].join('\n'), {
+        buttons: [[
+          { text: '⏸ بس کن', callback_data: `unwatch:${intention.id}` },
+          { text: '👁 ادامه بده', callback_data: `keepwatch:${intention.id}` },
+        ]],
+      }).catch(() => {});
+    },
+  });
+
   for await (const update of tg.updates()) {
     try {
       const msg = update.message;
@@ -512,6 +652,26 @@ export async function run() {
               ...job, allowVision: true, dossierIdOverride: job.dossierId,
             }).catch((e) => console.error('[scan]', e));
           }
+        } else if (action === 'unwatch') {
+          store.setIntentionState(principalId, id, 'suspended');
+          await tg.answerCallback(cb.id, 'متوقف شد');
+          await tg.edit(chatId, cb.message.message_id, `${cb.message.text}\n\n⏸ متوقف شد.`, []);
+        } else if (action === 'keepwatch') {
+          store.setIntentionState(principalId, id, 'armed');
+          await tg.answerCallback(cb.id, 'ادامه می‌دهم');
+          await tg.edit(chatId, cb.message.message_id, `${cb.message.text}\n\n👁 ادامه دارد.`, []);
+        } else if (action === 'renew') {
+          const it = store.getIntention(principalId, id);
+          if (it) {
+            store.setIntentionState(principalId, id, 'armed');
+            createWatch({
+              principalId, dossierId: it.dossier_id, title: it.title,
+              everyHours: it.every_hours, days: 60,
+            });
+            store.setIntentionState(principalId, id, 'expired');
+          }
+          await tg.answerCallback(cb.id, '۶۰ روز دیگر');
+          await tg.edit(chatId, cb.message.message_id, `${cb.message.text}\n\n🔄 تمدید شد.`, []);
         } else if (action === 'scancancel') {
           await tg.answerCallback(cb.id, 'بی‌خیال شدم');
           await tg.edit(chatId, cb.message.message_id, `${cb.message.text}\n\n✖️ خوانده نشد.`, []);
