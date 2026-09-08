@@ -7,9 +7,10 @@ import { runResearch } from './research.js';
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
 
-// v1 is single-principal. The first chat to speak becomes the owner, and the id is
-// printed so it can be pinned in .env. Everyone else is ignored.
-let ownerChatId = config.ownerChatId;
+// v1 is single-principal. OWNER_CHAT_ID wins; otherwise the first chat to speak
+// claims ownership and it is written to the database, so a restart cannot hand the
+// bot to whoever messages next. Everyone else is ignored.
+let ownerChatId = config.ownerChatId ?? Number(store.getSetting('owner_chat_id')) || null;
 
 const KIND_LABEL = {
   research: 'درخواست تحقیق',
@@ -249,7 +250,9 @@ async function handleCommand(chatId, principalId, text) {
 export async function run() {
   const me = await tg.getMe();
   console.log(`[asc] connected as @${me.username}`);
-  if (!ownerChatId) console.log('[asc] no OWNER_CHAT_ID set — the first chat to message will claim it');
+  console.log(ownerChatId
+    ? `[asc] owner: ${ownerChatId}`
+    : '[asc] unclaimed — the first chat to message becomes the owner');
 
   for await (const update of tg.updates()) {
     try {
@@ -260,7 +263,8 @@ export async function run() {
 
       if (!ownerChatId) {
         ownerChatId = chatId;
-        console.log(`[asc] owner claimed: ${chatId} — pin it with OWNER_CHAT_ID=${chatId} in .env`);
+        store.setSetting('owner_chat_id', chatId);
+        console.log(`[asc] owner claimed and stored: ${chatId}`);
       }
       if (chatId !== ownerChatId) {
         console.log(`[asc] ignored message from ${chatId}`);

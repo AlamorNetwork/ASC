@@ -70,7 +70,19 @@ CREATE TABLE IF NOT EXISTS claims (
 
 CREATE INDEX IF NOT EXISTS idx_claims_dossier  ON claims(principal_id, dossier_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_dossier ON episodes(principal_id, dossier_id);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `);
+
+export const getSetting = (key) =>
+  db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key)?.value ?? null;
+
+export const setSetting = (key, value) =>
+  db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, String(value));
 
 const now = () => new Date().toISOString();
 
