@@ -10,6 +10,7 @@ import { createWatch } from './intentions.js';
 import { relatedDossiers } from './chunks.js';
 import { startScheduler } from './scheduler.js';
 import * as menu from './menu.js';
+import { deepInvestigate } from './deep.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
@@ -199,6 +200,89 @@ async function startResearch(chatId, principalId, captureId) {
     console.error('[research] failed:', err);
     await tg.edit(chatId, status.message_id,
       `🔎 <b>${esc(topic)}</b>\n\n❌ تحقیق شکست خورد: ${esc(String(err.message ?? err))}\n\n<i>ثبت اولیه‌ات سالم است و از دست نرفته.</i>`);
+  }
+}
+
+// Deep runs waiting for the user to agree a ceiling before they start.
+const pendingDeep = new Map();
+
+/**
+ * Runs until the leads are exhausted, reporting each round, and ends by naming what
+ * is still open and which source would settle it.
+ */
+async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
+  const d = store.getDossier(principalId, dossierId);
+  const head = `🕳 <b>کاوش عمیق</b>\n«${esc(question.slice(0, 90))}»`;
+  const status = await tg.send(chatId, `${head}\n\nشروع کردم…`);
+
+  const lines = [];
+  let trailMsg = null;
+  const note = async (line) => {
+    lines.push(line);
+    const body = lines.slice(-24).join('\n');
+    if (!trailMsg) trailMsg = await tg.send(chatId, body);
+    else await tg.edit(chatId, trailMsg.message_id, body);
+  };
+
+  try {
+    const out = await deepInvestigate({
+      principalId, dossierId, question, ceilingUsd,
+      onNote: async (n) => {
+        if (n.kind === 'searching') await note(`🔍 ${n.queries.map((q) => `«${esc(q)}»`).join(' ')}`);
+        else if (n.kind === 'lead' && n.lead) await note(`💡 ${esc(n.lead)}`);
+        else if (n.kind === 'web') await note(`🌐 وب — «${esc(String(n.lead).slice(0, 60))}»`);
+        else if (n.kind === 'nextleads') await note(`↪️ سرنخ‌های بعدی: ${n.leads.map((l) => esc(l)).join('، ')}`);
+        else if (n.kind === 'elsewhere') {
+          for (const e of n.elsewhere) await note(`📁 #${e.dossier.id} ${esc(e.dossier.topic)}`);
+        } else if (n.kind === 'error') await note(`⚠️ ${esc(n.message)}`);
+      },
+      onRound: async (r) => {
+        await tg.edit(chatId, status.message_id,
+          `${head}\n\nدور ${r.round} · ${r.fresh ? `${r.fresh} چیز تازه` : 'چیز تازه‌ای نبود'} · ` +
+          `${r.claims} یافته · ${toman(r.costToman)} تومان`);
+      },
+    });
+
+    const why = {
+      exhausted: 'سرنخی باقی نماند.',
+      ceiling: 'به سقف هزینه رسید.',
+      rounds: 'به سقف تعداد دورها رسید.',
+    }[out.stopped] ?? '';
+
+    await tg.edit(chatId, status.message_id,
+      `${head}\n\n${out.rounds} دور · ${out.newClaims.length} یافته‌ی تازه · ${toman(out.costToman)} تومان\n${why}`);
+
+    if (out.newClaims.length) {
+      const verified = out.newClaims.filter((c) => c.status === 'verified');
+      const found = out.newClaims.filter((c) => c.status !== 'verified');
+      if (verified.length) await tg.send(chatId, SECTION.verified({ verified }));
+      if (found.length) await tg.send(chatId, SECTION.found({ found }));
+    }
+
+    // The point of the whole run: what is left, and what would settle it.
+    if (out.open.length) {
+      await tg.send(chatId, ['🚧 <b>اینجا گیر کرد</b>', '',
+        '<i>این‌ها با جست‌وجوی بیشتر حل نمی‌شوند — منبع می‌خواهند.</i>', '',
+        ...out.open.flatMap((o) => [
+          `❓ ${esc(o.question)}`,
+          `   📚 <b>لازم دارد:</b> ${esc(o.needs)}`,
+          o.why ? `   <i>${esc(o.why)}</i>` : null,
+          '',
+        ]).filter((x) => x !== null),
+        'همان منبع را بفرست تا ادامه بدهم.',
+      ].join('\n'));
+    } else if (out.stopped === 'exhausted') {
+      await tg.send(chatId, '✔️ تا جایی که می‌شد رفت و سؤال بازی نماند.');
+    }
+
+    if (out.stopped === 'ceiling') {
+      await tg.send(chatId, 'به سقف رسید. ادامه بدهم؟', {
+        buttons: [[{ text: '▶️ ادامه بده', callback_data: `deepmore:${dossierId}` }]],
+      });
+    }
+  } catch (err) {
+    console.error('[deep] failed:', err);
+    await tg.edit(chatId, status.message_id, `${head}\n\n❌ ${esc(String(err.message ?? err))}`);
   }
 }
 
@@ -461,11 +545,12 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
     const tail = research?.hops
       ? `<i>${toman(total)} تومان · ${research.hops} گام · ${research.passages.length} پاساژ · پرونده #${dossierId}</i>`
       : `<i>${toman(total)} تومان · پرونده #${dossierId}</i>`;
-    // Every answer can become a standing question, so a line of enquiry can keep
-    // going without being asked again.
     await tg.edit(chatId, placeholder.message_id, `${esc(text)}\n\n${tail}`);
-    await tg.send(chatId, '<i>می‌خواهی همین را مرتب پیگیری کنم؟</i>', {
-      buttons: [[{ text: '👁 همین را پیگیری کن', callback_data: `watchq:${dossierId}` }]],
+    await tg.send(chatId, '<i>ادامه بدهم؟</i>', {
+      buttons: [
+        [{ text: '🕳 تا ته برو', callback_data: `deep:${dossierId}` }],
+        [{ text: '👁 هر روز پیگیری کن', callback_data: `watchq:${dossierId}` }],
+      ],
     });
 
     // Material sat in another dossier of theirs. Offer to link, since that makes the
@@ -910,6 +995,44 @@ export async function run() {
           if (d && lastUser) {
             runWebResearch(chatId, principalId, id, d.topic, lastUser.text)
               .catch((e) => console.error('[webresearch]', e));
+          }
+        } else if (action === 'deep' || action === 'deepmore') {
+          const lastUser = [...store.conversation(principalId, id, 12)]
+            .reverse().find((m) => m.role === 'user');
+          const q = lastUser?.text ?? store.getDossier(principalId, id)?.topic;
+          if (!q) {
+            await tg.answerCallback(cb.id, 'سؤالی پیدا نشد');
+          } else {
+            const token = `${id}`;
+            pendingDeep.set(token, { dossierId: id, question: q });
+            await tg.answerCallback(cb.id);
+            await tg.edit(chatId, cb.message.message_id, cb.message.text ?? '', []);
+            // Running to exhaustion costs real money, so the ceiling is agreed first.
+            await tg.send(chatId, [
+              '🕳 <b>کاوش عمیق</b>', '',
+              `«${esc(q.slice(0, 120))}»`, '',
+              'تا وقتی سرنخی هست ادامه می‌دهم — اسناد خودت و وب، دور به دور.',
+              'وقتی دیگر سرنخی نبود می‌ایستم و می‌گویم چه چیزی مانده و چه منبعی می‌خواهد.', '',
+              '<i>سقف هزینه را انتخاب کن:</i>',
+            ].join('\n'), {
+              buttons: [
+                [{ text: '۵۰ هزار تومان', callback_data: `deepgo:${token}:0.16` },
+                 { text: '۱۵۰ هزار', callback_data: `deepgo:${token}:0.48` }],
+                [{ text: '۵۰۰ هزار', callback_data: `deepgo:${token}:1.6` },
+                 { text: '♾ بی‌سقف', callback_data: `deepgo:${token}:none` }],
+              ],
+            });
+          }
+        } else if (action === 'deepgo') {
+          const [, token, ceil] = String(cb.data).split(':');
+          const job = pendingDeep.get(token);
+          await tg.answerCallback(cb.id, job ? 'شروع شد' : 'منقضی شده');
+          await tg.edit(chatId, cb.message.message_id, cb.message.text ?? '', []);
+          if (job) {
+            pendingDeep.delete(token);
+            runDeep(chatId, principalId, job.dossierId, job.question,
+                    ceil === 'none' ? null : Number(ceil))
+              .catch((e) => console.error('[deep]', e));
           }
         } else if (action === 'watchq') {
           // Turn the question just asked into a standing one.

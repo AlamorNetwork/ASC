@@ -64,15 +64,25 @@ export async function investigate({
   let costToman = 0;
   let exhausted = false;
 
-  const plan = await ask({
-    model: modelFor('structure'),
-    system: PLAN_SYSTEM,
-    content: `سؤال: ${question}`,
-    maxTokens: 400,
-    noThinking: false,
-  });
-  costToman += plan.usage.costToman ?? 0;
-  let queries = Array.isArray(plan.data.queries) ? plan.data.queries.slice(0, 4) : [question];
+  // A planner that fails to produce usable JSON must not end the search — the
+  // question itself is always a serviceable first query.
+  let queries = [question];
+  try {
+    const plan = await ask({
+      model: modelFor('structure'),
+      system: PLAN_SYSTEM,
+      content: `سؤال: ${question}`,
+      maxTokens: 700,
+      noThinking: false,
+    });
+    costToman += plan.usage?.costToman ?? 0;
+    if (Array.isArray(plan.data?.queries) && plan.data.queries.length) {
+      queries = plan.data.queries.filter((q) => typeof q === 'string' && q.trim()).slice(0, 4);
+    }
+  } catch (err) {
+    console.warn('[investigate] planner unusable, searching with the question itself:', err.message);
+  }
+  if (!queries.length) queries = [question];
 
   for (let hop = 1; hop <= maxHops; hop++) {
     await onStep?.({ kind: 'searching', hop, queries });
@@ -90,36 +100,45 @@ export async function investigate({
     // Nothing new after the first hop means the leads have run dry.
     if (!fresh && hop > 1) { exhausted = true; break; }
 
-    const assess = await ask({
-      model: modelFor('structure'),
-      system: ASSESS_SYSTEM,
-      content: [
-        `سؤال: ${question}`,
-        `عبارت‌هایی که تا حالا جست‌وجو شد: ${trail.flatMap((t) => t.queries).concat(queries).join(' · ')}`,
-        '',
-        'پاساژهای پیداشده:',
-        summarise([...seen.values()]),
-      ].join('\n'),
-      maxTokens: 700,
-      noThinking: false,
-    });
-    costToman += assess.usage.costToman ?? 0;
+    let assess;
+    try {
+      assess = await ask({
+        model: modelFor('structure'),
+        system: ASSESS_SYSTEM,
+        content: [
+          `سؤال: ${question}`,
+          `عبارت‌هایی که تا حالا جست‌وجو شد: ${trail.flatMap((t) => t.queries).concat(queries).join(' · ')}`,
+          '',
+          'پاساژهای پیداشده:',
+          summarise([...seen.values()]),
+        ].join('\n'),
+        maxTokens: 900,
+        noThinking: false,
+      });
+    } catch (err) {
+      // Without an assessment there are no further leads, so stop with what we have
+      // rather than losing the passages already found.
+      console.warn('[investigate] assessment unusable, stopping here:', err.message);
+      exhausted = true;
+      break;
+    }
+    costToman += assess.usage?.costToman ?? 0;
 
     const step = {
       hop,
       queries,
       fresh,
-      lead: assess.data.lead ?? null,
-      missing: assess.data.missing ?? null,
+      lead: assess.data?.lead ?? null,
+      missing: assess.data?.missing ?? null,
     };
     trail.push(step);
     if (step.lead || step.missing) await onStep?.({ kind: 'lead', ...step });
 
-    const next = Array.isArray(assess.data.next_queries)
+    const next = Array.isArray(assess.data?.next_queries)
       ? assess.data.next_queries.filter((q) => typeof q === 'string' && q.trim()).slice(0, 4)
       : [];
 
-    if (assess.data.enough === true || !next.length) break;
+    if (assess.data?.enough === true || !next.length) break;
     if (hop === maxHops) { exhausted = true; break; }
     queries = next;
   }

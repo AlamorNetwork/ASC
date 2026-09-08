@@ -533,6 +533,49 @@ await check('every menu screen renders without throwing', async () => {
   return '8 screens + detail, escaped, callback_data within limits';
 });
 
+await check('deep investigation names the source it still needs', async () => {
+  const { deepInvestigate } = await import('../src/deep.js');
+  const p = `deep-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'موضوع عمیق' });
+  const docId = store.insertDocument({
+    principalId: p, dossierId, filename: 'd.txt', kind: 'text', extraction: 'local',
+  });
+  store.insertChunks(p, dossierId, docId, [
+    { seq: 0, text: 'اشاره‌ای کوتاه به موضوع هست ولی جزئیاتش در این متن نیامده است.' },
+  ]);
+
+  const rounds = [];
+  const out = await deepInvestigate({
+    principalId: p, dossierId, question: 'جزئیات چیست؟',
+    ceilingUsd: 0,               // no web spend allowed, so it must stop at once
+    onRound: (r) => rounds.push(r),
+  }).catch((e) => { throw new Error(`threw instead of stopping: ${e.message}`); });
+
+  if (!rounds.length) throw new Error('no round was reported');
+  if (out.rounds > 12) throw new Error(`ran ${out.rounds} rounds past the hard stop`);
+  if (!['exhausted', 'ceiling', 'rounds'].includes(out.stopped)) {
+    throw new Error(`unexpected stop reason: ${out.stopped}`);
+  }
+  if (!Array.isArray(out.open)) throw new Error('no list of open questions');
+  return `stopped after ${out.rounds} round(s): ${out.stopped}`;
+});
+
+await check('deep investigation respects a zero ceiling', async () => {
+  const { deepInvestigate } = await import('../src/deep.js');
+  const p = `deepcap-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'سقف صفر' });
+  const before = store.recentEpisodes(p, 50).length;
+
+  const out = await deepInvestigate({
+    principalId: p, dossierId, question: 'هرچیزی', ceilingUsd: 0,
+  });
+  // A zero ceiling must mean no web research episode was ever started.
+  const after = store.recentEpisodes(p, 50).length;
+  if (after !== before) throw new Error(`spent on ${after - before} web round(s) despite a zero ceiling`);
+  if (out.costUsd > 0.02) throw new Error(`spent $${out.costUsd} under a zero ceiling`);
+  return 'no web round started';
+});
+
 await check('conversation history round trips', () => {
   // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
   const p = `chat-test-${Date.now()}`;
