@@ -547,20 +547,44 @@ await check('deep investigation names the source it still needs', async () => {
   const rounds = [];
   const out = await deepInvestigate({
     principalId: p, dossierId, question: 'جزئیات چیست؟',
-    ceilingUsd: 0,               // no web spend allowed, so it must stop at once
+    ceilingUsd: 0.002,           // enough to search the corpus, not enough for the web
     onRound: (r) => rounds.push(r),
   }).catch((e) => { throw new Error(`threw instead of stopping: ${e.message}`); });
 
   if (!rounds.length) throw new Error('no round was reported');
-  if (out.rounds > 12) throw new Error(`ran ${out.rounds} rounds past the hard stop`);
-  if (!['exhausted', 'ceiling', 'rounds'].includes(out.stopped)) {
+  if (!['exhausted', 'ceiling', 'unmeasured', 'time'].includes(out.stopped)) {
     throw new Error(`unexpected stop reason: ${out.stopped}`);
   }
   if (!Array.isArray(out.open)) throw new Error('no list of open questions');
   return `stopped after ${out.rounds} round(s): ${out.stopped}`;
 });
 
-await check('deep investigation respects a zero ceiling', async () => {
+await check('deep investigation stops when cost cannot be measured', async () => {
+  const { deepInvestigate } = await import('../src/deep.js');
+  const p = `blind-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'هزینه‌ی نامعلوم' });
+  const docId = store.insertDocument({
+    principalId: p, dossierId, filename: 'b.txt', kind: 'text', extraction: 'local',
+  });
+  // Enough material that rounds keep finding something, so only a guard can stop it.
+  store.insertChunks(p, dossierId, docId, Array.from({ length: 40 }, (_, i) => ({
+    seq: i, text: `بند شماره ${i} درباره‌ی موضوعی که مدام سرنخ تازه می‌دهد و تمام نمی‌شود.`,
+  })));
+
+  const out = await deepInvestigate({
+    principalId: p, dossierId, question: 'بند', ceilingUsd: null, // unlimited
+  });
+
+  // With no ceiling and no usage reported by the provider, the blind guard is the
+  // only thing between this and an unbounded loop.
+  if (!['unmeasured', 'exhausted'].includes(out.stopped)) {
+    throw new Error(`expected the blind guard or exhaustion, got ${out.stopped}`);
+  }
+  if (out.rounds > 6) throw new Error(`ran ${out.rounds} rounds while flying blind`);
+  return `stopped after ${out.rounds} round(s): ${out.stopped}`;
+});
+
+await check('a zero ceiling starts nothing at all', async () => {
   const { deepInvestigate } = await import('../src/deep.js');
   const p = `deepcap-${Date.now()}`;
   const dossierId = store.insertDossier({ principalId: p, topic: 'سقف صفر' });
@@ -569,11 +593,12 @@ await check('deep investigation respects a zero ceiling', async () => {
   const out = await deepInvestigate({
     principalId: p, dossierId, question: 'هرچیزی', ceilingUsd: 0,
   });
-  // A zero ceiling must mean no web research episode was ever started.
-  const after = store.recentEpisodes(p, 50).length;
-  if (after !== before) throw new Error(`spent on ${after - before} web round(s) despite a zero ceiling`);
-  if (out.costUsd > 0.02) throw new Error(`spent $${out.costUsd} under a zero ceiling`);
-  return 'no web round started';
+  // Allowing zero spend means no round is begun, not one begun and then abandoned.
+  if (out.rounds !== 0) throw new Error(`ran ${out.rounds} round(s) on a zero ceiling`);
+  if (out.stopped !== 'ceiling') throw new Error(`stop reason was ${out.stopped}`);
+  if (store.recentEpisodes(p, 50).length !== before) throw new Error('a web round was started anyway');
+  if (out.costUsd > 0) throw new Error(`spent $${out.costUsd} under a zero ceiling`);
+  return 'nothing begun, nothing spent';
 });
 
 await check('conversation history round trips', () => {

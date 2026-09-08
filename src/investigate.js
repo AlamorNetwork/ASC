@@ -62,6 +62,7 @@ export async function investigate({
   const seen = new Map();
   const trail = [];
   let costToman = 0;
+  let costUsd = 0;
   let exhausted = false;
 
   // A planner that fails to produce usable JSON must not end the search — the
@@ -76,6 +77,7 @@ export async function investigate({
       noThinking: false,
     });
     costToman += plan.usage?.costToman ?? 0;
+    costUsd += plan.usage?.costUsd ?? 0;
     if (Array.isArray(plan.data?.queries) && plan.data.queries.length) {
       queries = plan.data.queries.filter((q) => typeof q === 'string' && q.trim()).slice(0, 4);
     }
@@ -123,6 +125,7 @@ export async function investigate({
       break;
     }
     costToman += assess.usage?.costToman ?? 0;
+    costUsd += assess.usage?.costUsd ?? 0;
 
     const step = {
       hop,
@@ -181,6 +184,7 @@ export async function investigate({
     hops: trail.length,
     exhausted,
     costToman,
+    costUsd,
     elsewhere,
     // True when neither this dossier nor the user's other sources hold it, which is
     // when going to the web is worth offering — but never without being asked.

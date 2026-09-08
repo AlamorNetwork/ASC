@@ -19,8 +19,14 @@ import { runResearch } from './research.js';
 import { normalise } from './verify.js';
 import * as store from './db.js';
 
-const MAX_ROUNDS = 12;          // a hard stop even if the model keeps finding leads
-const TOMAN_PER_USD = 310000;
+/**
+ * Spend is the only meaningful brake — it is what the user agreed to and what they
+ * care about at the end. The two guards below are not policy; they exist solely to
+ * catch the case where the brake itself is broken, and each says so plainly when it
+ * fires rather than pretending a limit was reached.
+ */
+const BLIND_ROUNDS = 3;     // rounds with no usage reported at all — we are flying blind
+const MAX_MINUTES = 45;     // a runaway with an unmeasurable cost is a bug, not a feature
 
 const GAPS_SYSTEM = `تو در پایان یک تحقیق، تصمیم می‌گیری چه چیزی هنوز باز مانده و چه چیزی آن را حل می‌کند.
 فقط JSON بده، بدون توضیح و بدون code fence:
@@ -62,12 +68,19 @@ export async function deepInvestigate({
   let leads = [question];
   let round = 0;
   let stopped = 'exhausted';
+  const startedAt = Date.now();
   const allLeads = [];
   const newClaims = [];
 
   const overCeiling = () => ceilingUsd !== null && costUsd >= ceilingUsd;
+  const minutes = () => (Date.now() - startedAt) / 60000;
 
-  while (round < MAX_ROUNDS) {
+  for (;;) {
+    // Checked before the round starts, so one that cannot be afforded is never begun.
+    if (overCeiling()) { stopped = 'ceiling'; break; }
+    if (round >= BLIND_ROUNDS && costUsd === 0 && costToman === 0) { stopped = 'unmeasured'; break; }
+    if (minutes() > MAX_MINUTES) { stopped = 'time'; break; }
+
     round++;
     let freshThisRound = 0;
 
@@ -78,7 +91,7 @@ export async function deepInvestigate({
         onStep: (s) => onNote?.({ round, ...s }),
       });
       costToman += found.costToman ?? 0;
-      costUsd += (found.costToman ?? 0) / TOMAN_PER_USD;
+      costUsd += found.costUsd ?? 0;
 
       for (const p of found.passages) {
         if (!seenChunks.has(p.id)) { seenChunks.add(p.id); freshThisRound++; }
@@ -109,43 +122,49 @@ export async function deepInvestigate({
       }
     }
 
-    await onRound?.({ round, fresh: freshThisRound, costToman, claims: newClaims.length });
+    await onRound?.({ round, fresh: freshThisRound, costToman, costUsd, claims: newClaims.length });
 
     if (!freshThisRound) { stopped = 'exhausted'; break; }
     if (overCeiling()) { stopped = 'ceiling'; break; }
 
     // --- what is still open, and what would settle it ---------------------------
-    const gaps = await chatJson({
-      model: modelFor('structure'),
-      system: GAPS_SYSTEM,
-      content: [
-        `پرسش اصلی: ${question}`,
-        `موضوع پرونده: ${dossier.topic}`,
-        '',
-        'سرنخ‌هایی که تا حالا دیده شد:',
-        allLeads.slice(-10).map((l) => `- ${l}`).join('\n') || '(هیچ)',
-        '',
-        'یافته‌های تازه‌ی این دور:',
-        newClaims.slice(-12).map((c) => `- ${c.text}`).join('\n') || '(هیچ)',
-      ].join('\n'),
-      maxTokens: 1200,
-      noThinking: false,
-    });
-    costToman += gaps.usage.costToman ?? 0;
-    costUsd += (gaps.usage.costToman ?? 0) / TOMAN_PER_USD;
+    // A run meant to go to exhaustion cannot afford to die on one malformed reply;
+    // without an assessment there are simply no further leads.
+    let gaps;
+    try {
+      gaps = await chatJson({
+        model: modelFor('structure'),
+        system: GAPS_SYSTEM,
+        content: [
+          `پرسش اصلی: ${question}`,
+          `موضوع پرونده: ${dossier.topic}`,
+          '',
+          'سرنخ‌هایی که تا حالا دیده شد:',
+          allLeads.slice(-10).map((l) => `- ${l}`).join('\n') || '(هیچ)',
+          '',
+          'یافته‌های تازه‌ی این دور:',
+          newClaims.slice(-12).map((c) => `- ${c.text}`).join('\n') || '(هیچ)',
+        ].join('\n'),
+        maxTokens: 1600,
+        noThinking: false,
+      });
+    } catch (err) {
+      console.warn('[deep] gap assessment unusable, stopping with what we have:', err.message);
+      return finish({}, 'exhausted');
+    }
+    costToman += gaps.usage?.costToman ?? 0;
+    costUsd += gaps.usage?.costUsd ?? 0;
 
-    const next = Array.isArray(gaps.data.next_leads)
+    const next = Array.isArray(gaps.data?.next_leads)
       ? gaps.data.next_leads.filter((l) => typeof l === 'string' && l.trim())
       : [];
 
     if (!next.length) {
-      return finish(gaps.data, 'exhausted');
+      return finish(gaps.data ?? {}, 'exhausted');
     }
     leads = next;
     await onNote?.({ round, kind: 'nextleads', leads });
   }
-
-  if (round >= MAX_ROUNDS) stopped = 'rounds';
 
   // One last pass to name what is open, even when we stopped for another reason.
   const final = await chatJson({

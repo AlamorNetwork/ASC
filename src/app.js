@@ -243,10 +243,13 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
       },
     });
 
+    // A run that stopped because a safety net fired is not the same as one that
+    // finished, and saying so is the difference between a result and a false result.
     const why = {
       exhausted: 'سرنخی باقی نماند.',
-      ceiling: 'به سقف هزینه رسید.',
-      rounds: 'به سقف تعداد دورها رسید.',
+      ceiling: 'به سقف هزینه‌ای که تعیین کردی رسید.',
+      unmeasured: '⚠️ ایستادم چون هزینه گزارش نمی‌شود — نمی‌توانستم بفهمم چقدر دارد خرج می‌شود.',
+      time: `⚠️ ایستادم چون ${45} دقیقه طول کشید و هزینه هنوز به سقف نرسیده بود.`,
     }[out.stopped] ?? '';
 
     await tg.edit(chatId, status.message_id,
@@ -275,8 +278,8 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
       await tg.send(chatId, '✔️ تا جایی که می‌شد رفت و سؤال بازی نماند.');
     }
 
-    if (out.stopped === 'ceiling') {
-      await tg.send(chatId, 'به سقف رسید. ادامه بدهم؟', {
+    if (['ceiling', 'time'].includes(out.stopped)) {
+      await tg.send(chatId, 'ادامه بدهم؟ سقف تازه‌ای می‌پرسم.', {
         buttons: [[{ text: '▶️ ادامه بده', callback_data: `deepmore:${dossierId}` }]],
       });
     }
