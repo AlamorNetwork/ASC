@@ -30,12 +30,15 @@ export function budget() {
 export const setBudget = (usdOrNull) =>
   store.setSetting('budget.per_research', usdOrNull === null ? 'none' : String(usdOrNull));
 
-export const activeDossier = () => {
-  const v = store.getSetting('active_dossier');
+// Keyed by principal. A shared key would mean one person's open dossier became
+// everyone's, which on a multi-user bot is a privacy failure, not a UX quirk.
+export const activeDossier = (principalId) => {
+  const v = store.getSetting(`active_dossier.${principalId}`);
   return v ? Number(v) : null;
 };
 
-export const setActiveDossier = (id) => store.setSetting('active_dossier', id ?? '');
+export const setActiveDossier = (principalId, id) =>
+  store.setSetting(`active_dossier.${principalId}`, id ?? '');
 
 /** Average cost of recent research rounds, for warning before spending again. */
 export function recentAverageCost(principalId) {

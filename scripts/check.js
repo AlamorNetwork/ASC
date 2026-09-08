@@ -419,6 +419,83 @@ await check('multi-hop stops instead of looping forever', async () => {
   }
 });
 
+await check('two users see nothing of each other', async () => {
+  const s = await import('../src/settings.js');
+  const a = `userA-${Date.now()}`;
+  const b = `userB-${Date.now()}`;
+
+  const dA = store.insertDossier({ principalId: a, topic: 'پرونده‌ی خصوصی الف' });
+  const docA = store.insertDocument({ principalId: a, dossierId: dA, filename: 'a.txt', kind: 'text', extraction: 'local' });
+  store.insertChunks(a, dA, docA, [{ seq: 0, text: 'اطلاعات کاملاً خصوصی کاربر الف که نباید دیده شود.' }]);
+  store.insertClaim({ principalId: a, dossierId: dA, text: 'ادعای الف', status: 'verified' });
+  store.addMessage({ principalId: a, dossierId: dA, role: 'user', text: 'پیام خصوصی الف' });
+  store.insertCapture({ principalId: a, source: 'text', transcript: 'ثبت الف', kind: 'note', raw: {} });
+
+  if (store.listDossiers(b).length) throw new Error('B can list A dossiers');
+  if (store.getDossier(b, dA)) throw new Error('B can open A dossier');
+  if (store.dossierClaims(b, dA).length) throw new Error('B can read A claims');
+  if (store.dossierChunks(b, dA).length) throw new Error('B can read A chunks');
+  if (store.searchChunks(b, dA, 'خصوصی').length) throw new Error('B can search A chunks');
+  if (store.conversation(b, dA).length) throw new Error('B can read A conversation');
+  if (store.recentCaptures(b).length) throw new Error('B can read A captures');
+  if (store.dossierDocuments(b, dA).length) throw new Error('B can list A documents');
+  if (store.getDocument(b, docA)) throw new Error('B can open A document');
+  if (store.stats(b).dossiers !== 0) throw new Error('B stats count A rows');
+
+  // The open dossier is per person, not a shared pointer.
+  s.setActiveDossier(a, dA);
+  if (s.activeDossier(b) !== null) throw new Error('B inherited A active dossier');
+  if (s.activeDossier(a) !== dA) throw new Error('A lost its own active dossier');
+
+  return '10 read paths and the open dossier are all scoped';
+});
+
+await check('access control admits, blocks, and remembers', () => {
+  const id = `9${Date.now()}`.slice(0, 12);
+  store.upsertUser({ principalId: id, name: 'مهمان' });
+  if (store.getUser(id).state !== 'pending') throw new Error('a newcomer is not pending');
+
+  store.setUserState(id, 'active', 'member');
+  const active = store.getUser(id);
+  if (active.state !== 'active' || active.role !== 'member') throw new Error('approval did not stick');
+  if (!active.decided_at) throw new Error('the decision was not timestamped');
+
+  store.setUserState(id, 'blocked');
+  if (store.getUser(id).state !== 'blocked') throw new Error('blocking did not stick');
+  if (store.getUser(id).role !== 'member') throw new Error('blocking lost the role');
+
+  // Re-registering must not silently reset a decision.
+  store.upsertUser({ principalId: id, name: 'مهمان دوباره' });
+  if (store.getUser(id).state !== 'blocked') throw new Error('a blocked user re-registered themselves');
+  return 'pending → active → blocked, and blocking survives re-contact';
+});
+
+await check('every menu screen renders without throwing', async () => {
+  const menu = await import('../src/menu.js');
+  const p = `menu-${Date.now()}`;
+  // A title with HTML in it must not be able to break the screen.
+  const id = store.insertDossier({ principalId: p, topic: '<b>عنوان & خطرناک</b>' });
+  store.upsertUser({ principalId: p, name: '<script>', role: 'owner', state: 'active' });
+
+  for (const name of ['root', 'dossiers', 'watches', 'cost', 'data', 'settings', 'users', 'help']) {
+    const view = menu.screen(name, p, undefined, { isOwner: true });
+    if (!view?.text) throw new Error(`${name} produced no text`);
+    if (/<b>عنوان & خطرناک<\/b>/.test(view.text)) throw new Error(`${name} did not escape a dossier title`);
+    for (const row of view.buttons ?? []) {
+      for (const b of row) {
+        if (Buffer.byteLength(b.callback_data) > 64) {
+          throw new Error(`${name}: callback_data over Telegram's 64-byte limit`);
+        }
+      }
+    }
+  }
+  const one = menu.screen('d', p, id, { isOwner: true });
+  if (!one.text.includes('&lt;b&gt;')) throw new Error('the dossier screen did not escape its title');
+  const missing = menu.screen('d', p, 999999, { isOwner: true });
+  if (!missing.text.includes('پیدا نشد')) throw new Error('a missing dossier was not handled');
+  return '8 screens + detail, escaped, callback_data within limits';
+});
+
 await check('conversation history round trips', () => {
   // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
   const p = `chat-test-${Date.now()}`;

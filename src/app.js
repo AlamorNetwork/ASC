@@ -9,14 +9,59 @@ import { ingestToDossier, sha256 } from './ingest.js';
 import { createWatch } from './intentions.js';
 import { relatedDossiers } from './chunks.js';
 import { startScheduler } from './scheduler.js';
+import * as menu from './menu.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
 
-// v1 is single-principal. OWNER_CHAT_ID wins; otherwise the first chat to speak
-// claims ownership and it is written to the database, so a restart cannot hand the
-// bot to whoever messages next. Everyone else is ignored.
+// The first chat to speak claims ownership, stored so a restart cannot hand the bot
+// to whoever messages next. Everyone else must be let in by the owner, and each
+// person's data is scoped to their own principal id — nothing is shared.
 let ownerChatId = config.ownerChatId ?? (Number(store.getSetting('owner_chat_id')) || null);
+
+/**
+ * @returns {'owner'|'member'|'pending'|'blocked'} what this chat is allowed to do.
+ * A newcomer is registered as pending and the owner is asked, once.
+ */
+async function admit(chatId, from) {
+  const id = String(chatId);
+
+  if (!ownerChatId) {
+    ownerChatId = chatId;
+    store.setSetting('owner_chat_id', chatId);
+    store.upsertUser({ principalId: id, name: from?.first_name, username: from?.username, role: 'owner', state: 'active' });
+    store.setUserState(id, 'active', 'owner');
+    console.log(`[asc] owner claimed and stored: ${chatId}`);
+    return 'owner';
+  }
+  if (chatId === ownerChatId) {
+    if (!store.getUser(id)) {
+      store.upsertUser({ principalId: id, name: from?.first_name, username: from?.username, role: 'owner', state: 'active' });
+      store.setUserState(id, 'active', 'owner');
+    }
+    return 'owner';
+  }
+
+  const user = store.getUser(id);
+  if (user?.state === 'active') return 'member';
+  if (user?.state === 'blocked') return 'blocked';
+
+  if (!user) {
+    store.upsertUser({ principalId: id, name: from?.first_name, username: from?.username });
+    const who = [from?.first_name, from?.username ? `@${from.username}` : null]
+      .filter(Boolean).join(' ') || id;
+    await tg.send(chatId,
+      'سلام. این بات خصوصی است و دسترسی‌ات باید تأیید شود.\n\n<i>درخواستت فرستاده شد.</i>')
+      .catch(() => {});
+    await tg.send(ownerChatId,
+      `👤 <b>${esc(who)}</b> درخواست دسترسی داد.\n<code>${id}</code>\n\n<i>داده‌هایش کاملاً جدا از داده‌های تو خواهد بود.</i>`,
+      { buttons: [[
+        { text: '✅ اجازه بده', callback_data: `m:allow:${id}` },
+        { text: '🚫 رد کن', callback_data: `m:block:${id}` },
+      ]] }).catch(() => {});
+  }
+  return 'pending';
+}
 
 const KINDS = { text: 'متن', image: 'تصویر', pdf: 'PDF' };
 
@@ -136,7 +181,7 @@ async function startResearch(chatId, principalId, captureId) {
     }
     if (output.sourceQualityNote) await tg.send(chatId, `⚠️ <i>${esc(output.sourceQualityNote)}</i>`);
 
-    settings.setActiveDossier(dossierId);
+    settings.setActiveDossier(principalId, dossierId);
     const tail = [`💰 ${toman(costToman)} تومان · پرونده #${dossierId}`];
     if (output.budgetExceeded) {
       tail.push('', `<i>از سقف بودجه رد شد — نتیجه ممکن است ناقص باشد.</i>`);
@@ -178,19 +223,87 @@ async function runWebResearch(chatId, principalId, dossierId, topic, question) {
   }
 }
 
+/**
+ * Menu actions. Some change something first, then the screen is re-rendered in place
+ * so the chat keeps exactly one live menu instead of a stack of stale ones.
+ */
+async function handleMenu(chatId, principalId, { name, arg, isOwner, cb }) {
+  let screenName = name;
+  let notice = null;
+
+  switch (name) {
+    case 'open':
+      settings.setActiveDossier(principalId, Number(arg));
+      notice = 'باز شد';
+      screenName = 'd';
+      break;
+
+    case 'watch':
+      try {
+        createWatch({ principalId, dossierId: Number(arg), everyHours: 24 });
+        notice = 'پیگیری ساخته شد';
+      } catch (err) { notice = err.message; }
+      screenName = 'd';
+      break;
+
+    case 'unwatch':
+      store.setIntentionState(principalId, Number(arg), 'suspended');
+      notice = 'متوقف شد';
+      screenName = 'watches';
+      arg = undefined;
+      break;
+
+    case 'rel': {
+      const rows = relatedDossiers(principalId, Number(arg));
+      await tg.answerCallback(cb.id, rows.length ? `${rows.length} مورد` : 'چیزی پیدا نشد');
+      await tg.send(chatId, rows.length
+        ? ['🔗 <b>شاید مرتبط باشند</b>', '', ...rows.map((r) =>
+            `#${r.dossier.id} ${esc(r.dossier.topic)} — ${Math.round(r.score * 100)}٪`),
+           '', `<code>/link ${arg} &lt;id&gt;</code> برای وصل کردن`].join('\n')
+        : 'پرونده‌ی مرتبطی پیدا نشد.\n<i>بردارها لازم‌اند — سندی به پرونده‌ها داده‌ای؟</i>');
+      return;
+    }
+
+    // Owner-only membership decisions.
+    case 'allow':
+    case 'block': {
+      if (!isOwner) return void await tg.answerCallback(cb.id, 'فقط مالک');
+      const target = String(arg);
+      store.setUserState(target, name === 'allow' ? 'active' : 'blocked', 'member');
+      await tg.answerCallback(cb.id, name === 'allow' ? 'اجازه داده شد' : 'مسدود شد');
+      await tg.edit(chatId, cb.message.message_id,
+        `${cb.message.text}\n\n${name === 'allow' ? '✅ اجازه داده شد.' : '🚫 مسدود شد.'}`, []);
+      if (name === 'allow') {
+        await tg.send(Number(target),
+          'دسترسی‌ات تأیید شد. 🎉\n\nویس بفرست یا بنویس. /menu را هم بزن.')
+          .catch(() => {});
+      }
+      return;
+    }
+
+    case 'noop':
+      return void await tg.answerCallback(cb.id);
+  }
+
+  const view = menu.screen(screenName, principalId, arg, { isOwner });
+  if (!view) return void await tg.answerCallback(cb.id);
+  await tg.answerCallback(cb.id, notice ?? undefined);
+  await tg.edit(chatId, cb.message.message_id, view.text, view.buttons);
+}
+
 // Scanned PDFs waiting for the user to approve the expensive path.
 const pendingScans = new Map();
 
 /** Read a supplied file into the active dossier, opening one if none is active. */
 async function handleDocument(chatId, principalId, { fileId, filename, mime, allowVision = false, dossierIdOverride = null, pageLimit = null, fromPage = null, resumeDocumentId = null }) {
-  let dossierId = dossierIdOverride ?? settings.activeDossier();
+  let dossierId = dossierIdOverride ?? settings.activeDossier(principalId);
   let opened = false;
 
   if (!dossierId || !store.getDossier(principalId, dossierId)) {
     dossierId = store.insertDossier({
       principalId, topic: filename || 'سند', question: null, state: 'open',
     });
-    settings.setActiveDossier(dossierId);
+    settings.setActiveDossier(principalId, dossierId);
     opened = true;
   }
 
@@ -294,7 +407,7 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
 async function handleChatTurn(chatId, principalId, dossierId, userText) {
   const d = store.getDossier(principalId, dossierId);
   if (!d) {
-    settings.setActiveDossier(null);
+    settings.setActiveDossier(principalId, null);
     await tg.send(chatId, 'آن پرونده دیگر نیست. با /use یکی دیگر انتخاب کن.');
     return;
   }
@@ -356,8 +469,21 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
   }
 }
 
-async function handleCommand(chatId, principalId, text) {
-  if (text.startsWith('/start')) {
+async function handleCommand(chatId, principalId, text, isOwner) {
+  if (text.startsWith('/menu') || text.startsWith('/start')) {
+    const view = menu.screen('root', principalId, undefined, { isOwner });
+    await tg.send(chatId, view.text, { buttons: view.buttons });
+    return true;
+  }
+
+  if (text.startsWith('/users')) {
+    if (!isOwner) return (await tg.send(chatId, 'فقط مالک.'), true);
+    const view = menu.screen('users', principalId, undefined, { isOwner });
+    await tg.send(chatId, view.text, { buttons: view.buttons });
+    return true;
+  }
+
+  if (text.startsWith('/oldstart')) {
     await tg.send(chatId,
       ['سلام. ویس بفرست یا بنویس.', '',
        'هر چیزی که بفرستی ثبت می‌شود — حتی اگر نفهمم چه می‌خواهی.',
@@ -397,7 +523,7 @@ async function handleCommand(chatId, principalId, text) {
     if (!arg) {
       const rows = store.listDossiers(principalId);
       if (!rows.length) return (await tg.send(chatId, 'هنوز پرونده‌ای نیست.'), true);
-      const active = settings.activeDossier();
+      const active = settings.activeDossier(principalId);
       await tg.send(chatId, ['📁 <b>پرونده‌ها</b>', '',
         ...rows.map((d) => `${d.id === active ? '▶️' : '  '} #${d.id} · ${esc(d.topic)} · ${d.state}`),
         '', '<code>/use &lt;id&gt;</code> برای انتخاب'].join('\n'));
@@ -405,13 +531,13 @@ async function handleCommand(chatId, principalId, text) {
     }
     const d = store.getDossier(principalId, Number(arg));
     if (!d) return (await tg.send(chatId, 'پیدا نشد.'), true);
-    settings.setActiveDossier(d.id);
+    settings.setActiveDossier(principalId, d.id);
     await tg.send(chatId, `💬 روی پرونده #${d.id} — ${esc(d.topic)}\n\nهر چه بنویسی گفتگو درباره‌ی همین است. <code>/close</code> برای خروج.`);
     return true;
   }
 
   if (text.startsWith('/close')) {
-    settings.setActiveDossier(null);
+    settings.setActiveDossier(principalId, null);
     await tg.send(chatId, 'از گفتگو خارج شدم. حالا هر پیام دوباره یک ثبت جدید است.');
     return true;
   }
@@ -478,7 +604,7 @@ async function handleCommand(chatId, principalId, text) {
 
   if (text.startsWith('/watch')) {
     const parts = text.slice(6).trim().split(/\s+/).filter(Boolean);
-    const dossierId = Number(parts[0]) || settings.activeDossier();
+    const dossierId = Number(parts[0]) || settings.activeDossier(principalId);
     const everyHours = Number(parts[1]) || 24;
     if (!dossierId) {
       await tg.send(chatId, 'اول با <code>/use &lt;id&gt;</code> پرونده‌ای انتخاب کن، یا <code>/watch 3</code> بزن.');
@@ -523,7 +649,7 @@ async function handleCommand(chatId, principalId, text) {
 
   if (text.startsWith('/link')) {
     const [x, y] = text.slice(5).trim().split(/\s+/).map(Number);
-    const a = x || settings.activeDossier();
+    const a = x || settings.activeDossier(principalId);
     if (!a || !y) {
       await tg.send(chatId, '<code>/link 3 7</code> — یا با پرونده‌ی فعال: <code>/link 7</code>');
       return true;
@@ -542,14 +668,14 @@ async function handleCommand(chatId, principalId, text) {
 
   if (text.startsWith('/unlink')) {
     const [x, y] = text.slice(7).trim().split(/\s+/).map(Number);
-    const a = x || settings.activeDossier();
+    const a = x || settings.activeDossier(principalId);
     const removed = store.unlinkDossiers(principalId, a, y || x);
     await tg.send(chatId, removed ? '🔗 پیوند برداشته شد.' : 'چنین پیوندی نبود.');
     return true;
   }
 
   if (text.startsWith('/related')) {
-    const id = Number(text.slice(8).trim()) || settings.activeDossier();
+    const id = Number(text.slice(8).trim()) || settings.activeDossier(principalId);
     if (!id) return (await tg.send(chatId, 'اول پرونده‌ای انتخاب کن.'), true);
     const rows = relatedDossiers(principalId, id);
     if (!rows.length) {
@@ -710,18 +836,21 @@ export async function run() {
       const chatId = msg?.chat?.id ?? cb?.message?.chat?.id;
       if (!chatId) continue;
 
-      if (!ownerChatId) {
-        ownerChatId = chatId;
-        store.setSetting('owner_chat_id', chatId);
-        console.log(`[asc] owner claimed and stored: ${chatId}`);
-      }
-      if (chatId !== ownerChatId) {
-        console.log(`[asc] ignored message from ${chatId}`);
-        continue;
-      }
-      const principalId = String(ownerChatId);
+      const from = msg?.from ?? cb?.from;
+      const access = await admit(chatId, from);
+      if (access === 'pending' || access === 'blocked') continue;
+
+      const principalId = String(chatId);
+      const isOwner = access === 'owner';
 
       if (cb) {
+        // Menu callbacks are `m:<screen>[:<arg>]` and all render in place.
+        if (String(cb.data).startsWith('m:')) {
+          const [, name, arg] = String(cb.data).split(':');
+          await handleMenu(chatId, principalId, { name, arg, isOwner, cb });
+          continue;
+        }
+
         const [action, idStr] = String(cb.data).split(':');
         const id = Number(idStr);
         if (action === 'research') {
@@ -732,7 +861,7 @@ export async function run() {
           await tg.answerCallback(cb.id, 'ذخیره شد');
           await tg.edit(chatId, cb.message.message_id, `${cb.message.text}\n\n✔️ ذخیره شد.`, []);
         } else if (action === 'chat') {
-          settings.setActiveDossier(id);
+          settings.setActiveDossier(principalId, id);
           store.markActed(principalId, id);
           await tg.answerCallback(cb.id, 'در حال گفتگو');
           const d = store.getDossier(principalId, id);
@@ -804,7 +933,7 @@ export async function run() {
       if (!msg) continue;
 
       if (msg.text && msg.text.startsWith('/')) {
-        if (await handleCommand(chatId, principalId, msg.text)) continue;
+        if (await handleCommand(chatId, principalId, msg.text, isOwner)) continue;
       }
 
       // Photos arrive as an array of sizes; the last one is the largest.
@@ -839,7 +968,7 @@ export async function run() {
       if (msg.text) {
         // With a dossier open, plain text is conversation about it. Voice is always
         // a new capture, so a thought can still be dropped mid-discussion.
-        const active = settings.activeDossier();
+        const active = settings.activeDossier(principalId);
         if (active) {
           await tg.typing(chatId);
           await handleChatTurn(chatId, principalId, active, msg.text);

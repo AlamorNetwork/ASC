@@ -93,10 +93,25 @@ The longer reasoning behind these choices, and the reviews that produced them, a
 ## Commands
 
 ```
-/start      what it does
+/menu       the inline menu — dossiers, watches, cost, settings, help
+/use        pick a dossier · /close leave the conversation
+/watch      watch a dossier · /intentions · /unwatch
+/link       link two dossiers · /unlink · /related
 /cost       spend per dossier, and how often you acted on it
 /recent     the last captures
 ```
+
+The command list to paste into BotFather is in [docs/botfather.md](docs/botfather.md).
+
+## More than one person
+
+Each Telegram chat is a separate principal, and every table and query is scoped by it —
+two people on the same bot share nothing: not dossiers, not documents, not chunks, not
+conversation, not the open dossier pointer. A test asserts this across ten read paths.
+
+The first chat to message claims ownership. Anyone else is registered as pending and the
+owner is asked once, with buttons to allow or block; a blocked person stays blocked even
+if they message again. `/users` shows who has access and what each has spent.
 
 Inspection, for looking at what was actually stored:
 

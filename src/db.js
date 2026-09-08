@@ -133,6 +133,16 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE OF text ON chunks BEGIN
   INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
 END;
 
+CREATE TABLE IF NOT EXISTS users (
+  principal_id  TEXT PRIMARY KEY,            -- the Telegram chat id
+  name          TEXT,
+  username      TEXT,
+  role          TEXT NOT NULL DEFAULT 'member',  -- owner | member
+  state         TEXT NOT NULL DEFAULT 'pending', -- pending | active | blocked
+  requested_at  TEXT NOT NULL,
+  decided_at    TEXT
+);
+
 CREATE TABLE IF NOT EXISTS intentions (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   principal_id  TEXT    NOT NULL,
@@ -263,6 +273,42 @@ export function dossierChunks(principalId, dossierId) {
                      WHERE principal_id = ? AND dossier_id IN (${holes}) ORDER BY id`)
     .all(principalId, ...ids);
 }
+
+// ---------------------------------------------------------------------- users
+
+export const getUser = (principalId) =>
+  db.prepare(`SELECT * FROM users WHERE principal_id = ?`).get(String(principalId));
+
+export const upsertUser = (u) => db.prepare(`
+  INSERT INTO users (principal_id, name, username, role, state, requested_at, decided_at)
+  VALUES (?,?,?,?,?,?,?)
+  ON CONFLICT(principal_id) DO UPDATE SET
+    name = COALESCE(excluded.name, users.name),
+    username = COALESCE(excluded.username, users.username)
+`).run(String(u.principalId), u.name ?? null, u.username ?? null,
+       u.role ?? 'member', u.state ?? 'pending',
+       new Date().toISOString(), u.decidedAt ?? null);
+
+export const setUserState = (principalId, state, role = null) => db.prepare(`
+  UPDATE users SET state = ?, decided_at = ?${role ? ', role = ?' : ''}
+  WHERE principal_id = ?
+`).run(...(role
+  ? [state, new Date().toISOString(), role, String(principalId)]
+  : [state, new Date().toISOString(), String(principalId)]));
+
+export const listUsers = () =>
+  db.prepare(`SELECT * FROM users ORDER BY CASE role WHEN 'owner' THEN 0 ELSE 1 END, requested_at`).all();
+
+/** What one person has spent, across every kind of work. */
+export const userSpend = (principalId) => {
+  const one = (sql) => db.prepare(sql).get(String(principalId))?.t ?? 0;
+  return {
+    captures: one(`SELECT COALESCE(SUM(cost_toman),0) t FROM captures  WHERE principal_id = ?`),
+    research: one(`SELECT COALESCE(SUM(cost_toman),0) t FROM episodes  WHERE principal_id = ?`),
+    documents: one(`SELECT COALESCE(SUM(cost_toman),0) t FROM documents WHERE principal_id = ?`),
+    chat: one(`SELECT COALESCE(SUM(cost_toman),0) t FROM messages  WHERE principal_id = ?`),
+  };
+};
 
 // ------------------------------------------------------- links and intentions
 
