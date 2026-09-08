@@ -1,6 +1,6 @@
-import { config } from './config.js';
-import { chat, chatJson } from './llm.js';
+import { chatJson } from './llm.js';
 import { verifyClaim } from './verify.js';
+import { modelFor, budget } from './settings.js';
 import * as store from './db.js';
 
 const GATHER_SYSTEM = `You research a topic and report claims with their sources.
@@ -42,7 +42,7 @@ Reply with a JSON object only:
  * Runs one research episode for a dossier and returns the four-column result.
  * VERIFIED is assigned here by verify.js, never by the model.
  */
-export async function runResearch({ principalId, dossierId, question, topic, onProgress }) {
+export async function runResearch({ principalId, dossierId, question, topic, onProgress, onSection }) {
   const started = Date.now();
   const episodeId = store.startEpisode({ principalId, dossierId, kind: 'research' });
   store.setDossierState(principalId, dossierId, 'running');
@@ -61,7 +61,7 @@ export async function runResearch({ principalId, dossierId, question, topic, onP
     ].filter(Boolean).join('\n');
 
     const gathered = await chatJson({
-      model: config.models.research,
+      model: modelFor('research'),
       system: GATHER_SYSTEM,
       content: ask,
       maxTokens: 4000,
@@ -72,9 +72,11 @@ export async function runResearch({ principalId, dossierId, question, topic, onP
     const data = gathered.data ?? {};
     const rawClaims = Array.isArray(data.claims) ? data.claims.slice(0, 12) : [];
 
+    if (data.summary) await onSection?.('summary', { summary: data.summary, topic });
     onProgress?.(`بررسی ${rawClaims.length} ادعا در منابع…`);
 
     // Verification: fetch each source and check the quote really appears there.
+    // Sections are handed out as they finish, so nothing waits for the whole run.
     const verified = [];
     const found = [];
     for (const c of rawClaims) {
@@ -90,9 +92,15 @@ export async function runResearch({ principalId, dossierId, question, topic, onP
       };
       store.insertClaim({ principalId, dossierId, episodeId, ...row });
       (result.status === 'verified' ? verified : found).push(row);
+      onProgress?.(`بررسی ${verified.length + found.length} از ${rawClaims.length} ادعا…`);
     }
 
+    if (verified.length) await onSection?.('verified', { verified });
+
     const disputes = Array.isArray(data.disputes) ? data.disputes : [];
+    if (disputes.length) await onSection?.('disputed', { disputed: disputes });
+    if (found.length) await onSection?.('found', { found });
+    if (data.open_questions?.length) await onSection?.('unresolved', { unresolved: data.open_questions });
     for (const d of disputes) {
       store.insertClaim({
         principalId, dossierId, episodeId,
@@ -108,7 +116,7 @@ export async function runResearch({ principalId, dossierId, question, topic, onP
       found,
       unresolved: Array.isArray(data.open_questions) ? data.open_questions : [],
       sourceQualityNote: data.source_quality_note ?? null,
-      budgetExceeded: costUsd > config.budget.perResearch,
+      budgetExceeded: budget() !== null && costUsd > budget(),
     };
 
     store.finishEpisode(principalId, episodeId, {

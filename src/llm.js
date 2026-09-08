@@ -80,6 +80,66 @@ export async function chatJson(opts) {
   }
 }
 
+/**
+ * Streaming completion. `onDelta(fullTextSoFar)` is called as chunks arrive, throttled
+ * by the caller. Falls back to a normal call if the endpoint refuses to stream, so a
+ * provider without SSE degrades to a slower reply rather than an error.
+ */
+export async function chatStream({ model, system, history = [], content, maxTokens = 2000, onDelta }) {
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system });
+  for (const m of history) messages.push({ role: m.role, content: m.text });
+  if (content) messages.push({ role: 'user', content });
+
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true }),
+  });
+
+  if (!res.ok || !res.body) {
+    const raw = await res.text().catch(() => '');
+    if (!res.ok) throw new Error(`router ${res.status}: ${raw.slice(0, 300)}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let text = '';
+  let usage = {};
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data:')) continue;
+      const payload = trimmed.slice(5).trim();
+      if (payload === '[DONE]') continue;
+      try {
+        const chunk = JSON.parse(payload);
+        const delta = chunk.choices?.[0]?.delta?.content;
+        if (delta) { text += delta; onDelta?.(text); }
+        if (chunk.usage) usage = chunk.usage;
+      } catch { /* a partial frame; the next read completes it */ }
+    }
+  }
+
+  return {
+    text,
+    usage: {
+      inTokens: usage.prompt_tokens ?? 0,
+      outTokens: usage.completion_tokens ?? 0,
+      costUsd: usage.cost ?? 0,
+      costToman: usage.total_cost_toman ?? 0,
+    },
+  };
+}
+
 export const audioPart = (base64, format = 'ogg') => ({
   type: 'input_audio',
   input_audio: { data: base64, format },

@@ -75,10 +75,37 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS messages (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id  TEXT    NOT NULL,
+  dossier_id    INTEGER REFERENCES dossiers(id),
+  role          TEXT    NOT NULL,          -- user | assistant
+  text          TEXT    NOT NULL,
+  cost_toman    REAL    NOT NULL DEFAULT 0,
+  created_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_dossier ON messages(principal_id, dossier_id, id);
 `);
 
 export const getSetting = (key) =>
   db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key)?.value ?? null;
+
+export const allSettings = () =>
+  db.prepare(`SELECT key, value FROM settings ORDER BY key`).all();
+
+export const addMessage = (m) => db.prepare(`
+  INSERT INTO messages (principal_id, dossier_id, role, text, cost_toman, created_at)
+  VALUES (?,?,?,?,?,?)
+`).run(m.principalId, m.dossierId ?? null, m.role, m.text, m.costToman ?? 0, new Date().toISOString()).lastInsertRowid;
+
+/** Oldest-first, so it can be handed straight to a model as conversation history. */
+export const conversation = (principalId, dossierId, limit = 20) =>
+  db.prepare(`SELECT role, text FROM messages
+              WHERE principal_id = ? AND dossier_id IS ?
+              ORDER BY id DESC LIMIT ?`)
+    .all(principalId, dossierId, limit).reverse();
 
 export const setSetting = (key, value) =>
   db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)

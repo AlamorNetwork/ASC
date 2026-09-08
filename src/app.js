@@ -1,6 +1,8 @@
 import { config } from './config.js';
 import * as tg from './telegram.js';
 import * as store from './db.js';
+import * as settings from './settings.js';
+import * as chat from './chat.js';
 import { captureFromAudio, captureFromText } from './capture.js';
 import { runResearch } from './research.js';
 
@@ -41,51 +43,44 @@ function captureCard(id, c, costToman) {
   return { text: lines.join('\n'), buttons };
 }
 
-function renderResult(topic, out, costToman) {
-  const L = [`🔎 <b>${esc(topic)}</b>`];
-  if (out.summary) L.push('', esc(out.summary));
+// Each column renders on its own, so it can be sent the moment it is ready
+// instead of arriving as one wall of text at the end.
+const SECTION = {
+  summary: ({ topic, summary }) => [`🔎 <b>${esc(topic)}</b>`, '', esc(summary)].join('\n'),
 
-  if (out.verified?.length) {
-    L.push('', '✅ <b>تأییدشده</b> <i>— منبع را باز کردم و این جمله در آن بود</i>');
-    for (const c of out.verified) {
+  verified: ({ verified }) => {
+    const L = ['✅ <b>تأییدشده</b> <i>— منبع را باز کردم و این جمله در آن بود</i>', ''];
+    for (const c of verified) {
       L.push(`• ${esc(c.text)}`);
       if (c.sourceUrl) L.push(`   ↳ <a href="${esc(c.sourceUrl)}">${esc(c.sourceTitle || c.sourceUrl)}</a>`);
     }
-  } else {
-    L.push('', '✅ <b>تأییدشده</b>', '<i>هیچ ادعایی تأیید نشد. این یک نتیجه‌ی صادقانه است، نه خطا.</i>');
-  }
+    return L.join('\n');
+  },
 
-  if (out.disputed?.length) {
-    L.push('', '⚠️ <b>مورد اختلاف</b> <i>— منابع معتبر با هم مخالف‌اند</i>');
-    for (const d of out.disputed) {
+  disputed: ({ disputed }) => {
+    const L = ['⚠️ <b>مورد اختلاف</b> <i>— منابع معتبر با هم مخالف‌اند</i>', ''];
+    for (const d of disputed) {
       L.push(`• ${esc(d.question)}`);
-      for (const s of d.sides ?? []) {
-        L.push(`   – ${esc(s.who)}: ${esc(s.position)}`);
-      }
+      for (const s of d.sides ?? []) L.push(`   – ${esc(s.who)}: ${esc(s.position)}`);
     }
-  }
+    return L.join('\n');
+  },
 
-  if (out.found?.length) {
-    L.push('', '📄 <b>پیدا شده</b> <i>— خواندم ولی تأیید نشد</i>');
-    for (const c of out.found) {
+  found: ({ found }) => {
+    const L = ['📄 <b>پیدا شده</b> <i>— خواندم ولی تأیید نشد</i>', ''];
+    for (const c of found) {
       L.push(`• ${esc(c.text)}`);
       const bits = [];
       if (c.sourceUrl) bits.push(`<a href="${esc(c.sourceUrl)}">${esc(c.sourceTitle || 'منبع')}</a>`);
       if (c.verifyNote) bits.push(`<i>${esc(c.verifyNote)}</i>`);
       if (bits.length) L.push(`   ↳ ${bits.join(' · ')}`);
     }
-  }
+    return L.join('\n');
+  },
 
-  if (out.unresolved?.length) {
-    L.push('', '❓ <b>حل‌نشده</b>');
-    for (const q of out.unresolved) L.push(`• ${esc(q)}`);
-  }
-
-  if (out.sourceQualityNote) L.push('', `⚠️ <i>${esc(out.sourceQualityNote)}</i>`);
-  L.push('', `💰 ${toman(costToman)} تومان`);
-  if (out.budgetExceeded) L.push('<i>بودجه‌ی این دور تمام شد — نتیجه ناقص است.</i>');
-  return L.join('\n');
-}
+  unresolved: ({ unresolved }) =>
+    ['❓ <b>حل‌نشده</b>', '', ...unresolved.map((q) => `• ${esc(q)}`)].join('\n'),
+};
 
 async function handleCapture(chatId, principalId, capture, usage, replyTo) {
   const id = store.insertCapture({
@@ -123,13 +118,67 @@ async function startResearch(chatId, principalId, captureId) {
       question: cap.request || cap.transcript,
       topic,
       onProgress: (msg) => tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>\n\n${esc(msg)}`),
+      onSection: async (name, payload) => {
+        if (SECTION[name]) await tg.send(chatId, SECTION[name]({ topic, ...payload }));
+      },
     });
-    await tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>\n\nتمام شد.`);
-    await tg.send(chatId, renderResult(topic, output, costToman));
+
+    await tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>`);
+
+    if (!output.verified?.length) {
+      await tg.send(chatId, '✅ <b>تأییدشده</b>\n\n<i>هیچ ادعایی تأیید نشد. این یک نتیجه‌ی صادقانه است، نه خطا.</i>');
+    }
+    if (output.sourceQualityNote) await tg.send(chatId, `⚠️ <i>${esc(output.sourceQualityNote)}</i>`);
+
+    settings.setActiveDossier(dossierId);
+    const tail = [`💰 ${toman(costToman)} تومان · پرونده #${dossierId}`];
+    if (output.budgetExceeded) {
+      tail.push('', `<i>از سقف بودجه رد شد — نتیجه ممکن است ناقص باشد.</i>`);
+    }
+    await tg.send(chatId, tail.join('\n'), {
+      buttons: [
+        [{ text: '💬 بحث کنیم', callback_data: `chat:${dossierId}` }],
+        ...(output.budgetExceeded ? [[
+          { text: '⬆️ سقف را دو برابر کن', callback_data: 'budget:x2' },
+          { text: '♾ بی‌سقف', callback_data: 'budget:none' },
+        ]] : []),
+      ],
+    });
   } catch (err) {
     console.error('[research] failed:', err);
     await tg.edit(chatId, status.message_id,
       `🔎 <b>${esc(topic)}</b>\n\n❌ تحقیق شکست خورد: ${esc(String(err.message ?? err))}\n\n<i>ثبت اولیه‌ات سالم است و از دست نرفته.</i>`);
+  }
+}
+
+/** One chat turn about the active dossier, streamed into a single edited message. */
+async function handleChatTurn(chatId, principalId, dossierId, userText) {
+  const d = store.getDossier(principalId, dossierId);
+  if (!d) {
+    settings.setActiveDossier(null);
+    await tg.send(chatId, 'آن پرونده دیگر نیست. با /use یکی دیگر انتخاب کن.');
+    return;
+  }
+
+  const placeholder = await tg.send(chatId, '…');
+  let lastEdit = 0;
+  let lastShown = '';
+
+  try {
+    const { text, usage } = await chat.reply({
+      principalId, dossierId, userText,
+      onDelta: (soFar) => {
+        const now = Date.now();
+        if (now - lastEdit < 1200 || soFar === lastShown) return;
+        lastEdit = now;
+        lastShown = soFar;
+        tg.edit(chatId, placeholder.message_id, esc(soFar) + ' ▍');
+      },
+    });
+    await tg.edit(chatId, placeholder.message_id,
+      `${esc(text)}\n\n<i>${toman(usage.costToman)} تومان · پرونده #${dossierId}</i>`);
+  } catch (err) {
+    await tg.edit(chatId, placeholder.message_id, `⚠️ ${esc(String(err.message ?? err))}`);
   }
 }
 
@@ -139,7 +188,10 @@ async function handleCommand(chatId, principalId, text) {
       ['سلام. ویس بفرست یا بنویس.', '',
        'هر چیزی که بفرستی ثبت می‌شود — حتی اگر نفهمم چه می‌خواهی.',
        'اگر درخواست تحقیق باشد، دکمه‌اش را می‌زنی و در پس‌زمینه انجام می‌دهم.', '',
-       '/cost — گزارش هزینه', '/recent — آخرین ثبت‌ها', '/db — دیتابیس'].join('\n'));
+       'وقتی تحقیقی تمام شد، دکمه‌ی «بحث کنیم» را بزن تا درباره‌اش حرف بزنیم.', '',
+       '/use — پرونده‌ها · /close — خروج از گفتگو',
+       '/model · /models · /budget',
+       '/cost · /recent · /db'].join('\n'));
     return true;
   }
   if (text.startsWith('/cost')) {
@@ -159,6 +211,92 @@ async function handleCommand(chatId, principalId, text) {
     if (!rows.length) return (await tg.send(chatId, 'هنوز چیزی ثبت نشده.'), true);
     await tg.send(chatId, rows.map((r) =>
       `#${r.id} · ${KIND_LABEL[r.kind] ?? r.kind} — ${esc(r.title || r.transcript.slice(0, 50))}`).join('\n'));
+    return true;
+  }
+
+  // ------------------------------------------------------- chat and control
+
+  if (text.startsWith('/use')) {
+    const arg = text.slice(4).trim();
+    if (!arg) {
+      const rows = store.listDossiers(principalId);
+      if (!rows.length) return (await tg.send(chatId, 'هنوز پرونده‌ای نیست.'), true);
+      const active = settings.activeDossier();
+      await tg.send(chatId, ['📁 <b>پرونده‌ها</b>', '',
+        ...rows.map((d) => `${d.id === active ? '▶️' : '  '} #${d.id} · ${esc(d.topic)} · ${d.state}`),
+        '', '<code>/use &lt;id&gt;</code> برای انتخاب'].join('\n'));
+      return true;
+    }
+    const d = store.getDossier(principalId, Number(arg));
+    if (!d) return (await tg.send(chatId, 'پیدا نشد.'), true);
+    settings.setActiveDossier(d.id);
+    await tg.send(chatId, `💬 روی پرونده #${d.id} — ${esc(d.topic)}\n\nهر چه بنویسی گفتگو درباره‌ی همین است. <code>/close</code> برای خروج.`);
+    return true;
+  }
+
+  if (text.startsWith('/close')) {
+    settings.setActiveDossier(null);
+    await tg.send(chatId, 'از گفتگو خارج شدم. حالا هر پیام دوباره یک ثبت جدید است.');
+    return true;
+  }
+
+  if (text.startsWith('/models')) {
+    try {
+      const res = await fetch(`${config.router.base}/models`, {
+        headers: { Authorization: `Bearer ${config.router.key}` },
+      });
+      const j = await res.json();
+      const ids = (j.data ?? []).map((m) => m.id).sort();
+      await tg.send(chatId, `<b>${ids.length} مدل</b>\n\n<code>${esc(ids.join('\n'))}</code>`);
+    } catch (err) {
+      await tg.send(chatId, `❌ ${esc(String(err.message ?? err))}`);
+    }
+    return true;
+  }
+
+  if (text.startsWith('/model')) {
+    const arg = text.slice(6).trim();
+    if (!arg) {
+      const m = settings.allModels();
+      await tg.send(chatId, ['🧠 <b>مدل‌ها</b>', '',
+        `capture   <code>${esc(m.capture)}</code> <i>(باید صوت بپذیرد)</i>`,
+        `research  <code>${esc(m.research)}</code> <i>(باید جست‌وجوگر باشد)</i>`,
+        `structure <code>${esc(m.structure)}</code> <i>(گفتگو و ساختاردهی)</i>`, '',
+        '<code>/model research openai/gpt-…</code>', '<code>/models</code> فهرست کامل'].join('\n'));
+      return true;
+    }
+    const [role, ...rest] = arg.split(/\s+/);
+    const id = rest.join(' ');
+    if (!id) return (await tg.send(chatId, 'شناسه‌ی مدل را هم بده.'), true);
+    try {
+      settings.setModel(role, id);
+      await tg.send(chatId, `✔️ ${role} → <code>${esc(id)}</code>\n\n<i>بدون ری‌استارت اعمال شد.</i>`);
+    } catch (err) {
+      await tg.send(chatId, `❌ ${esc(err.message)}`);
+    }
+    return true;
+  }
+
+  if (text.startsWith('/budget')) {
+    const arg = text.slice(7).trim();
+    if (!arg) {
+      const b = settings.budget();
+      const avg = settings.recentAverageCost(principalId);
+      await tg.send(chatId, ['💰 <b>سقف هزینه‌ی هر دور تحقیق</b>', '',
+        b === null ? 'بی‌سقف' : `$${b} ≈ ${toman(b * 310000)} تومان`,
+        avg ? `میانگین دورهای اخیر: ${toman(avg * 310000)} تومان` : 'هنوز داده‌ای نیست.', '',
+        '<code>/budget 0.03</code> · <code>/budget none</code>'].join('\n'));
+      return true;
+    }
+    if (arg === 'none') {
+      settings.setBudget(null);
+      await tg.send(chatId, '♾ سقف برداشته شد. دیگر نمی‌پرسم و جلوی هیچ هزینه‌ای را نمی‌گیرم.');
+    } else if (Number.isFinite(Number(arg))) {
+      settings.setBudget(Number(arg));
+      await tg.send(chatId, `✔️ سقف: $${arg} ≈ ${toman(Number(arg) * 310000)} تومان`);
+    } else {
+      await tg.send(chatId, 'عدد به دلار، یا <code>none</code>.');
+    }
     return true;
   }
 
@@ -282,6 +420,25 @@ export async function run() {
         } else if (action === 'keep') {
           await tg.answerCallback(cb.id, 'ذخیره شد');
           await tg.edit(chatId, cb.message.message_id, `${cb.message.text}\n\n✔️ ذخیره شد.`, []);
+        } else if (action === 'chat') {
+          settings.setActiveDossier(id);
+          store.markActed(principalId, id);
+          await tg.answerCallback(cb.id, 'در حال گفتگو');
+          const d = store.getDossier(principalId, id);
+          await tg.send(chatId,
+            `💬 روی پرونده #${id} — ${esc(d?.topic ?? '')}\n\nبپرس. <code>/close</code> برای خروج.`);
+        } else if (action === 'budget') {
+          const current = settings.budget();
+          if (idStr === 'none') {
+            settings.setBudget(null);
+            await tg.answerCallback(cb.id, 'بی‌سقف شد');
+            await tg.send(chatId, '♾ سقف برداشته شد. از این به بعد جلوی هیچ هزینه‌ای را نمی‌گیرم.');
+          } else {
+            const next = Number(((current ?? 0.05) * 2).toFixed(4));
+            settings.setBudget(next);
+            await tg.answerCallback(cb.id, 'سقف بالا رفت');
+            await tg.send(chatId, `⬆️ سقف: $${next} ≈ ${toman(next * 310000)} تومان`);
+          }
         }
         continue;
       }
@@ -302,6 +459,14 @@ export async function run() {
       }
 
       if (msg.text) {
+        // With a dossier open, plain text is conversation about it. Voice is always
+        // a new capture, so a thought can still be dropped mid-discussion.
+        const active = settings.activeDossier();
+        if (active) {
+          await tg.typing(chatId);
+          await handleChatTurn(chatId, principalId, active, msg.text);
+          continue;
+        }
         await tg.typing(chatId);
         const { capture, usage } = await captureFromText(msg.text);
         await handleCapture(chatId, principalId, { ...capture, source: 'text' }, usage, msg.message_id);

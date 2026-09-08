@@ -55,6 +55,35 @@ await check('principal isolation', () => {
   return 'B cannot read A';
 });
 
+await check('settings override the file config', async () => {
+  const s = await import('../src/settings.js');
+  const before = s.modelFor('research');
+  s.setModel('research', 'test/model-x');
+  if (s.modelFor('research') !== 'test/model-x') throw new Error('model override did not stick');
+  store.setSetting('model.research', before);
+
+  s.setBudget(null);
+  if (s.budget() !== null) throw new Error('unlimited budget did not stick');
+  s.setBudget(0.07);
+  if (s.budget() !== 0.07) throw new Error('numeric budget did not stick');
+  store.setSetting('budget.per_research', String(config.budget.perResearch));
+
+  try { s.setModel('nonsense', 'x'); throw new Error('an invalid role was accepted'); }
+  catch (e) { if (!/نقش نامعتبر/.test(e.message)) throw e; }
+  return 'model + budget, with an invalid role rejected';
+});
+
+await check('conversation history round trips', () => {
+  const p = 'chat-test';
+  store.addMessage({ principalId: p, dossierId: 1, role: 'user', text: 'سلام' });
+  store.addMessage({ principalId: p, dossierId: 1, role: 'assistant', text: 'بله' });
+  const conv = store.conversation(p, 1);
+  if (conv.length !== 2) throw new Error(`expected 2 turns, got ${conv.length}`);
+  if (conv[0].role !== 'user') throw new Error('history is not oldest-first');
+  if (store.conversation('someone-else', 1).length !== 0) throw new Error('history leaked across principals');
+  return 'oldest-first, principal-scoped';
+});
+
 await check('persian normalisation', () => {
   const a = normalise('كتاب مي‌خوانم.');
   const b = normalise('کتاب می خوانم');
