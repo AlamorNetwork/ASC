@@ -56,13 +56,15 @@ export const config = {
   botToken,
   router: routerCreds(),
 
+  // Model ids are provider-namespaced differently depending on the endpoint
+  // (a gateway may prefix them, a direct provider will not), so they are configurable.
   models: {
-    // Measured 2026-09-08: audio + structured extraction in one call.
-    capture: 'liara/google/gemini-3.6-flash',
-    // Search-grounded, for the gathering pass.
-    research: 'liara/perplexity/sonar-pro',
-    // Cheap text work: structuring, dispute detection.
-    structure: 'liara/google/gemini-3.6-flash',
+    // Must accept audio input: transcription and extraction happen in one call.
+    capture: env.MODEL_CAPTURE || 'google/gemini-3.7-flash',
+    // Should be search-grounded, or research has nothing to cite.
+    research: env.MODEL_RESEARCH || 'openai/gpt-6-astra:online',
+    // Cheap text work.
+    structure: env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
   },
 
   // Budget per research episode, in US dollars of provider spend.
