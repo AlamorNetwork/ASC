@@ -350,6 +350,75 @@ await check('a fully read document is not offered again', () => {
   return 'finished documents are detectable';
 });
 
+await check('multi-hop search follows a lead to different wording', async () => {
+  const { investigate } = await import('../src/investigate.js');
+  const p = `hop-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'کتاب دین' });
+  const docId = store.insertDocument({
+    principalId: p, dossierId, filename: 'book.pdf', kind: 'pdf', extraction: 'local',
+  });
+  // The book never says "ابراهیمی" — it says "سامی". A single search finds nothing.
+  store.insertChunks(p, dossierId, docId, [
+    { seq: 0, page: 12, text: 'دین‌های سامی سه شاخه دارند و ریشه‌ی مشترکی در خاور نزدیک دارند.' },
+    { seq: 1, page: 40, text: 'واژه‌ی سامی در سده‌ی نوزدهم برای این خانواده از ادیان به کار رفت.' },
+  ]);
+
+  // Scripted planner: first hop uses the user's wording, then follows the lead.
+  let call = 0;
+  const ask = async () => {
+    call++;
+    if (call === 1) return { data: { queries: ['ادیان ابراهیمی'] }, usage: {} };
+    if (call === 2) {
+      return { data: { enough: false, lead: 'کتاب به‌جای «ابراهیمی» از «سامی» استفاده می‌کند',
+                       missing: 'چیزی با واژه‌ی ابراهیمی نبود', next_queries: ['سامی'] }, usage: {} };
+    }
+    return { data: { enough: true, lead: null, missing: null, next_queries: [] }, usage: {} };
+  };
+
+  const steps = [];
+  {
+    const out = await investigate({
+      principalId: p, dossierId, question: 'درباره‌ی ادیان ابراهیمی چه می‌گوید؟',
+      ask, onStep: (s) => { steps.push(s); },
+    });
+    if (out.hops < 2) throw new Error(`expected to follow the lead, hops=${out.hops}`);
+    if (!out.passages.length) throw new Error('the second wording found nothing');
+    if (!steps.some((s) => s.kind === 'lead' && /سامی/.test(s.lead ?? ''))) {
+      throw new Error('the lead was never reported');
+    }
+    if (!steps.some((s) => s.kind === 'searching' && s.queries.includes('سامی'))) {
+      throw new Error('the follow-up search never ran');
+    }
+    return `${out.hops} hops, ${out.passages.length} passages, lead reported live`;
+  }
+});
+
+await check('multi-hop stops instead of looping forever', async () => {
+  const { investigate } = await import('../src/investigate.js');
+  const p = `hopstop-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'خالی' });
+  const docId = store.insertDocument({
+    principalId: p, dossierId, filename: 'e.txt', kind: 'text', extraction: 'local',
+  });
+  store.insertChunks(p, dossierId, docId, [
+    { seq: 0, text: 'متنی کاملاً بی‌ربط درباره‌ی آشپزی و پخت نان محلی در روستا.' },
+  ]);
+
+  // A planner that never says "enough" — the loop must still terminate.
+  const ask = async () => ({
+    data: { queries: ['یک'], enough: false, lead: null, missing: 'هیچ', next_queries: ['دو'] },
+    usage: {},
+  });
+  {
+    const out = await investigate({
+      principalId: p, dossierId, question: 'سؤال بی‌ربط', maxHops: 3, ask,
+    });
+    if (out.hops > 3) throw new Error(`ran ${out.hops} hops past the limit`);
+    if (!out.exhausted) throw new Error('did not report itself exhausted');
+    return `stopped after ${out.hops} hop(s), exhausted`;
+  }
+});
+
 await check('conversation history round trips', () => {
   // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
   const p = `chat-test-${Date.now()}`;

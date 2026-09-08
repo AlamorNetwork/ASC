@@ -1,0 +1,141 @@
+/**
+ * Multi-hop retrieval over a dossier.
+ *
+ * One search is not research. Asking about "ادیان ابراهیمی" in a book that calls them
+ * "دین‌های سامی" returns nothing, and a single-shot system then says "not in the file"
+ * when the material is right there under another name.
+ *
+ * So each hop reads what came back, names what is still missing, and proposes the terms
+ * the corpus itself appears to use. The trail is reported as it happens, because a lead
+ * is often more useful than the answer — it tells you what the source actually calls
+ * the thing you asked about.
+ */
+import { chatJson } from './llm.js';
+import { modelFor } from './settings.js';
+import { retrieve } from './chunks.js';
+import * as store from './db.js';
+
+const PLAN_SYSTEM = `تو برای جست‌وجو در یک مجموعه سند، کلیدواژه می‌سازی.
+فقط JSON بده، بدون توضیح و بدون code fence:
+
+{ "queries": ["...", "...", "..."] }
+
+قواعد:
+- دو تا چهار عبارت جست‌وجو بساز.
+- به زبان خود سند فکر کن، نه زبان سؤال. اگر سند فارسی قدیمی یا ترجمه است، از واژگان همان دوره استفاده کن.
+- مترادف‌ها و نام‌های جایگزین را هم بیاور، چون سند ممکن است اصطلاح دیگری به کار برده باشد.
+- عبارت‌ها کوتاه باشند: دو تا چهار کلمه.`;
+
+const ASSESS_SYSTEM = `تو در حال تحقیق در یک مجموعه سند هستی و بعد از هر جست‌وجو تصمیم می‌گیری ادامه بدهی یا نه.
+فقط JSON بده، بدون توضیح و بدون code fence:
+
+{
+  "enough": false,
+  "lead": "مهم‌ترین سرنخی که از این پاساژها گرفتی — مثلاً اینکه سند به‌جای فلان واژه از بهمان واژه استفاده می‌کند. اگر سرنخی نبود null",
+  "missing": "چه چیزی هنوز پیدا نشده",
+  "next_queries": ["عبارت‌های بعدی بر پایه‌ی همین سرنخ"]
+}
+
+قواعد:
+- enough را وقتی true کن که پاساژها برای جواب دادن کافی‌اند.
+- اگر پاساژها نشان می‌دهند سند اصطلاح دیگری به کار می‌برد، آن را به‌عنوان lead بنویس و next_queries را از همان بساز. این مهم‌ترین کار توست.
+- اگر هیچ ربطی پیدا نشد و سرنخی هم نیست، enough را true کن و next_queries را خالی بگذار — دنبال چیزی که نیست نگرد.
+- چیزی از خودت اضافه نکن. فقط از همین پاساژها نتیجه بگیر.`;
+
+const summarise = (rows, limit = 12) => rows.slice(0, limit)
+  .map((r, i) => `[${i + 1}] ${r.page ? `ص ${r.page} · ` : ''}${r.text.slice(0, 400)}`)
+  .join('\n\n');
+
+/**
+ * Follows leads through the corpus until it has enough, runs out of leads, or hits
+ * the hop limit.
+ *
+ * @param onStep called with {kind, ...} as it happens: 'searching' | 'found' | 'lead'
+ * @returns {{passages, trail, hops, exhausted, costToman}}
+ */
+export async function investigate({
+  principalId, dossierId, question, maxHops = 4, perHop = 6, onStep,
+  // The planner is injectable so the loop can be exercised without a model, and so a
+  // different search strategy can be dropped in later.
+  ask = chatJson,
+}) {
+  const seen = new Map();
+  const trail = [];
+  let costToman = 0;
+  let exhausted = false;
+
+  const plan = await ask({
+    model: modelFor('structure'),
+    system: PLAN_SYSTEM,
+    content: `سؤال: ${question}`,
+    maxTokens: 400,
+    noThinking: false,
+  });
+  costToman += plan.usage.costToman ?? 0;
+  let queries = Array.isArray(plan.data.queries) ? plan.data.queries.slice(0, 4) : [question];
+
+  for (let hop = 1; hop <= maxHops; hop++) {
+    await onStep?.({ kind: 'searching', hop, queries });
+
+    const before = seen.size;
+    for (const q of queries) {
+      const rows = await retrieve({ principalId, dossierId, query: q, limit: perHop });
+      for (const r of rows) if (!seen.has(r.id)) seen.set(r.id, r);
+    }
+    const fresh = seen.size - before;
+
+    const pages = [...seen.values()].slice(before).map((r) => r.page).filter(Boolean);
+    await onStep?.({ kind: 'found', hop, fresh, total: seen.size, pages });
+
+    // Nothing new after the first hop means the leads have run dry.
+    if (!fresh && hop > 1) { exhausted = true; break; }
+
+    const assess = await ask({
+      model: modelFor('structure'),
+      system: ASSESS_SYSTEM,
+      content: [
+        `سؤال: ${question}`,
+        `عبارت‌هایی که تا حالا جست‌وجو شد: ${trail.flatMap((t) => t.queries).concat(queries).join(' · ')}`,
+        '',
+        'پاساژهای پیداشده:',
+        summarise([...seen.values()]),
+      ].join('\n'),
+      maxTokens: 700,
+      noThinking: false,
+    });
+    costToman += assess.usage.costToman ?? 0;
+
+    const step = {
+      hop,
+      queries,
+      fresh,
+      lead: assess.data.lead ?? null,
+      missing: assess.data.missing ?? null,
+    };
+    trail.push(step);
+    if (step.lead || step.missing) await onStep?.({ kind: 'lead', ...step });
+
+    const next = Array.isArray(assess.data.next_queries)
+      ? assess.data.next_queries.filter((q) => typeof q === 'string' && q.trim()).slice(0, 4)
+      : [];
+
+    if (assess.data.enough === true || !next.length) break;
+    if (hop === maxHops) { exhausted = true; break; }
+    queries = next;
+  }
+
+  return {
+    passages: [...seen.values()],
+    trail,
+    hops: trail.length,
+    exhausted,
+    costToman,
+    // True when the corpus simply does not hold the answer, which is when going to
+    // the web is worth offering — but never without being asked.
+    notInCorpus: seen.size === 0 || (exhausted && trail.at(-1)?.missing),
+  };
+}
+
+/** Whether this dossier has anything to search at all. */
+export const hasCorpus = (principalId, dossierId) =>
+  store.dossierDocuments(principalId, dossierId).length > 0;

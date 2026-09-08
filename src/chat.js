@@ -1,6 +1,7 @@
 import { chatStream } from './llm.js';
 import { modelFor } from './settings.js';
-import { retrieve, renderPassages } from './chunks.js';
+import { renderPassages } from './chunks.js';
+import { investigate } from './investigate.js';
 import * as store from './db.js';
 
 const SYSTEM = `تو دستیار پژوهشی کاربر هستی و دارید درباره‌ی یک پرونده‌ی مشخص گفتگو می‌کنید.
@@ -60,20 +61,25 @@ function dossierContext(principalId, dossierId) {
  * One conversational turn about a dossier. Streams into `onDelta` and persists
  * both sides so the next turn has the history.
  */
-export async function reply({ principalId, dossierId, userText, onDelta }) {
+export async function reply({ principalId, dossierId, userText, onDelta, onStep }) {
   const context = dossierContext(principalId, dossierId);
   if (!context) throw new Error('پرونده پیدا نشد');
 
   const history = store.conversation(principalId, dossierId, 16);
   store.addMessage({ principalId, dossierId, role: 'user', text: userText });
 
-  // Only the passages that bear on this question, not every document in the dossier.
+  // Only the passages that bear on this question — found by following leads through
+  // the corpus, not by one search that gives up when the wording does not match.
   let passages = '';
+  let research = null;
   const docs = store.dossierDocuments(principalId, dossierId);
   if (docs.length) {
-    const rows = await retrieve({ principalId, dossierId, query: userText, limit: 6 });
-    if (rows.length) passages = `\n\n<passages>\n${renderPassages(principalId, rows)}\n</passages>\n` +
-      'هر جا از این متن‌ها استفاده کردی، شماره‌ی [n] را بنویس.';
+    research = await investigate({ principalId, dossierId, question: userText, onStep });
+    if (research.passages.length) {
+      passages = `\n\n<passages>\n${renderPassages(principalId, research.passages, dossierId)}\n</passages>\n` +
+        'هر جا از این متن‌ها استفاده کردی، شماره‌ی [n] را بنویس. ' +
+        'اگر جواب سؤال در این پاساژها نیست، صریح بگو در اسناد نیست — چیزی از خودت نساز.';
+    }
   }
 
   const system = `${SYSTEM}\n\n<dossier-data>\n${context}\n</dossier-data>${passages}\n` +
@@ -89,5 +95,5 @@ export async function reply({ principalId, dossierId, userText, onDelta }) {
   });
 
   store.addMessage({ principalId, dossierId, role: 'assistant', text, costToman: usage.costToman });
-  return { text, usage };
+  return { text, usage, research };
 }

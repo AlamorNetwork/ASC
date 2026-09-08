@@ -157,6 +157,27 @@ async function startResearch(chatId, principalId, captureId) {
   }
 }
 
+/** A web round on an existing dossier, when its own documents did not hold the answer. */
+async function runWebResearch(chatId, principalId, dossierId, topic, question) {
+  const status = await tg.send(chatId, `🌐 <b>${esc(question.slice(0, 60))}</b>\n\nدر حال جست‌وجو در وب…`);
+  try {
+    const { output, costToman } = await runResearch({
+      principalId, dossierId, topic, question,
+      onProgress: (m) => tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>\n\n${esc(m)}`),
+      onSection: async (name, payload) => {
+        if (SECTION[name]) await tg.send(chatId, SECTION[name]({ topic, ...payload }));
+      },
+    });
+    await tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>`);
+    if (!output.verified?.length) {
+      await tg.send(chatId, '✅ <b>تأییدشده</b>\n\n<i>هیچ ادعایی تأیید نشد.</i>');
+    }
+    await tg.send(chatId, `💰 ${toman(costToman)} تومان · به پرونده #${dossierId} اضافه شد`);
+  } catch (err) {
+    await tg.edit(chatId, status.message_id, `🌐 ❌ ${esc(String(err.message ?? err))}`);
+  }
+}
+
 // Scanned PDFs waiting for the user to approve the expensive path.
 const pendingScans = new Map();
 
@@ -282,9 +303,32 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
   let lastEdit = 0;
   let lastShown = '';
 
+  // The search trail is shown as it happens, in one message that grows. A lead is
+  // often the useful part — it says what the source actually calls the thing you asked
+  // about — so it should not be buried until the end.
+  let trailMsg = null;
+  const trailLines = [];
+  const showTrail = async (line) => {
+    trailLines.push(line);
+    const body = trailLines.join('\n');
+    if (!trailMsg) trailMsg = await tg.send(chatId, body);
+    else await tg.edit(chatId, trailMsg.message_id, body);
+  };
+
   try {
-    const { text, usage } = await chat.reply({
+    const { text, usage, research } = await chat.reply({
       principalId, dossierId, userText,
+      onStep: async (step) => {
+        if (step.kind === 'searching') {
+          await showTrail(`🔍 <b>گام ${step.hop}</b> — ${step.queries.map((q) => `«${esc(q)}»`).join(' ')}`);
+        } else if (step.kind === 'found') {
+          const where = step.pages?.length ? ` · ص ${[...new Set(step.pages)].slice(0, 6).join('، ')}` : '';
+          await showTrail(`   ${step.fresh ? `${step.fresh} پاساژ تازه` : 'چیز تازه‌ای نبود'}${where}`);
+        } else if (step.kind === 'lead') {
+          if (step.lead) await showTrail(`💡 ${esc(step.lead)}`);
+          else if (step.missing) await showTrail(`   <i>هنوز پیدا نشده: ${esc(step.missing)}</i>`);
+        }
+      },
       onDelta: (soFar) => {
         const now = Date.now();
         if (now - lastEdit < 1200 || soFar === lastShown) return;
@@ -293,8 +337,20 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
         tg.edit(chatId, placeholder.message_id, esc(soFar) + ' ▍');
       },
     });
-    await tg.edit(chatId, placeholder.message_id,
-      `${esc(text)}\n\n<i>${toman(usage.costToman)} تومان · پرونده #${dossierId}</i>`);
+
+    const total = (usage.costToman ?? 0) + (research?.costToman ?? 0);
+    const tail = research?.hops
+      ? `<i>${toman(total)} تومان · ${research.hops} گام · ${research.passages.length} پاساژ · پرونده #${dossierId}</i>`
+      : `<i>${toman(total)} تومان · پرونده #${dossierId}</i>`;
+    await tg.edit(chatId, placeholder.message_id, `${esc(text)}\n\n${tail}`);
+
+    // The corpus was searched properly and does not hold it. Offer the web, never
+    // take it — going online is a spend the user should choose.
+    if (research?.notInCorpus) {
+      await tg.send(chatId,
+        'در اسناد این پرونده پیدا نشد. بروم در وب تحقیق کنم؟',
+        { buttons: [[{ text: '🌐 تحقیق در وب', callback_data: `webresearch:${dossierId}` }]] });
+    }
   } catch (err) {
     await tg.edit(chatId, placeholder.message_id, `⚠️ ${esc(String(err.message ?? err))}`);
   }
@@ -694,6 +750,17 @@ export async function run() {
               fromPage: job.fromPage ?? 1,
               resumeDocumentId: job.resumeDocumentId ?? null,
             }).catch((e) => console.error('[scan]', e));
+          }
+        } else if (action === 'webresearch') {
+          await tg.answerCallback(cb.id, 'شروع کردم');
+          await tg.edit(chatId, cb.message.message_id, cb.message.text ?? '', []);
+          const d = store.getDossier(principalId, id);
+          // The question that went unanswered is the last thing the user asked here.
+          const lastUser = [...store.conversation(principalId, id, 12)]
+            .reverse().find((m) => m.role === 'user');
+          if (d && lastUser) {
+            runWebResearch(chatId, principalId, id, d.topic, lastUser.text)
+              .catch((e) => console.error('[webresearch]', e));
           }
         } else if (action === 'unwatch') {
           store.setIntentionState(principalId, id, 'suspended');
