@@ -5,6 +5,7 @@ import * as settings from './settings.js';
 import * as chat from './chat.js';
 import { captureFromAudio, captureFromText } from './capture.js';
 import { runResearch } from './research.js';
+import { ingestToDossier } from './ingest.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
@@ -13,6 +14,8 @@ const toman = (n) => Math.round(n).toLocaleString('fa-IR');
 // claims ownership and it is written to the database, so a restart cannot hand the
 // bot to whoever messages next. Everyone else is ignored.
 let ownerChatId = config.ownerChatId ?? (Number(store.getSetting('owner_chat_id')) || null);
+
+const KINDS = { text: 'متن', image: 'تصویر', pdf: 'PDF' };
 
 const KIND_LABEL = {
   research: 'درخواست تحقیق',
@@ -148,6 +151,54 @@ async function startResearch(chatId, principalId, captureId) {
     console.error('[research] failed:', err);
     await tg.edit(chatId, status.message_id,
       `🔎 <b>${esc(topic)}</b>\n\n❌ تحقیق شکست خورد: ${esc(String(err.message ?? err))}\n\n<i>ثبت اولیه‌ات سالم است و از دست نرفته.</i>`);
+  }
+}
+
+/** Read a supplied file into the active dossier, opening one if none is active. */
+async function handleDocument(chatId, principalId, { fileId, filename, mime }) {
+  let dossierId = settings.activeDossier();
+  let opened = false;
+
+  if (!dossierId || !store.getDossier(principalId, dossierId)) {
+    dossierId = store.insertDossier({
+      principalId, topic: filename || 'سند', question: null, state: 'open',
+    });
+    settings.setActiveDossier(dossierId);
+    opened = true;
+  }
+
+  const d = store.getDossier(principalId, dossierId);
+  const status = await tg.send(chatId,
+    `📎 <b>${esc(filename || 'سند')}</b>\n\n${opened ? `پرونده‌ی تازه #${dossierId}` : `به پرونده #${dossierId} — ${esc(d.topic)}`}\n\nدر حال خواندن…`);
+
+  try {
+    const buffer = await tg.downloadFile(fileId);
+    const out = await ingestToDossier({
+      principalId, dossierId, buffer, filename, mime,
+      onProgress: (m) => tg.edit(chatId, status.message_id,
+        `📎 <b>${esc(filename || 'سند')}</b>\n\n${esc(m)}`),
+    });
+
+    const head = [`📎 <b>${esc(out.filename || 'سند')}</b> · ${KINDS[out.kind] ?? out.kind}`];
+    if (out.textLength) head.push(`${out.textLength.toLocaleString('fa-IR')} کاراکتر متن`);
+    if (out.hasTables) head.push('شامل جدول');
+    if (out.hasImages) head.push('شامل تصویر');
+    await tg.edit(chatId, status.message_id, head.join(' · '));
+
+    if (out.summary) await tg.send(chatId, esc(out.summary));
+    if (out.verified.length) await tg.send(chatId, SECTION.verified({ verified: out.verified }));
+    if (out.found.length) await tg.send(chatId, SECTION.found({ found: out.found }));
+    if (!out.verified.length && !out.found.length) {
+      await tg.send(chatId, '<i>ادعای مشخصی از این سند بیرون نیامد. متنش ذخیره شد.</i>');
+    }
+
+    await tg.send(chatId,
+      `💰 ${toman(out.costToman)} تومان · پرونده #${dossierId}`,
+      { buttons: [[{ text: '💬 بحث کنیم', callback_data: `chat:${dossierId}` }]] });
+  } catch (err) {
+    console.error('[ingest] failed:', err);
+    await tg.edit(chatId, status.message_id,
+      `📎 <b>${esc(filename || 'سند')}</b>\n\n❌ ${esc(String(err.message ?? err))}`);
   }
 }
 
@@ -447,6 +498,26 @@ export async function run() {
 
       if (msg.text && msg.text.startsWith('/')) {
         if (await handleCommand(chatId, principalId, msg.text)) continue;
+      }
+
+      // Photos arrive as an array of sizes; the last one is the largest.
+      const photo = msg.photo?.[msg.photo.length - 1];
+      if (photo) {
+        await handleDocument(chatId, principalId, {
+          fileId: photo.file_id,
+          filename: msg.caption?.slice(0, 60) || 'تصویر.jpg',
+          mime: 'image/jpeg',
+        });
+        continue;
+      }
+
+      if (msg.document) {
+        await handleDocument(chatId, principalId, {
+          fileId: msg.document.file_id,
+          filename: msg.document.file_name || 'سند',
+          mime: msg.document.mime_type || '',
+        });
+        continue;
       }
 
       const voice = msg.voice ?? msg.audio ?? msg.video_note;

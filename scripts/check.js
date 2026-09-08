@@ -73,14 +73,71 @@ await check('settings override the file config', async () => {
   return 'model + budget, with an invalid role rejected';
 });
 
+await check('file type classification', async () => {
+  const { classify } = await import('../src/ingest.js');
+  const cases = [
+    [{ filename: 'a.pdf', mime: 'application/pdf' }, 'pdf'],
+    [{ filename: 'a.PDF', mime: '' }, 'pdf'],
+    [{ filename: 'photo.jpg', mime: 'image/jpeg' }, 'image'],
+    [{ filename: 'x', mime: 'image/png' }, 'image'],
+    [{ filename: 'notes.md', mime: '' }, 'text'],
+    [{ filename: 'data.csv', mime: 'text/csv' }, 'text'],
+    [{ filename: 'a.zip', mime: 'application/zip' }, 'unsupported'],
+    [{ filename: 'a.exe', mime: '' }, 'unsupported'],
+  ];
+  for (const [input, want] of cases) {
+    const got = classify(input);
+    if (got !== want) throw new Error(`${input.filename}/${input.mime}: expected ${want}, got ${got}`);
+  }
+  return `${cases.length} cases`;
+});
+
+await check('oversized and unsupported files are refused', async () => {
+  const { extract, MAX_BYTES } = await import('../src/ingest.js');
+  try {
+    await extract({ buffer: Buffer.alloc(10), filename: 'a.zip', mime: 'application/zip' });
+    throw new Error('an unsupported type was accepted');
+  } catch (e) { if (!/پشتیبانی نمی‌شود/.test(e.message)) throw e; }
+
+  try {
+    await extract({ buffer: Buffer.alloc(MAX_BYTES + 1), filename: 'big.txt', mime: 'text/plain' });
+    throw new Error('an oversized file was accepted');
+  } catch (e) { if (!/خیلی بزرگ/.test(e.message)) throw e; }
+  return 'both refused before any model call';
+});
+
+await check('a text file is read without a model call', async () => {
+  const { extract } = await import('../src/ingest.js');
+  const out = await extract({
+    buffer: Buffer.from('سطر یک\nسطر دو', 'utf8'), filename: 'n.txt', mime: 'text/plain',
+  });
+  if (out.kind !== 'text') throw new Error(`kind=${out.kind}`);
+  if (!out.text.includes('سطر دو')) throw new Error('text not read back');
+  if (out.usage.costToman !== 0) throw new Error('a text file should cost nothing to read');
+  return 'free, as it should be';
+});
+
+await check('a document quote is verified against the document itself', async () => {
+  const { verifyAgainstText } = await import('../src/verify.js');
+  const doc = 'در این گزارش آمده است که میزان فروش در سال گذشته ۳۲ درصد رشد داشته است.';
+  const good = verifyAgainstText(doc, 'میزان فروش در سال گذشته ۳۲ درصد رشد', 'document_quote_matched');
+  if (good.status !== 'verified' || good.method !== 'document_quote_matched') {
+    throw new Error(`expected verified/document_quote_matched, got ${good.status}/${good.method}`);
+  }
+  const bad = verifyAgainstText(doc, 'فروش سال گذشته حدود یک سوم بیشتر شد', 'document_quote_matched');
+  if (bad.status !== 'found') throw new Error('a paraphrase of the document was accepted');
+  return 'exact matched, paraphrase demoted';
+});
+
 await check('conversation history round trips', () => {
-  const p = 'chat-test';
+  // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
+  const p = `chat-test-${Date.now()}`;
   store.addMessage({ principalId: p, dossierId: 1, role: 'user', text: 'سلام' });
   store.addMessage({ principalId: p, dossierId: 1, role: 'assistant', text: 'بله' });
   const conv = store.conversation(p, 1);
   if (conv.length !== 2) throw new Error(`expected 2 turns, got ${conv.length}`);
   if (conv[0].role !== 'user') throw new Error('history is not oldest-first');
-  if (store.conversation('someone-else', 1).length !== 0) throw new Error('history leaked across principals');
+  if (store.conversation(`${p}-other`, 1).length !== 0) throw new Error('history leaked across principals');
   return 'oldest-first, principal-scoped';
 });
 

@@ -63,6 +63,33 @@ async function fetchText(url, timeoutMs = 15000) {
 }
 
 /**
+ * Match a quote against text we already hold. Used both for a fetched page and for a
+ * document the user supplied, so a claim drawn from either is checked the same way.
+ * @returns {{status:'verified'|'found', method:string|null, note:string}}
+ */
+export function verifyAgainstText(text, quote, method = 'source_fetched_quote_matched') {
+  if (!quote || normalise(quote).length < 12) {
+    return { status: 'found', method: null, note: 'نقل‌قول دقیقی ارائه نشد' };
+  }
+  const haystack = normalise(text);
+  const needle = normalise(quote);
+
+  if (haystack.includes(needle)) {
+    return { status: 'verified', method, note: 'نقل‌قول در منبع پیدا شد' };
+  }
+
+  // Report how close it was, so a near miss is visible rather than silent.
+  const words = needle.split(' ').filter((w) => w.length > 2);
+  const hits = words.filter((w) => haystack.includes(w)).length;
+  const ratio = words.length ? hits / words.length : 0;
+  return {
+    status: 'found',
+    method: null,
+    note: `نقل‌قول عیناً در منبع نبود (${Math.round(ratio * 100)}٪ کلمات موجود بود)`,
+  };
+}
+
+/**
  * @returns {{status:'verified'|'found', method:string|null, note:string}}
  */
 export async function verifyClaim({ sourceUrl, quote }) {
@@ -76,20 +103,5 @@ export async function verifyClaim({ sourceUrl, quote }) {
     return { status: 'found', method: null, note: `منبع باز نشد (${page.error})` };
   }
 
-  const haystack = normalise(page.text);
-  const needle = normalise(quote);
-
-  if (haystack.includes(needle)) {
-    return { status: 'verified', method: 'source_fetched_quote_matched', note: 'نقل‌قول در منبع پیدا شد' };
-  }
-
-  // Report how close it was, so a near miss is visible rather than silent.
-  const words = needle.split(' ').filter((w) => w.length > 2);
-  const hits = words.filter((w) => haystack.includes(w)).length;
-  const ratio = words.length ? hits / words.length : 0;
-  return {
-    status: 'found',
-    method: null,
-    note: `نقل‌قول عیناً در منبع نبود (${Math.round(ratio * 100)}٪ کلمات موجود بود)`,
-  };
+  return verifyAgainstText(page.text, quote);
 }
