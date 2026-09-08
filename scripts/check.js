@@ -226,13 +226,13 @@ await check('intentions are due, expire, and record runs', async () => {
   if (it.state !== 'armed') throw new Error(`state=${it.state}`);
   if (!it.until_at) throw new Error('an intention without an expiry was created');
 
-  // Not due yet.
-  if (store.dueIntentions(new Date().toISOString()).some((r) => r.id === id)) {
+  // Not due yet. A wide limit so leftovers from earlier runs cannot hide the answer.
+  if (store.dueIntentions(new Date().toISOString(), 500).some((r) => r.id === id)) {
     throw new Error('a freshly scheduled intention was already due');
   }
   // Due once its time arrives.
   const later = new Date(Date.now() + 25 * 3600 * 1000).toISOString();
-  if (!store.dueIntentions(later).some((r) => r.id === id)) throw new Error('never became due');
+  if (!store.dueIntentions(later, 500).some((r) => r.id === id)) throw new Error('never became due');
 
   store.recordIntentionRun(p, id, {
     ranAt: new Date().toISOString(), nextRunAt: nextRun(24),
@@ -256,6 +256,9 @@ await check('intentions are due, expire, and record runs', async () => {
     state: 'succeeded', newClaims: 2, nothingNew: false,
   });
   if (store.getIntention(p, id).silent_runs !== 0) throw new Error('silence counter did not reset');
+
+  // Leave nothing armed behind, or every later run drags this one along.
+  store.setIntentionState(p, id, 'suspended');
   return 'due, counted, quiet-flagged, reset';
 });
 
@@ -297,6 +300,54 @@ await check('keyword search spans linked dossiers', () => {
   if (!wide.length) throw new Error('linked dossier was not searched');
   if (wide[0].dossier_id !== b) throw new Error('result is not tagged with its dossier');
   return 'linked material is reachable and labelled';
+});
+
+await check('a half-read document is recognised and resumed, not re-read', async () => {
+  const { sha256 } = await import('../src/ingest.js');
+  const p = `resume-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'کتاب اسکن‌شده' });
+  const bytes = Buffer.from('pretend this is a pdf');
+  const hash = sha256(bytes);
+
+  const docId = store.insertDocument({
+    principalId: p, dossierId, filename: 'book.pdf', kind: 'pdf', extraction: 'model_vision_pages',
+    pages: 209, readPages: 20, charCount: 5000, costToman: 19200, sha256: hash,
+  });
+  store.insertChunks(p, dossierId, docId, [
+    { seq: 0, page: 1, text: 'صفحه‌ی اول کتاب با متن کافی برای اینکه تکه به حساب بیاید.' },
+    { seq: 1, page: 2, text: 'صفحه‌ی دوم کتاب با متن کافی برای اینکه تکه به حساب بیاید.' },
+  ]);
+
+  const found = store.findDocumentByHash(p, dossierId, hash);
+  if (!found || found.id !== docId) throw new Error('the same bytes were not recognised');
+  if (found.read_pages !== 20 || found.pages !== 209) throw new Error('progress was not stored');
+
+  // Different bytes must not match.
+  if (store.findDocumentByHash(p, dossierId, sha256(Buffer.from('other')))) {
+    throw new Error('a different file matched');
+  }
+
+  // Resuming continues the sequence rather than restarting it.
+  if (store.maxChunkSeq(docId) !== 1) throw new Error(`maxChunkSeq=${store.maxChunkSeq(docId)}`);
+
+  store.advanceDocument(docId, { readPages: 40, addedChars: 4000, addedCost: 18000 });
+  const after = store.getDocument(p, docId);
+  if (after.read_pages !== 40) throw new Error('read_pages did not advance');
+  if (after.char_count !== 9000) throw new Error(`char_count should accumulate, got ${after.char_count}`);
+  if (after.cost_toman !== 37200) throw new Error(`cost should accumulate, got ${after.cost_toman}`);
+  return 'recognised at 20/209, advanced to 40, counters accumulate';
+});
+
+await check('a fully read document is not offered again', () => {
+  const p = `done-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'کتاب کامل' });
+  store.insertDocument({
+    principalId: p, dossierId, filename: 'done.pdf', kind: 'pdf', extraction: 'model_vision_pages',
+    pages: 12, readPages: 12, sha256: 'abc', costToman: 1000,
+  });
+  const prior = store.findDocumentByHash(p, dossierId, 'abc');
+  if (!(prior.read_pages >= prior.pages)) throw new Error('a finished document looks unfinished');
+  return 'finished documents are detectable';
 });
 
 await check('conversation history round trips', () => {

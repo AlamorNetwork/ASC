@@ -193,10 +193,31 @@ export const addMessage = (m) => db.prepare(`
 
 export const insertDocument = (d) => db.prepare(`
   INSERT INTO documents (principal_id, dossier_id, filename, mime, kind, pages,
-                         char_count, extraction, cost_toman, created_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?)
+                         char_count, extraction, cost_toman, sha256, read_pages, created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 `).run(d.principalId, d.dossierId, d.filename, d.mime ?? null, d.kind, d.pages ?? null,
-       d.charCount ?? 0, d.extraction, d.costToman ?? 0, new Date().toISOString()).lastInsertRowid;
+       d.charCount ?? 0, d.extraction, d.costToman ?? 0, d.sha256 ?? null,
+       d.readPages ?? null, new Date().toISOString()).lastInsertRowid;
+
+/** The same bytes already read into this dossier, if any. */
+export const findDocumentByHash = (principalId, dossierId, sha256) =>
+  db.prepare(`SELECT * FROM documents
+              WHERE principal_id = ? AND dossier_id = ? AND sha256 = ?
+              ORDER BY id DESC LIMIT 1`).get(principalId, dossierId, sha256);
+
+/** Same bytes anywhere, so a file sent to a second dossier can still be recognised. */
+export const findDocumentAnywhere = (principalId, sha256) =>
+  db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND sha256 = ?
+              ORDER BY id DESC LIMIT 1`).get(principalId, sha256);
+
+export const advanceDocument = (id, patch) => db.prepare(`
+  UPDATE documents SET read_pages = ?, char_count = char_count + ?, cost_toman = cost_toman + ?
+  WHERE id = ?
+`).run(patch.readPages, patch.addedChars ?? 0, patch.addedCost ?? 0, id);
+
+export const maxChunkSeq = (documentId) =>
+  db.prepare(`SELECT COALESCE(MAX(seq), -1) AS m FROM chunks WHERE document_id = ?`)
+    .get(documentId).m;
 
 export const getDocument = (principalId, id) =>
   db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND id = ?`).get(principalId, id);
@@ -287,13 +308,17 @@ export const listIntentions = (principalId) =>
 export const getIntention = (principalId, id) =>
   db.prepare(`SELECT * FROM intentions WHERE principal_id = ? AND id = ?`).get(principalId, id);
 
-/** Armed, due, and not past its expiry. */
-export const dueIntentions = (nowIso) => db.prepare(`
+/**
+ * Armed, due, and not past its expiry.
+ * The limit caps how much work one tick starts; the rest keep their place in the
+ * queue and are picked up on the next pass, oldest first.
+ */
+export const dueIntentions = (nowIso, limit = 5) => db.prepare(`
   SELECT * FROM intentions
   WHERE state = 'armed' AND next_run_at <= ?
     AND (until_at IS NULL OR until_at > ?)
-  ORDER BY next_run_at LIMIT 5
-`).all(nowIso, nowIso);
+  ORDER BY next_run_at LIMIT ?
+`).all(nowIso, nowIso, limit);
 
 export const expiredIntentions = (nowIso) => db.prepare(`
   SELECT * FROM intentions WHERE state = 'armed' AND until_at IS NOT NULL AND until_at <= ?
@@ -358,6 +383,20 @@ export const conversation = (principalId, dossierId, limit = 20) =>
 export const setSetting = (key, value) =>
   db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, String(value));
+
+/** Adds a column only if it is missing, so an existing database upgrades in place. */
+function addColumn(table, column, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
+}
+
+// A document is identified by its bytes, so re-sending the same file resumes it
+// rather than paying to read the same pages again.
+addColumn('documents', 'sha256', 'TEXT');
+addColumn('documents', 'read_pages', 'INTEGER');
+db.exec(`CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(principal_id, dossier_id, sha256)`);
 
 const now = () => new Date().toISOString();
 

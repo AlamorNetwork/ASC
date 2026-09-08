@@ -5,7 +5,7 @@ import * as settings from './settings.js';
 import * as chat from './chat.js';
 import { captureFromAudio, captureFromText } from './capture.js';
 import { runResearch } from './research.js';
-import { ingestToDossier } from './ingest.js';
+import { ingestToDossier, sha256 } from './ingest.js';
 import { createWatch } from './intentions.js';
 import { relatedDossiers } from './chunks.js';
 import { startScheduler } from './scheduler.js';
@@ -161,7 +161,7 @@ async function startResearch(chatId, principalId, captureId) {
 const pendingScans = new Map();
 
 /** Read a supplied file into the active dossier, opening one if none is active. */
-async function handleDocument(chatId, principalId, { fileId, filename, mime, allowVision = false, dossierIdOverride = null, pageLimit = null }) {
+async function handleDocument(chatId, principalId, { fileId, filename, mime, allowVision = false, dossierIdOverride = null, pageLimit = null, fromPage = null, resumeDocumentId = null }) {
   let dossierId = dossierIdOverride ?? settings.activeDossier();
   let opened = false;
 
@@ -179,10 +179,43 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
 
   try {
     const buffer = await tg.downloadFile(fileId);
+
+    // Same bytes, already partly read? Continue from where it stopped rather than
+    // charging again for pages we already hold.
+    if (!fromPage && !resumeDocumentId) {
+      const prior = store.findDocumentByHash(principalId, dossierId, sha256(buffer));
+      if (prior && prior.read_pages && prior.pages && prior.read_pages < prior.pages) {
+        const token = String(fileId).slice(-40);
+        const remaining = prior.pages - prior.read_pages;
+        pendingScans.set(token, {
+          fileId, filename, mime, dossierId,
+          fromPage: prior.read_pages + 1, resumeDocumentId: prior.id,
+        });
+        const perPage = Math.round((prior.cost_toman || 0) / Math.max(1, prior.read_pages)) || 900;
+        await tg.edit(chatId, status.message_id, [
+          `📎 <b>${esc(filename || 'سند')}</b>`, '',
+          `قبلاً <b>${prior.read_pages}</b> از ${prior.pages} صفحه خوانده شده.`,
+          `${remaining} صفحه مانده — از صفحه‌ی ${prior.read_pages + 1} ادامه می‌دهم.`, '',
+          `~${toman(perPage)} تومان هر صفحه · <b>${toman(perPage * remaining)} تومان</b> تا آخر`,
+        ].join('\n'), [
+          [{ text: `📄 ۲۰ صفحه‌ی بعدی (~${toman(perPage * Math.min(20, remaining))}ت)`, callback_data: `scan20:${token}` }],
+          [{ text: `📚 تا آخر (~${toman(perPage * remaining)}ت)`, callback_data: `scan:${token}` },
+           { text: '✖️ بی‌خیال', callback_data: 'scancancel:0' }],
+        ]);
+        return;
+      }
+      if (prior && prior.pages && prior.read_pages >= prior.pages) {
+        await tg.edit(chatId, status.message_id,
+          `📎 <b>${esc(filename || 'سند')}</b>\n\n✔️ این سند کامل خوانده شده (${prior.pages} صفحه). دوباره پول نمی‌دهیم.\n\n<i>سؤالت را بپرس.</i>`);
+        return;
+      }
+    }
+
     let out;
     try {
       out = await ingestToDossier({
         principalId, dossierId, buffer, filename, mime, allowVision, pageLimit,
+        fromPage: fromPage || 1, resumeDocumentId,
         onProgress: (m) => tg.edit(chatId, status.message_id,
           `📎 <b>${esc(filename || 'سند')}</b>\n\n${esc(m)}`),
       });
@@ -658,6 +691,8 @@ export async function run() {
             handleDocument(chatId, principalId, {
               ...job, allowVision: true, dossierIdOverride: job.dossierId,
               pageLimit: action === 'scan20' ? 20 : null,
+              fromPage: job.fromPage ?? 1,
+              resumeDocumentId: job.resumeDocumentId ?? null,
             }).catch((e) => console.error('[scan]', e));
           }
         } else if (action === 'unwatch') {

@@ -9,6 +9,7 @@
  * A scanned PDF has no text layer, so it can only be read page by page through vision.
  * That path is expensive, so it is quoted and confirmed rather than just run.
  */
+import { createHash } from 'node:crypto';
 import { chat, chatJson } from './llm.js';
 import { modelFor } from './settings.js';
 import { verifyAgainstText } from './verify.js';
@@ -31,6 +32,9 @@ export function classify({ filename = '', mime = '' }) {
 }
 
 const dataUrl = (mime, buffer) => `data:${mime};base64,${buffer.toString('base64')}`;
+
+/** A document is identified by its bytes, not its filename. */
+export const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex');
 
 const CLAIMS_SYSTEM = `از متن زیر ادعاهای مشخص استخراج کن. فقط JSON بده، بدون توضیح و بدون code fence:
 
@@ -79,7 +83,7 @@ export function guard({ buffer, filename, mime }) {
 }
 
 /** Pull text out of a file, as cheaply as the file allows. */
-export async function extractText({ buffer, filename, mime, kind, allowVision, pageLimit, onProgress }) {
+export async function extractText({ buffer, filename, mime, kind, allowVision, pageLimit, fromPage = 1, onProgress }) {
   if (kind === 'text') {
     return { text: buffer.toString('utf8'), extraction: 'local', pages: null, costToman: 0 };
   }
@@ -97,9 +101,14 @@ export async function extractText({ buffer, filename, mime, kind, allowVision, p
 
     // One page at a time. Each call returns a page's worth of text, which stays well
     // inside the token cap and lets progress be reported and a limit be honoured.
-    const last = pageLimit ? Math.min(pageLimit, pdf.pages) : pdf.pages;
-    onProgress?.(`تبدیل ${last} صفحه به تصویر…`);
-    const rendered = await renderPages(buffer, { from: 1, to: last });
+    // `fromPage` lets a half-read book carry on instead of paying for it twice.
+    const start = Math.max(1, fromPage);
+    const last = pageLimit ? Math.min(start + pageLimit - 1, pdf.pages) : pdf.pages;
+    if (start > pdf.pages) {
+      return { text: '', extraction: 'model_vision_pages', pages: pdf.pages, readPages: pdf.pages, costToman: 0, perPage: [] };
+    }
+    onProgress?.(`تبدیل صفحه ${start} تا ${last} به تصویر…`);
+    const rendered = await renderPages(buffer, { from: start, to: last });
 
     const perPage = [];
     let costToman = 0;
@@ -121,7 +130,7 @@ export async function extractText({ buffer, filename, mime, kind, allowVision, p
 
     return {
       text: perPage.join('\n\n'), extraction: 'model_vision_pages',
-      pages: pdf.pages, readPages: rendered.length, costToman, perPage,
+      pages: pdf.pages, readPages: last, costToman, perPage,
     };
   }
 
@@ -170,7 +179,7 @@ async function claimsFrom(text, filename) {
  */
 export async function ingestToDossier({
   principalId, dossierId, buffer, filename, mime, onProgress,
-  allowVision = false, pageLimit = null,
+  allowVision = false, pageLimit = null, fromPage = 1, resumeDocumentId = null,
 }) {
   const kind = guard({ buffer, filename, mime });
   if (kind === 'pdf' && !await pdftotextAvailable()) {
@@ -178,24 +187,37 @@ export async function ingestToDossier({
   }
 
   onProgress?.('استخراج متن…');
-  const extracted = await extractText({ buffer, filename, mime, kind, allowVision, pageLimit, onProgress });
+  const extracted = await extractText({
+    buffer, filename, mime, kind, allowVision, pageLimit, fromPage, onProgress,
+  });
   let costToman = extracted.costToman ?? 0;
 
-  const documentId = store.insertDocument({
+  // Resuming appends to the same document, so pages already paid for are not re-read
+  // and the book stays one document rather than several partial copies.
+  const resuming = Boolean(resumeDocumentId);
+  const documentId = resuming ? resumeDocumentId : store.insertDocument({
     principalId, dossierId, filename, mime, kind,
     pages: extracted.pages, charCount: extracted.text.length,
     extraction: extracted.extraction, costToman,
+    sha256: sha256(buffer), readPages: extracted.readPages ?? null,
   });
+  if (resuming) {
+    store.advanceDocument(documentId, {
+      readPages: extracted.readPages ?? null,
+      addedChars: extracted.text.length,
+      addedCost: costToman,
+    });
+  }
 
-  // Chunk with page numbers where pdftotext gave us page boundaries.
+  // Chunk with page numbers where the extractor gave us page boundaries.
   const rows = [];
+  let seq = resuming ? store.maxChunkSeq(documentId) + 1 : 0;
   if (extracted.perPage?.length) {
-    let seq = 0;
     extracted.perPage.forEach((pageText, i) => {
-      for (const c of chunkText(pageText)) rows.push({ seq: seq++, page: i + 1, text: c });
+      for (const c of chunkText(pageText)) rows.push({ seq: seq++, page: fromPage + i, text: c });
     });
   } else {
-    chunkText(extracted.text).forEach((c, i) => rows.push({ seq: i, page: null, text: c }));
+    for (const c of chunkText(extracted.text)) rows.push({ seq: seq++, page: null, text: c });
   }
   store.insertChunks(principalId, dossierId, documentId, rows);
 
