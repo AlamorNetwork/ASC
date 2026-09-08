@@ -93,27 +93,27 @@ await check('file type classification', async () => {
 });
 
 await check('oversized and unsupported files are refused', async () => {
-  const { extract, MAX_BYTES } = await import('../src/ingest.js');
+  const { guard, MAX_BYTES } = await import('../src/ingest.js');
   try {
-    await extract({ buffer: Buffer.alloc(10), filename: 'a.zip', mime: 'application/zip' });
+    guard({ buffer: Buffer.alloc(10), filename: 'a.zip', mime: 'application/zip' });
     throw new Error('an unsupported type was accepted');
   } catch (e) { if (!/پشتیبانی نمی‌شود/.test(e.message)) throw e; }
 
   try {
-    await extract({ buffer: Buffer.alloc(MAX_BYTES + 1), filename: 'big.txt', mime: 'text/plain' });
+    guard({ buffer: Buffer.alloc(MAX_BYTES + 1), filename: 'big.txt', mime: 'text/plain' });
     throw new Error('an oversized file was accepted');
   } catch (e) { if (!/خیلی بزرگ/.test(e.message)) throw e; }
   return 'both refused before any model call';
 });
 
 await check('a text file is read without a model call', async () => {
-  const { extract } = await import('../src/ingest.js');
-  const out = await extract({
-    buffer: Buffer.from('سطر یک\nسطر دو', 'utf8'), filename: 'n.txt', mime: 'text/plain',
+  const { extractText } = await import('../src/ingest.js');
+  const out = await extractText({
+    buffer: Buffer.from('سطر یک\nسطر دو', 'utf8'), filename: 'n.txt', mime: 'text/plain', kind: 'text',
   });
-  if (out.kind !== 'text') throw new Error(`kind=${out.kind}`);
+  if (out.extraction !== 'local') throw new Error(`extraction=${out.extraction}`);
   if (!out.text.includes('سطر دو')) throw new Error('text not read back');
-  if (out.usage.costToman !== 0) throw new Error('a text file should cost nothing to read');
+  if (out.costToman !== 0) throw new Error('a text file should cost nothing to read');
   return 'free, as it should be';
 });
 
@@ -127,6 +127,72 @@ await check('a document quote is verified against the document itself', async ()
   const bad = verifyAgainstText(doc, 'فروش سال گذشته حدود یک سوم بیشتر شد', 'document_quote_matched');
   if (bad.status !== 'found') throw new Error('a paraphrase of the document was accepted');
   return 'exact matched, paraphrase demoted';
+});
+
+await check('chunking splits on paragraphs and keeps overlap', async () => {
+  const { chunkText } = await import('../src/chunks.js');
+  const doc = Array.from({ length: 30 }, (_, i) =>
+    `بند شماره ${i} با محتوایی که به اندازه کافی طولانی است تا تکه‌ها واقعاً پر شوند و چند بند در هر تکه جا بگیرد.`
+  ).join('\n\n');
+  const chunks = chunkText(doc, { size: 400, overlap: 60 });
+  if (chunks.length < 3) throw new Error(`expected several chunks, got ${chunks.length}`);
+  if (chunks.some((c) => c.length > 700)) throw new Error('a chunk blew past the size limit');
+  const oneLine = chunkText('یک جمله کوتاه که از حد چهل کاراکتر می‌گذرد و باید بماند.');
+  if (oneLine.length !== 1) throw new Error('a short document should be one chunk');
+  return `${chunks.length} chunks, max ${Math.max(...chunks.map((c) => c.length))} chars`;
+});
+
+await check('a huge paragraph is cut on sentence ends', async () => {
+  const { chunkText } = await import('../src/chunks.js');
+  const wall = Array.from({ length: 40 }, (_, i) => `این جمله شماره ${i} است.`).join(' ');
+  const chunks = chunkText(wall, { size: 300, overlap: 0 });
+  if (chunks.length < 2) throw new Error('a wall of text was not split');
+  if (chunks.some((c) => c.length > 500)) throw new Error('sentence splitting did not bound the size');
+  return `${chunks.length} chunks`;
+});
+
+await check('chunks are stored, indexed, and searchable by keyword', () => {
+  const p = `fts-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'تست بازیابی' });
+  const documentId = store.insertDocument({
+    principalId: p, dossierId, filename: 'x.txt', kind: 'text', extraction: 'local', charCount: 100,
+  });
+  store.insertChunks(p, dossierId, documentId, [
+    { seq: 0, page: 1, text: 'میترائیسم رومی پدیده‌ای عمدتاً رومی بود و ادامه‌ی مستقیم آیین ایرانی نیست.' },
+    { seq: 1, page: 2, text: 'دیالوگ و زیرمتن دو ابزار اصلی فیلم‌نامه‌نویسی هستند.' },
+  ]);
+  const hits = store.searchChunks(p, dossierId, 'میترائیسم رومی');
+  if (!hits.length) throw new Error('keyword search found nothing');
+  if (!hits[0].text.includes('میترائیسم')) throw new Error('wrong chunk ranked first');
+  if (store.searchChunks(`${p}-other`, dossierId, 'میترائیسم').length !== 0) {
+    throw new Error('chunks leaked across principals');
+  }
+  if (store.documentText(p, documentId).length < 50) throw new Error('document text did not reassemble');
+  return `${hits.length} hit(s), principal-scoped`;
+});
+
+await check('vector search ranks the closer passage first', async () => {
+  const { vectorSearch } = await import('../src/chunks.js');
+  const p = `vec-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'تست بردار' });
+  const documentId = store.insertDocument({
+    principalId: p, dossierId, filename: 'v.txt', kind: 'text', extraction: 'local',
+  });
+  const blob = (arr) => Buffer.from(new Float32Array(arr).buffer);
+  store.insertChunks(p, dossierId, documentId, [
+    { seq: 0, text: 'نزدیک', embedding: blob([1, 0, 0]) },
+    { seq: 1, text: 'دور', embedding: blob([0, 1, 0]) },
+  ]);
+  const ranked = vectorSearch(p, dossierId, [0.9, 0.1, 0]);
+  if (ranked[0]?.text !== 'نزدیک') throw new Error(`wrong order: ${ranked.map((r) => r.text).join(',')}`);
+  if (!(ranked[0].score > ranked[1].score)) throw new Error('scores are not ordered');
+  return `cosine ${ranked[0].score.toFixed(3)} vs ${ranked[1].score.toFixed(3)}`;
+});
+
+await check('pdftotext presence is reported, not assumed', async () => {
+  const { pdftotextAvailable } = await import('../src/pdf.js');
+  const ok = await pdftotextAvailable();
+  return ok ? 'installed' : 'NOT installed — PDFs will report this clearly instead of crashing';
 });
 
 await check('conversation history round trips', () => {

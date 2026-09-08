@@ -65,6 +65,8 @@ export const config = {
     research: env.MODEL_RESEARCH || 'openai/gpt-6-astra:online',
     // Cheap text work.
     structure: env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
+    // Multilingual embeddings for retrieval. 1024 dims, and good on Persian.
+    embed: env.MODEL_EMBED || 'intfloat/multilingual-e5-large',
   },
 
   // Budget per research episode, in US dollars of provider spend.

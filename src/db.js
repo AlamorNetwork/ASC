@@ -87,6 +87,51 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_dossier ON messages(principal_id, dossier_id, id);
+
+CREATE TABLE IF NOT EXISTS documents (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id  TEXT    NOT NULL,
+  dossier_id    INTEGER NOT NULL REFERENCES dossiers(id),
+  filename      TEXT    NOT NULL,
+  mime          TEXT,
+  kind          TEXT    NOT NULL,          -- text | image | pdf
+  pages         INTEGER,
+  char_count    INTEGER NOT NULL DEFAULT 0,
+  extraction    TEXT    NOT NULL,          -- local | model_vision | model_file
+  cost_toman    REAL    NOT NULL DEFAULT 0,
+  created_at    TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id  TEXT    NOT NULL,
+  dossier_id    INTEGER NOT NULL,
+  document_id   INTEGER NOT NULL REFERENCES documents(id),
+  seq           INTEGER NOT NULL,
+  page          INTEGER,
+  text          TEXT    NOT NULL,
+  embedding     BLOB,                       -- Float32Array; null until embedded
+  created_at    TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chunks_dossier ON chunks(principal_id, dossier_id, id);
+CREATE INDEX IF NOT EXISTS idx_chunks_doc     ON chunks(document_id, seq);
+
+-- Keyword half of retrieval. Kept in step with chunks by the triggers below.
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text, content='chunks', content_rowid='id', tokenize='unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+  INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE OF text ON chunks BEGIN
+  INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
 `);
 
 export const getSetting = (key) =>
@@ -99,6 +144,80 @@ export const addMessage = (m) => db.prepare(`
   INSERT INTO messages (principal_id, dossier_id, role, text, cost_toman, created_at)
   VALUES (?,?,?,?,?,?)
 `).run(m.principalId, m.dossierId ?? null, m.role, m.text, m.costToman ?? 0, new Date().toISOString()).lastInsertRowid;
+
+// ---------------------------------------------------------- documents & chunks
+
+export const insertDocument = (d) => db.prepare(`
+  INSERT INTO documents (principal_id, dossier_id, filename, mime, kind, pages,
+                         char_count, extraction, cost_toman, created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?)
+`).run(d.principalId, d.dossierId, d.filename, d.mime ?? null, d.kind, d.pages ?? null,
+       d.charCount ?? 0, d.extraction, d.costToman ?? 0, new Date().toISOString()).lastInsertRowid;
+
+export const getDocument = (principalId, id) =>
+  db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND id = ?`).get(principalId, id);
+
+export const dossierDocuments = (principalId, dossierId) =>
+  db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)
+    .all(principalId, dossierId);
+
+const insertChunkStmt = db.prepare(`
+  INSERT INTO chunks (principal_id, dossier_id, document_id, seq, page, text, embedding, created_at)
+  VALUES (?,?,?,?,?,?,?,?)
+`);
+
+/** One transaction for a whole document, so a partial ingest cannot leave half a file behind. */
+export function insertChunks(principalId, dossierId, documentId, rows) {
+  const now = new Date().toISOString();
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      insertChunkStmt.run(principalId, dossierId, documentId, r.seq, r.page ?? null,
+                          r.text, r.embedding ?? null, now);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return rows.length;
+}
+
+export const setChunkEmbedding = (id, blob) =>
+  db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(blob, id);
+
+export const chunksWithoutEmbedding = (principalId, dossierId, limit = 200) =>
+  db.prepare(`SELECT id, text FROM chunks
+              WHERE principal_id = ? AND dossier_id = ? AND embedding IS NULL
+              ORDER BY id LIMIT ?`).all(principalId, dossierId, limit);
+
+export const dossierChunks = (principalId, dossierId) =>
+  db.prepare(`SELECT id, document_id, seq, page, text, embedding FROM chunks
+              WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)
+    .all(principalId, dossierId);
+
+/** FTS5 keyword search, scoped to one dossier. */
+export function searchChunks(principalId, dossierId, query, limit = 20) {
+  // FTS5 treats punctuation as syntax, so the query is reduced to bare terms.
+  const terms = String(query).replace(/["'()*:^-]/g, ' ').split(/\s+/)
+    .filter((w) => w.length > 1).slice(0, 12);
+  if (!terms.length) return [];
+  const match = terms.map((t) => `"${t}"`).join(' OR ');
+  try {
+    return db.prepare(`
+      SELECT c.id, c.document_id, c.seq, c.page, c.text, f.rank
+      FROM chunks_fts f JOIN chunks c ON c.id = f.rowid
+      WHERE f.chunks_fts MATCH ? AND c.principal_id = ? AND c.dossier_id = ?
+      ORDER BY f.rank LIMIT ?
+    `).all(match, principalId, dossierId, limit);
+  } catch {
+    return []; // a malformed match expression should not take the answer down
+  }
+}
+
+export const documentText = (principalId, documentId) =>
+  db.prepare(`SELECT text FROM chunks WHERE principal_id = ? AND document_id = ? ORDER BY seq`)
+    .all(principalId, documentId).map((r) => r.text).join('\n');
 
 /** Oldest-first, so it can be handed straight to a model as conversation history. */
 export const conversation = (principalId, dossierId, limit = 20) =>
