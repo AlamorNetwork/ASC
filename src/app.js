@@ -161,7 +161,7 @@ async function startResearch(chatId, principalId, captureId) {
 const pendingScans = new Map();
 
 /** Read a supplied file into the active dossier, opening one if none is active. */
-async function handleDocument(chatId, principalId, { fileId, filename, mime, allowVision = false, dossierIdOverride = null }) {
+async function handleDocument(chatId, principalId, { fileId, filename, mime, allowVision = false, dossierIdOverride = null, pageLimit = null }) {
   let dossierId = dossierIdOverride ?? settings.activeDossier();
   let opened = false;
 
@@ -182,7 +182,7 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
     let out;
     try {
       out = await ingestToDossier({
-        principalId, dossierId, buffer, filename, mime, allowVision,
+        principalId, dossierId, buffer, filename, mime, allowVision, pageLimit,
         onProgress: (m) => tg.edit(chatId, status.message_id,
           `📎 <b>${esc(filename || 'سند')}</b>\n\n${esc(m)}`),
       });
@@ -190,22 +190,29 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
       // A scanned PDF has no text layer, so it can only be read through vision.
       // That is expensive enough to quote a price and ask first.
       if (!err.scanned) throw err;
-      pendingScans.set(String(fileId).slice(-40), { fileId, filename, mime, dossierId });
-      const est = Math.round(err.scanned.estTokens * 0.6); // rough toman, flash-tier input
+      const token = String(fileId).slice(-40);
+      pendingScans.set(token, { fileId, filename, mime, dossierId, pages: err.scanned.pages });
+      const perPage = Math.round(err.scanned.estTokens / err.scanned.pages * 0.6);
+      const est = perPage * err.scanned.pages;
       await tg.edit(chatId, status.message_id, [
         `📎 <b>${esc(filename || 'سند')}</b>`, '',
         `${err.scanned.pages} صفحه · <b>اسکن‌شده، بدون لایه‌ی متنی</b>`, '',
-        'یعنی باید صفحه‌به‌صفحه با vision خوانده شود.',
-        `تخمین: حدود ${toman(est)} تومان`,
-      ].join('\n'), [[
-        { text: '✅ بخوان', callback_data: `scan:${String(fileId).slice(-40)}` },
-        { text: '✖️ بی‌خیال', callback_data: 'scancancel:0' },
-      ]]);
+        'باید صفحه‌به‌صفحه با vision خوانده شود.',
+        `تخمین: ~${toman(perPage)} تومان هر صفحه · <b>${toman(est)} تومان</b> برای همه`,
+      ].join('\n'), [
+        [{ text: `📄 ۲۰ صفحه‌ی اول (~${toman(perPage * 20)}ت)`, callback_data: `scan20:${token}` }],
+        [{ text: `📚 همه (~${toman(est)}ت)`, callback_data: `scan:${token}` },
+         { text: '✖️ بی‌خیال', callback_data: 'scancancel:0' }],
+      ]);
       return;
     }
 
     const head = [`📎 <b>${esc(out.filename || 'سند')}</b> · ${KINDS[out.kind] ?? out.kind}`];
-    if (out.pages) head.push(`${out.pages} صفحه`);
+    if (out.pages) {
+      head.push(out.readPages && out.readPages < out.pages
+        ? `${out.readPages} از ${out.pages} صفحه خوانده شد`
+        : `${out.pages} صفحه`);
+    }
     if (out.textLength) head.push(`${out.textLength.toLocaleString('fa-IR')} کاراکتر`);
     if (out.chunks) head.push(`${out.chunks} تکه${out.embedded ? ` · ${out.embedded} بردار` : ''}`);
     if (out.extraction === 'local') head.push('<i>استخراج محلی، رایگان</i>');
@@ -642,7 +649,7 @@ export async function run() {
           const d = store.getDossier(principalId, id);
           await tg.send(chatId,
             `💬 روی پرونده #${id} — ${esc(d?.topic ?? '')}\n\nبپرس. <code>/close</code> برای خروج.`);
-        } else if (action === 'scan') {
+        } else if (action === 'scan' || action === 'scan20') {
           const job = pendingScans.get(idStr);
           await tg.answerCallback(cb.id, job ? 'شروع کردم' : 'منقضی شده');
           await tg.edit(chatId, cb.message.message_id, cb.message.text ?? '', []);
@@ -650,6 +657,7 @@ export async function run() {
             pendingScans.delete(idStr);
             handleDocument(chatId, principalId, {
               ...job, allowVision: true, dossierIdOverride: job.dossierId,
+              pageLimit: action === 'scan20' ? 20 : null,
             }).catch((e) => console.error('[scan]', e));
           }
         } else if (action === 'unwatch') {

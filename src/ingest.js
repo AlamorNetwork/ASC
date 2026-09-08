@@ -9,10 +9,10 @@
  * A scanned PDF has no text layer, so it can only be read page by page through vision.
  * That path is expensive, so it is quoted and confirmed rather than just run.
  */
-import { chatJson } from './llm.js';
+import { chat, chatJson } from './llm.js';
 import { modelFor } from './settings.js';
 import { verifyAgainstText } from './verify.js';
-import { extractPdf, pdftotextAvailable, estimateVisionTokens } from './pdf.js';
+import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages } from './pdf.js';
 import { chunkText, embedPending } from './chunks.js';
 import * as store from './db.js';
 
@@ -47,6 +47,14 @@ const CLAIMS_SYSTEM = `از متن زیر ادعاهای مشخص استخراج
 - چیزی که در متن نیست ننویس. اگر متن بی‌محتوا بود، claims را خالی بگذار.
 - حداکثر ۱۰ ادعای مهم. متن کامل را برنگردان — فقط ادعاها.`;
 
+// Plain text, deliberately not JSON: a page of a book is long enough that a JSON
+// string can hit the token cap mid-value, and then there is nothing to parse.
+const PAGE_SYSTEM = `متن این صفحه را دقیقاً همان‌طور که هست بنویس.
+- فقط خود متن. بدون توضیح، بدون مقدمه، بدون JSON.
+- جدول را خطی بنویس: هر سطر به شکل «ستون: مقدار».
+- شکل و نمودار را در جای خودش به شکل [تصویر: توضیح کوتاه] بنویس.
+- اگر صفحه خالی است یا متنی ندارد، فقط بنویس: [خالی]`;
+
 const VISION_SYSTEM = `محتوای این تصویر را بخوان. فقط JSON بده، بدون code fence:
 
 {
@@ -71,7 +79,7 @@ export function guard({ buffer, filename, mime }) {
 }
 
 /** Pull text out of a file, as cheaply as the file allows. */
-export async function extractText({ buffer, filename, mime, kind, allowVision, pageLimit }) {
+export async function extractText({ buffer, filename, mime, kind, allowVision, pageLimit, onProgress }) {
   if (kind === 'text') {
     return { text: buffer.toString('utf8'), extraction: 'local', pages: null, costToman: 0 };
   }
@@ -86,18 +94,35 @@ export async function extractText({ buffer, filename, mime, kind, allowVision, p
       err.scanned = { pages: pdf.pages, estTokens: estimateVisionTokens(pdf.pages) };
       throw err;
     }
-    // Scanned PDFs go to the model whole; page-by-page rasterising is a later step.
-    const { data, usage } = await chatJson({
-      model: modelFor('capture'),
-      system: VISION_SYSTEM,
-      content: [
-        { type: 'file', file: { filename: filename || 'doc.pdf', file_data: dataUrl('application/pdf', buffer) } },
-        { type: 'text', text: `این PDF اسکن‌شده را بخوان${pageLimit ? ` (فقط ${pageLimit} صفحه‌ی اول)` : ''}.` },
-      ],
-      maxTokens: 8000,
-      noThinking: false,
-    });
-    return { text: String(data.text ?? ''), extraction: 'model_file', pages: pdf.pages, costToman: usage.costToman ?? 0 };
+
+    // One page at a time. Each call returns a page's worth of text, which stays well
+    // inside the token cap and lets progress be reported and a limit be honoured.
+    const last = pageLimit ? Math.min(pageLimit, pdf.pages) : pdf.pages;
+    onProgress?.(`تبدیل ${last} صفحه به تصویر…`);
+    const rendered = await renderPages(buffer, { from: 1, to: last });
+
+    const perPage = [];
+    let costToman = 0;
+    for (const { page, buffer: png } of rendered) {
+      const { text, usage } = await chat({
+        model: modelFor('capture'),
+        system: PAGE_SYSTEM,
+        content: [
+          { type: 'image_url', image_url: { url: dataUrl('image/png', png) } },
+          { type: 'text', text: `صفحه ${page}` },
+        ],
+        maxTokens: 2500,
+        noThinking: false,
+      });
+      costToman += usage.costToman ?? 0;
+      perPage.push(text.trim() === '[خالی]' ? '' : text);
+      onProgress?.(`صفحه ${page} از ${last} · ${Math.round(costToman).toLocaleString('fa-IR')} تومان`);
+    }
+
+    return {
+      text: perPage.join('\n\n'), extraction: 'model_vision_pages',
+      pages: pdf.pages, readPages: rendered.length, costToman, perPage,
+    };
   }
 
   // image
@@ -153,7 +178,7 @@ export async function ingestToDossier({
   }
 
   onProgress?.('استخراج متن…');
-  const extracted = await extractText({ buffer, filename, mime, kind, allowVision, pageLimit });
+  const extracted = await extractText({ buffer, filename, mime, kind, allowVision, pageLimit, onProgress });
   let costToman = extracted.costToman ?? 0;
 
   const documentId = store.insertDocument({
@@ -216,7 +241,8 @@ export async function ingestToDossier({
 
   return {
     documentId, kind, filename, summary, verified, found,
-    pages: extracted.pages, chunks: rows.length, embedded,
+    pages: extracted.pages, readPages: extracted.readPages ?? null,
+    chunks: rows.length, embedded,
     textLength: extracted.text.length, extraction: extracted.extraction,
     hasTables: extracted.hasTables ?? false,
     costToman,

@@ -70,3 +70,37 @@ export async function extractPdf(buffer) {
 
 /** Rough cost signal for the scanned path, where every page must go through vision. */
 export const estimateVisionTokens = (pages) => pages * 1600;
+
+/**
+ * Render pages to PNG so a scanned book can be read one page at a time.
+ * Reading it in a single call means asking a model to emit an entire book as output,
+ * which costs more than the input and truncates long before the end.
+ */
+export async function renderPages(buffer, { from = 1, to = null, dpi = 150 } = {}) {
+  if (!await pdftotextAvailable()) {
+    throw new Error('poppler-utils نصب نیست. روی سرور: apt install -y poppler-utils');
+  }
+
+  const dir = await mkdtemp(path.join(tmpdir(), 'asc-png-'));
+  const file = path.join(dir, 'in.pdf');
+  try {
+    await writeFile(file, buffer);
+    const args = ['-png', '-r', String(dpi), '-f', String(from)];
+    if (to) args.push('-l', String(to));
+    args.push(file, path.join(dir, 'page'));
+
+    await run('pdftoppm', args, { timeout: 300000, maxBuffer: 10 * 1024 * 1024 });
+
+    const { readdir, readFile } = await import('node:fs/promises');
+    const names = (await readdir(dir)).filter((n) => n.endsWith('.png')).sort();
+    const pages = [];
+    for (const name of names) {
+      // pdftoppm names files page-01.png, page-02.png …
+      const num = Number(name.match(/-(\d+)\.png$/)?.[1] ?? 0);
+      pages.push({ page: num || pages.length + from, buffer: await readFile(path.join(dir, name)) });
+    }
+    return pages;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
