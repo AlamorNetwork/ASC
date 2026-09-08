@@ -21,6 +21,15 @@ async function check(name, fn) {
 
 console.log('\nASC self-check\n');
 
+// Every module must at least parse and load. Without this, a syntax error in a file
+// the other checks never import only shows up in production.
+await check('every source file loads', async () => {
+  const dir = new URL('../src/', import.meta.url);
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort();
+  for (const f of files) await import(new URL(f, dir).href);
+  return files.join(' ');
+});
+
 await check('config loads', () => {
   if (!config.botToken) throw new Error('no bot token');
   if (!config.router.base) throw new Error('no router base');

@@ -10,7 +10,7 @@ const toman = (n) => Math.round(n).toLocaleString('fa-IR');
 // v1 is single-principal. OWNER_CHAT_ID wins; otherwise the first chat to speak
 // claims ownership and it is written to the database, so a restart cannot hand the
 // bot to whoever messages next. Everyone else is ignored.
-let ownerChatId = config.ownerChatId ?? Number(store.getSetting('owner_chat_id')) || null;
+let ownerChatId = config.ownerChatId ?? (Number(store.getSetting('owner_chat_id')) || null);
 
 const KIND_LABEL = {
   research: 'درخواست تحقیق',
