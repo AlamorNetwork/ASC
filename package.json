@@ -1,0 +1,12 @@
+{
+  "name": "asc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Capture a half-finished thought, advance it while you are elsewhere, return it when it is ready.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node index.js",
+    "check": "node scripts/check.js"
+  }
+}

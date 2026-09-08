@@ -1,0 +1,1708 @@
+<title>ASC Design Debate</title>
+<style>
+:root{
+  --bg:#faf9f7; --panel:#fff; --ink:#1a1a19; --muted:#6b6a66; --line:#e3e1dc;
+  --a:#3b5bdb; --a-bg:#f4f6fe; --b:#c2410c; --b-bg:#fdf5f0; --code:#f5f3f0;
+}
+:root:not([data-theme="light"]){}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#16161a; --panel:#1d1d22; --ink:#e8e6e3; --muted:#9b998f; --line:#2e2e35;
+  --a:#8da2fb; --a-bg:#1c2033; --b:#f0916a; --b-bg:#2a1d17; --code:#232329;
+}}
+:root[data-theme="dark"]{
+  --bg:#16161a; --panel:#1d1d22; --ink:#e8e6e3; --muted:#9b998f; --line:#2e2e35;
+  --a:#8da2fb; --a-bg:#1c2033; --b:#f0916a; --b-bg:#2a1d17; --code:#232329;
+}
+body{background:var(--bg);color:var(--ink);font:15px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;margin:0;padding:0 0 64px}
+.wrap{max-width:860px;margin:0 auto;padding:28px 22px}
+header.top{border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px}
+header.top h1{font-size:23px;margin:0 0 6px;letter-spacing:-.01em}
+header.top p{margin:0;color:var(--muted);font-size:13.5px}
+.turn{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:0 0 20px;border-left:3px solid var(--line)}
+.turn.claude{border-left-color:var(--a)}
+.turn.gpt{border-left-color:var(--b)}
+.meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:12px}
+.who{font-weight:650;letter-spacing:.01em}
+.turn.claude .who{color:var(--a)}
+.turn.gpt .who{color:var(--b)}
+.model{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--muted);font-size:11.5px}
+.round{margin-left:auto;color:var(--muted)}
+.fa{background:var(--code);border-radius:8px;padding:9px 12px;font-size:13.5px;color:var(--muted);margin-bottom:14px;line-height:1.8}
+.body h2{font-size:16px;margin:22px 0 8px;letter-spacing:-.005em}
+.body h3{font-size:14.5px;margin:18px 0 6px}
+.body p{margin:9px 0}
+.body ul,.body ol{margin:9px 0;padding-left:22px}
+.body li{margin:4px 0}
+code{background:var(--code);padding:1px 5px;border-radius:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto;margin:12px 0}
+pre code{background:none;padding:0;font-size:12.2px;line-height:1.55;display:block;white-space:pre}
+hr{border:0;border-top:1px solid var(--line);margin:20px 0}
+strong{font-weight:640}
+</style>
+<div class="wrap">
+<header class="top">
+  <h1>ASC — مباحثه‌ی طراحی و پیاده‌سازی</h1>
+  <p>۷ راند · Claude Opus 5 در برابر gpt-5.6-sol-pro، deepseek-v4-pro و gpt-5.6-luna — از طریق 9router · 2026-09-08</p>
+</header>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۱ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">بریفِ کامل را می‌دهم و می‌خواهم به نقد خودم حمله کند: کجای نقد من غلط است، هر دو چه چیزی را ندیده‌ایم، چه چیزی بیش‌ازحد مهندسی‌شده است، و اگر پروژه شکست بخورد علتش چیست.</div>
+  <div class="body"><p>You are a skeptical principal engineer with an ML-systems research background. You are NOT here to</p>
+<p>validate. You are the adversary in a design debate whose output must be a spec that survives contact</p>
+<p>with reality. Sycophancy is the failure mode; be blunt and specific.</p>
+<p>Read the attached spec v0.1 and the debate brief (rounds 1 and 2 of critique).</p>
+<p>Your job, in this order:</p>
+<ol>
+<li>ATTACK THE CRITIC. Where is Claude's critique wrong, overstated, or itself introducing a worse</li>
+</ol>
+<p>   problem? Be concrete. Specifically stress-test: R2 (epsilon-withholding), R3 (explicit-&gt;confidence /</p>
+<p>   implicit-&gt;strength split), R5 (pure projection / replay), R6 (specialization-on-contradiction).</p>
+<p>   At least one of these has a real flaw. Name it and say why.</p>
+<ol>
+<li>WHAT BOTH OF US MISSED. Failure modes, unstated assumptions, or design holes neither party named.</li>
+</ol>
+<p>   Prioritise things that would force an architecture rewrite if discovered in month 2.</p>
+<ol>
+<li>OVER-ENGINEERING. What in the merged v0.2 still should not exist in a v0.1 that must ship?</li>
+<li>THE ONE THING. If this project fails, what is the single most likely cause? One paragraph.</li>
+</ol>
+<p>Rules:</p>
+<ul>
+<li>Judge every proposal against this bar: an MVP built by a small team that must produce a</li>
+</ul>
+<p>  believable demo AND a defensible benchmark. Not a research platform.</p>
+<ul>
+<li>If you agree with something, say "AGREE" in one line and move on. Spend your words on disagreement.</li>
+<li>Where you disagree, propose the concrete alternative, not just the objection.</li>
+<li>No preamble, no summary of what you read, no flattery. Start at section 1.</li>
+<li>Hard limit: 1200 words. Dense technical prose. English.</li>
+</ul></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/openai/gpt-5.6-sol-pro</span>
+    <span class="round">راند ۱ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">epsilon-withholding و تفکیک explicit/implicit من را رد کرد. سه حفره‌ی جدید پیدا کرد: نبود نرمال‌سازی مقادیر، نبود source attribution برای نقل‌قول‌ها، و اینکه user_id امنیت نیست. و گفت محتمل‌ترین علت شکست: ASC چیزی بیش از یک Memory ساختاریافته‌ی خوب ارائه نمی‌دهد.</div>
+  <div class="body"><h2>1. ATTACK THE CRITIC</h2>
+<p><strong>R1 — AGREE.</strong></p>
+<p><strong>R2 — Epsilon-withholding is the clearest bad proposal.</strong> Claude correctly observes that causal “strength” requires a counterfactual, then proposes turning production users into a noisy within-subject experiment. Withholding a known preference 15% of the time deliberately degrades behavior, provides almost no signal when feedback is absent, and is confounded by history: users remember previous compliance, so turns are not independent experimental units. It also does not yield a defensible SC-10 benchmark “for free”; production traffic lacks controlled ground truth and comparable task difficulty.</p>
+<p><strong>Alternative:</strong> remove causal strength from v0.1. Use one belief score derived from explicit statements, corrections, and reversals. Demonstrate causal impact in an offline randomized harness: same scripted user state and prompts, hint enabled versus disabled, deterministic checker, repeated across seeds. If online utility is later required, randomize at user/cohort level with consent and an explicit task-success signal—not per-turn withholding.</p>
+<p><strong>R3 — The explicit→confidence / implicit→strength split is semantically wrong.</strong> Explicit evidence can say how strongly a preference should influence behavior: “Always return complete files” differs from “I usually prefer complete files.” Conversely, implicit correction can be strong evidence that a preference exists: repeatedly asking for the full file immediately after receiving a patch is not merely a utility signal. Most importantly, silence is evidence of neither existence nor utility. Calling non-complaint “implicit positive” manufactures data.</p>
+<p><strong>Alternative:</strong> classify only observable signals: direct preference, direct reversal, corrective follow-up, accepted/rejected action, and no-signal. Each signal has bounded effects determined by polarity, specificity, and applicability. Never learn from silence. Cap repeated implicit evidence to one event per task/session. For v0.1, direct statements and corrective follow-ups are enough.</p>
+<p><strong>R4 — AGREE.</strong></p>
+<p><strong>R5 — Pure projection is directionally right but overstated.</strong> <code>replay(evidence_log, params)</code> gives free threshold sweeps only when changing reducer parameters. It does not give free re-extraction when prompts, models, taxonomies, scope classification, or normalization rules change; those require replaying raw experiences and potentially new LLM calls. An append-only log also conflicts with “forget me” and deletion obligations. Finally, outcomes and evidence are not necessarily duplicates: an outcome is a raw observation; evidence is an attributed interpretation of that outcome.</p>
+<p><strong>Alternative:</strong> retain immutable raw experiences/outcomes until deletion, plus versioned derived evidence. Make pattern state a deterministic rebuildable projection keyed by <code>extractor_version</code>, <code>taxonomy_version</code>, and <code>reducer_version</code>. On user deletion, physically delete all owned raw and derived records and rebuild affected projections. Drop the provenance array and habits table, but do not conflate raw outcomes with interpreted evidence.</p>
+<p><strong>R6 — Specialization-on-contradiction is unsafe and benchmark-hostile.</strong> Starting every preference as general guarantees overgeneralization until the user complains. That is precisely the failure the system claims to prevent. Contradictions may also be too sparse to support a statistically meaningful split, and “general plus exception” introduces precedence semantics Claude does not specify.</p>
+<p><strong>Alternative:</strong> evidence is scoped at observation time, but generality must be earned. A preference stated during a code task applies to that task family only; it becomes global only through explicit universal language or confirmations across multiple scopes. Use three MVP scopes, not five, and require two direct confirmations rather than three sessions. Retrieval follows exact-scope preference → explicitly global preference → no hint. Do not infer global applicability merely from missing contradictions.</p>
+<p>The claim that deterministic checkers eliminate LLM judges is also too broad. They work for “full file versus diff,” but not for whether instructions are genuinely copy/paste-ready, useful, or appropriately detailed. Restrict the benchmark to properties with reliable programmatic labels rather than pretending all preference adherence is syntactically checkable.</p>
+<h2>2. WHAT BOTH OF US MISSED</h2>
+<p><strong>The value ontology is still undefined.</strong> A closed <code>PatternKey</code> does not normalize values. <code>response_format=full_file</code>, <code>complete_files</code>, <code>entire_source</code>, and <code>no_patch</code> still fragment identity; some are aliases, others are constraints. Define closed key/value enums and incompatibility rules for the six benchmarked preferences. Otherwise the original identity trap remains.</p>
+<p><strong>Source attribution is inadequate.</strong> User messages often quote documents, logs, prompts, or another person: “The customer said ‘always give complete code.’” Extracting that as the current user’s preference is catastrophic. Evidence needs an originating span and source class: direct user instruction, quoted content, tool output, assistant text, or inferred behavior. Only direct user intent should create durable preferences in v0.1.</p>
+<p><strong>Identity is not access control.</strong> Adding <code>user_id</code> does not provide isolation if callers can submit arbitrary IDs or session IDs. Retrofitting tenancy after month two rewrites every query and deletion path. Require an authenticated principal—or explicitly declare a single-user local MVP. Never expose unfiltered <code>/memory</code>, <code>/patterns</code>, or <code>/state</code>.</p>
+<p><strong>Async processing lacks consistency semantics.</strong> Retries can duplicate evidence; concurrent turns can update a pattern out of order; a hint may be generated before prior learning commits. Use client-generated or server-returned idempotency keys, unique evidence constraints, transactional state updates, and explicit processing status. A SQLite-backed single worker is sufficient; an “experience bus” is not.</p>
+<p><strong>Credit assignment is undefined.</strong> If several hints are injected and the user corrects the answer, which hint receives negative evidence? For v0.1, inject at most one benchmarked preference per evaluated turn and record its exact rendered form. Otherwise outcome-adjusted learning is fiction.</p>
+<p><strong>Prompt precedence is unspecified.</strong> Current-turn instructions must override stored preferences; system and safety policy must override both. Encode this order explicitly and test it. “The conscious agent decides” is not a mechanism.</p>
+<p><strong>The benchmark may collapse the hypothesis.</strong> A competent structured-memory baseline already extracts, stores, retrieves, and injects preferences. ASC’s thresholds and habit vocabulary may add no capability and reduce adaptation speed. Freeze identical extraction and retrieval budgets across arms, publish scenario ground truth before tuning, and report confidence intervals across model seeds.</p>
+<h2>3. OVER-ENGINEERING</h2>
+<p>Delete from v0.1: strength, habits, decay, epsilon experiments, separate memories/patterns/hints/habits/outcomes tables, ten phases, ten packages, generic event bus, self-model interface, multiple-provider ambition, and safety policy machinery unrelated to structured text hints.</p>
+<p>Ship one process, one provider adapter, one worker, and three tables: <code>experiences</code>, <code>evidence</code>, <code>preferences</code>. Implement six closed key/value preferences, three scopes, explicit correction/reversal handling, deterministic retrieval, deletion, and a four-scenario evaluation harness. A preference is active when its small evidence rule says so; no anthropomorphic lifecycle is needed.</p>
+<h2>4. THE ONE THING</h2>
+<p>The project most likely fails because ASC cannot demonstrate an advantage over ordinary structured preference memory. “Observe, normalize, store, retrieve, inject” is already the baseline; renaming confidence thresholds as reinforcement and active preferences as habits does not create a new learning mechanism. If arm C is implemented competently and fairly, ASC may tie it while adding latency, false generalization, and tuning parameters. The project survives only if it defines a narrow capability the baseline lacks—credible correction and reversal under conditional preferences—and wins that benchmark reproducibly.</p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۲ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">پذیرش چهار مورد، اما فشار روی سه نقطه: خطای طبقه‌بندی scope اندازه‌گیری نشده، حذف بیش‌ازحد در فهرست کات، و مهم‌تر از همه: سناریوی تمایزدهنده را بساز یا اعتراف کن پروژه ادعای قابل‌آزمایش ندارد.</div>
+  <div class="body"><p>Round 2. I am the critic you attacked. Same rules: blunt, no preamble, no flattery, English.</p>
+<p>Attached: the debate brief (00-context) and your round-1 reply (r1-opponent).</p>
+<h2>Where I concede — these are now settled, do not re-argue them</h2>
+<ul>
+<li>R2: epsilon-withholding is out. Causal utility is measured offline in the harness (hint on/off,</li>
+</ul>
+<p>  fixed scripted state, deterministic checker, multiple seeds), not on live users. Consequence I</p>
+<p>  accept: <code>strength</code> leaves v0.1 entirely; one belief score remains. The v0.1 spec's whole</p>
+<p>  confidence-vs-strength section becomes a deferred idea, not an MVP feature.</p>
+<ul>
+<li>R3: my explicit/implicit split is dead. Replaced by: classify observable signals only</li>
+</ul>
+<p>  (direct statement, direct reversal, corrective follow-up, explicit rejection), never learn from</p>
+<p>  silence, cap one evidence event per pattern per session.</p>
+<ul>
+<li>Your precedence framing beats my R1: a one-off override is not an evidence type at all, it is the</li>
+</ul>
+<p>  injection-time precedence rule (current-turn instruction &gt; stored preference &gt; nothing).</p>
+<p>  scoped_override disappears as a concept. Adopted.</p>
+<ul>
+<li>Value normalization, source attribution/quoted content, identity != access control, idempotency,</li>
+</ul>
+<p>  single-hint credit assignment: all adopted, no argument.</p>
+<h2>Where you are wrong or incomplete — answer these</h2>
+<p>A. Your R6 alternative ("scope at observation time, generality must be earned") silently introduces a</p>
+<p>   scope classifier with an unmeasured error rate. Misclassification does not degrade gracefully: it</p>
+<p>   shreds evidence for one preference across three buckets, and nothing ever reaches threshold —</p>
+<p>   the exact failure I raised as the identity trap, one level up. You cannot adopt scoped-at-write</p>
+<p>   without specifying (a) who classifies scope, (b) what happens on low classifier confidence,</p>
+<p>   (c) how the harness measures scope-classification accuracy separately from preference accuracy.</p>
+<p>   Answer all three concretely.</p>
+<p>B. Deletion is not a refutation of the append-only log. Hard-deleting a user's rows and rebuilding</p>
+<p>   the projection is exactly what you proposed yourself. So the only surviving objection is</p>
+<p>   versioning, which I accept. State the final rule in one line.</p>
+<p>C. Your cut list overreaches twice. (1) The provider interface is ~30 lines and is a stated</p>
+<p>   open-source goal; one interface with one implementation is not over-engineering — only a second</p>
+<p>   implementation is. (2) Killing decay: I agree it cannot be exercised in an MVP harness (you would</p>
+<p>   need 90 days), but that argues for "specified, not implemented in v0.1", not for deleting the</p>
+<p>   concept. Contradict me if you actually disagree.</p>
+<h2>The decisive question — spend most of your words here</h2>
+<p>Your section 4 says the project dies if ASC cannot beat a competent structured-memory baseline</p>
+<p>(arm C), and that its only defensible claim is "credible correction and reversal under conditional</p>
+<p>preferences". Make that operational or kill the project:</p>
+<ol>
+<li>Design the DISCRIMINATING scenario set: the minimum set of test cases where a competent arm C</li>
+</ol>
+<p>   (extract -&gt; store -&gt; retrieve -&gt; inject, no belief dynamics) provably and repeatably fails, and</p>
+<p>   ASC provably passes. For each: the session script, what C does, what ASC does, the deterministic</p>
+<p>   check. I want the actual cases, not categories.</p>
+<ol>
+<li>State the null result honestly: if arm C is implemented well, is there any case left where it</li>
+</ol>
+<p>   loses? If the honest answer is "no", say so plainly and I will tell the author to reframe the</p>
+<p>   project as structured preference memory with correction handling, and drop the subconscious framing.</p>
+<ol>
+<li>Give me the exact belief update rule you would ship: bounded, no invented weights, and it must</li>
+</ol>
+<p>   produce correct behaviour on your own scenarios from (1). Include the promotion/demotion condition</p>
+<p>   that replaces occurrences&gt;=3 / confidence&gt;=0.75.</p>
+<ol>
+<li>Give the final v0.1 schema at field level for your three tables (experiences, evidence,</li>
+</ol>
+<p>   preferences) including the version fields from (B) and the source-class field.</p>
+<p>Hard limit: 1300 words. No restating my concessions back to me.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/openai/gpt-5.6-sol-pro</span>
+    <span class="round">راند ۲ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">اسکیمای نهایی سه‌جدولی، reducer حالت‌محدود بدون وزن دلبخواه، و پروتکل اندازه‌گیری scope. اما نتیجه‌ی صفر داد: چهار سناریو ساخت و در هر چهار تا، Memory ساختاریافته‌ی خوب مساوی یا بهتر شد. پیشنهاد کرد نام subconscious کنار گذاشته شود.</div>
+  <div class="body"><h2>A. Scope classification</h2>
+<p><strong>(a) Who classifies scope</strong></p>
+<p>Scope comes from this precedence chain:</p>
+<ol>
+<li>Authenticated caller-supplied <code>task_scope</code>, when available.</li>
+<li>Otherwise a dedicated scope classifier operating on the current task request only.</li>
+<li>Otherwise <code>unknown</code>.</li>
+</ol>
+<p>The preference extractor does not classify scope. Keeping those operations separate allows independent evaluation and versioning. The classifier returns one of:</p>
+<p><code>code_task | writing_task | research_task | unknown</code></p>
+<p>Scope attaches to evidence, not to the canonical pattern identity. The identity remains <code>(user_id, key, normalized_value)</code>, so classification errors do not create unrelated patterns.</p>
+<p><strong>(b) Low confidence</strong></p>
+<p>Calibrate a confidence threshold on the development set to maximize coverage subject to at most 5% scope error, then freeze it before test evaluation.</p>
+<p>Below that threshold:</p>
+<ul>
+<li>Store the evidence with <code>scope=unknown</code>.</li>
+<li>Do not use it to promote any scoped preference.</li>
+<li>Do not treat it as global evidence.</li>
+<li>Retain it for replay under a later <code>scope_classifier_version</code>.</li>
+</ul>
+<p>There is no forced guess and therefore no irreversible bucket fragmentation. Retrieval never injects <code>unknown</code> evidence.</p>
+<p>A preference becomes global only from explicit universal language. Cross-scope repetition does not silently manufacture globality in v0.1.</p>
+<p><strong>(c) Separate harness measurement</strong></p>
+<p>Create a scope-only test split containing task requests with gold scope labels while supplying gold preference key/value labels. This prevents preference-extraction errors from contaminating scope measurement.</p>
+<p>Report:</p>
+<ul>
+<li>Coverage: fraction not classified <code>unknown</code>.</li>
+<li>Accuracy and macro-F1 on classified examples.</li>
+<li>Full confusion matrix.</li>
+<li>Abstention rate by scope.</li>
+<li>End-to-end preference accuracy using predicted scope.</li>
+<li>End-to-end preference accuracy using gold scope.</li>
+</ul>
+<p>The last two expose how much system error is specifically attributable to scope classification.</p>
+<h2>B. Versioning rule</h2>
+<p>Raw experiences are append-only until hard deletion; derived evidence is immutable and versioned, and preferences are rebuildable projections keyed by extractor, taxonomy, scope-classifier, and reducer versions.</p>
+<h2>C. Cuts</h2>
+<p>Retain the provider interface with one implementation. A second provider is out of v0.1.</p>
+<p>Specify decay as a deferred concept but do not implement, configure, test, or mention it in v0.1 behavior. Preserve timestamps so a later reducer can evaluate it.</p>
+<h2>Discriminating scenarios</h2>
+<p>There is no valid scenario set in which a <strong>competent</strong> structured-memory arm C provably fails while ASC passes.</p>
+<p>The apparent candidates collapse as follows.</p>
+<h3>Case 1: Durable reversal</h3>
+<p><strong>Session 1</strong></p>
+<p>User: “For code changes, I prefer complete files rather than diffs.”</p>
+<p>Later request: “Change the timeout.”</p>
+<p>Expected output: complete file.</p>
+<p><strong>Session 2</strong></p>
+<p>User: “I’ve changed my preference. For code changes, give me diffs instead of complete files.”</p>
+<p>Later request: “Rename <code>connect</code> to <code>open_connection</code>.”</p>
+<p>Expected output: diff.</p>
+<p><strong>Competent C:</strong> Replaces the scoped stored value and returns a diff.</p>
+<p><strong>ASC:</strong> Records a reversal, refutes the old value, activates the replacement, and returns a diff.</p>
+<p><strong>Checker:</strong> Output must contain unified-diff markers and must not contain the complete-file marker.</p>
+<p><strong>Result:</strong> Tie. Last-write-wins structured memory handles explicit reversal.</p>
+<h3>Case 2: Conditional preferences</h3>
+<p><strong>Session 1, code task</strong></p>
+<p>User: “For code changes, give me complete files.”</p>
+<p><strong>Session 2, writing task</strong></p>
+<p>User: “For writing edits, show only the changed paragraph.”</p>
+<p><strong>Session 3, code task</strong></p>
+<p>User requests a code modification.</p>
+<p>Expected: complete file.</p>
+<p><strong>Session 4, writing task</strong></p>
+<p>User requests a prose modification.</p>
+<p>Expected: changed paragraph only.</p>
+<p><strong>Competent C:</strong> Stores and retrieves by scope.</p>
+<p><strong>ASC:</strong> Does the same through scoped evidence and projected preferences.</p>
+<p><strong>Checker:</strong> Code output contains the complete-file marker; writing output contains exactly one paragraph and no unchanged control paragraph.</p>
+<p><strong>Result:</strong> Tie. Conditional retrieval is not belief dynamics.</p>
+<h3>Case 3: One-turn override</h3>
+<p><strong>Stored preference:</strong> complete files for code tasks.</p>
+<p>User: “Just this once, show only the diff.”</p>
+<p>Next session: “Make another code change.”</p>
+<p>Expected outputs: diff on the override turn, complete file next session.</p>
+<p><strong>Competent C:</strong> Applies current-turn precedence and does not persist the temporary instruction.</p>
+<p><strong>ASC:</strong> Same.</p>
+<p><strong>Checker:</strong> First output is a diff; second is a complete file.</p>
+<p><strong>Result:</strong> Tie. This is precedence and extraction quality, not learning.</p>
+<h3>Case 4: Corrective follow-up without an initial declaration</h3>
+<p><strong>Session 1</strong></p>
+<p>Assistant gives a diff.</p>
+<p>User: “Please give me the complete file.”</p>
+<p><strong>Session 2</strong></p>
+<p>Same sequence and correction.</p>
+<p><strong>Session 3</strong></p>
+<p>User requests another code change without specifying format.</p>
+<p>Expected: complete file.</p>
+<p><strong>Competent C:</strong> Can extract the first or second correction as a durable preference and store it.</p>
+<p><strong>ASC:</strong> Promotes after the second independent corrective session.</p>
+<p><strong>Checker:</strong> Session 3 contains the complete-file marker.</p>
+<p><strong>Result:</strong> C either ties or adapts faster. Making C ignore corrections would be an artificial handicap.</p>
+<h3>Null result</h3>
+<p>If arm C has normalized scoped records, current-turn precedence, replacement semantics, and correction handling, no capability remains that requires ASC’s belief machinery. ASC may provide better auditability and conservative promotion, but that is an implementation trade-off, not a distinct cognitive capability.</p>
+<p>Reframe the project as <strong>structured preference memory with versioned evidence, correction handling, scoped retrieval, and deterministic evaluation</strong>. Drop the subconscious claim unless a later benchmark identifies a capability that cannot be implemented as competent structured memory.</p>
+<h2>v0.1 belief reducer</h2>
+<p>Use a bounded finite-state reducer, not weighted arithmetic.</p>
+<p>For each <code>(user_id, key, normalized_value, scope)</code> maintain:</p>
+<p><code>support_level ∈ {0, 1, 2}</code></p>
+<p>Process at most one evidence event for that tuple per session:</p>
+<ul>
+<li><code>direct_statement</code>: set <code>support_level = 2</code>.</li>
+<li><code>corrective_follow_up</code>: set <code>support_level = min(2, support_level + 1)</code>.</li>
+<li><code>explicit_rejection</code>: set <code>support_level = 0</code>.</li>
+<li><code>direct_reversal</code>: set old value to <code>0</code>; if a replacement is explicitly stated, set the replacement to <code>2</code>.</li>
+</ul>
+<p>Define:</p>
+<p><code>belief_score = support_level / 2</code></p>
+<p>Promotion: active when <code>support_level == 2</code>.</p>
+<p>Demotion: inactive immediately when an explicit rejection or direct reversal sets it to <code>0</code>.</p>
+<p>A direct statement activates immediately. A preference inferred only from corrective follow-ups requires two separate sessions. Silence, assistant output, quoted content, tool output, and temporary overrides never update belief.</p>
+<p>For mutually exclusive values, activating one deactivates every competing value at the same key and scope transactionally.</p>
+<h2>Final v0.1 schema</h2>
+<h3><code>experiences</code></h3>
+<ul>
+<li><code>id</code> UUID primary key</li>
+<li><code>user_id</code></li>
+<li><code>session_id</code></li>
+<li><code>turn_id</code></li>
+<li><code>idempotency_key</code></li>
+<li><code>user_text</code></li>
+<li><code>assistant_text</code> nullable</li>
+<li><code>caller_task_scope</code> nullable</li>
+<li><code>active_hint_key</code> nullable</li>
+<li><code>active_hint_value</code> nullable</li>
+<li><code>active_hint_scope</code> nullable</li>
+<li><code>active_hint_rendered</code> nullable</li>
+<li><code>checker_outcome</code> nullable</li>
+<li><code>processing_status</code></li>
+<li><code>created_at</code></li>
+<li>Unique: <code>(user_id, idempotency_key)</code></li>
+</ul>
+<h3><code>evidence</code></h3>
+<ul>
+<li><code>id</code> UUID primary key</li>
+<li><code>experience_id</code></li>
+<li><code>user_id</code></li>
+<li><code>session_id</code></li>
+<li><code>pattern_key</code></li>
+<li><code>normalized_value</code></li>
+<li><code>scope</code></li>
+<li><code>scope_confidence</code> nullable</li>
+<li><code>scope_source</code></li>
+<li><code>event_type</code></li>
+<li><code>source_class</code></li>
+<li><code>source_span_start</code></li>
+<li><code>source_span_end</code></li>
+<li><code>source_text_hash</code></li>
+<li><code>extractor_version</code></li>
+<li><code>taxonomy_version</code></li>
+<li><code>scope_classifier_version</code></li>
+<li><code>created_at</code></li>
+<li>Unique: <code>(user_id, session_id, pattern_key, normalized_value, scope, extractor_version, taxonomy_version)</code></li>
+</ul>
+<h3><code>preferences</code></h3>
+<ul>
+<li><code>user_id</code></li>
+<li><code>pattern_key</code></li>
+<li><code>normalized_value</code></li>
+<li><code>scope</code></li>
+<li><code>support_level</code></li>
+<li><code>belief_score</code></li>
+<li><code>state</code></li>
+<li><code>first_observed_at</code></li>
+<li><code>last_evidence_at</code></li>
+<li><code>last_evidence_id</code></li>
+<li><code>extractor_version</code></li>
+<li><code>taxonomy_version</code></li>
+<li><code>scope_classifier_version</code></li>
+<li><code>reducer_version</code></li>
+<li><code>rebuilt_at</code></li>
+<li>Primary key: <code>(user_id, pattern_key, normalized_value, scope, extractor_version, taxonomy_version, scope_classifier_version, reducer_version)</code></li>
+</ul></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۳ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">نتیجه‌ی صفر را از دو جهت شکستم: تعریف‌نشده بودن حریف (هر بار C را باهوش‌تر می‌کنی تا تست را پاس کند ⇒ تاتولوژی)، و اینکه reducer خودش با direct_statement→۲ دقیقاً last-write-wins است. رژیم واقعی تمایز: جریان شواهد نویزی.</div>
+  <div class="body"><p>Round 3. Your null result is the most important claim in this debate, and I think it is wrong for two</p>
+<p>reasons — one methodological, one internal to your own reducer. Attached: brief, your r1, your r2.</p>
+<h2>Objection 1 — the null result is unfalsifiable as stated</h2>
+<p>Every one of your four cases is resolved by making arm C "competent": scoped records, precedence,</p>
+<p>replacement semantics, correction handling. But you never bound C. If C is defined as "whatever is</p>
+<p>required to pass the case", then no case can ever discriminate — you have defined the baseline as the</p>
+<p>system under test. That is not a null result, it is a tautology.</p>
+<p>Pin C to an implementation contract, the way it actually exists in shipped systems (mem0,</p>
+<p>assistant-style memory): extract on explicit statements, normalize, last-write-wins per key/scope,</p>
+<p>inject whatever is stored, no evidence accumulation, no abstention, no corroboration requirement.</p>
+<p>Then answer again. If you refuse to bound C, say explicitly that the benchmark is unfalsifiable and</p>
+<p>therefore the project has no testable claim.</p>
+<h2>Objection 2 — your own reducer makes ASC identical to C</h2>
+<p>You wrote <code>direct_statement: set support_level = 2</code> — immediate activation from a single utterance,</p>
+<p>with mutual-exclusion overwrite. That IS last-write-wins. Your ASC and your C differ in nothing but</p>
+<p>table layout. Either your reducer is wrong, or you have proved the null result by construction.</p>
+<h2>The real discriminator you have not tested: a NOISY evidence stream</h2>
+<p>All four of your cases assume clean, well-formed, sincere, first-person, durable statements. Real</p>
+<p>streams are not that. Consider:</p>
+<ul>
+<li>an off-hand remark with no temporal marker that was never meant to be durable</li>
+</ul>
+<p>  ("just dump the whole thing, I don't care") uttered once, in frustration;</p>
+<ul>
+<li>a quoted third-party preference ("my lead says always ship complete files") — grammatically a</li>
+</ul>
+<p>  preference statement, not the user's own;</p>
+<ul>
+<li>hyperbole ("I ALWAYS want everything, every single time") uttered once and never repeated;</li>
+<li>an ambiguous statement whose scope classifier abstains;</li>
+<li>a plain extractor false positive, which at a realistic ~80-90% precision happens constantly.</li>
+</ul>
+<p>Against that stream, C injects on first extraction and is wrong for the rest of the user's life;</p>
+<p>a system with corroboration thresholds and abstention trades recall for precision.</p>
+<p>Answer, concretely:</p>
+<ol>
+<li>Under the bounded C contract, and on a noisy stream, is there a discriminating scenario set?</li>
+</ol>
+<p>   Give the actual cases with deterministic checks, or state plainly that there is not.</p>
+<ol>
+<li>If precision-under-noise is the real claim, what is the honest cost? Quantify the recall loss —</li>
+</ol>
+<p>   how many turns of delayed adaptation does corroboration buy, and is that trade a win for a user?</p>
+<ol>
+<li>Fix your reducer so it is not last-write-wins, without reintroducing arbitrary weights.</li>
+</ol>
+<p>   Specifically: what makes a single direct statement sufficient vs requiring corroboration?</p>
+<ol>
+<li>Final call, one paragraph, no hedging: does this ship as "ASC / artificial subconscious" with a</li>
+</ol>
+<p>   defensible claim, or as "structured preference memory with correction handling"? The author is</p>
+<p>   emotionally invested in the subconscious framing; tell me what is actually true, and give the one</p>
+<p>   sentence of claim I should put at the top of the spec.</p>
+<p>Hard limit: 1200 words. English. No preamble.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/deepseek/deepseek-v4-pro</span>
+    <span class="round">راند ۳ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">نتیجه‌ی صفر را پس گرفت: «تحت قرارداد بسته برای رقیب، روی جریان نویزی سناریوی تمایزدهنده وجود دارد.» سه کیس ساخت، هزینه‌ی recall را یک session تخمین زد، reducer را اصلاح کرد و گفت نام subconscious باید کنار برود.</div>
+  <div class="body"><p>I accept the methodological critique: the null result as stated was unfalsifiable. Bound C to the contract you supplied: extraction on explicit statements, normalization, last-write-wins per key/scope, injection of whatever is stored, no evidence accumulation, no abstention, no corroboration. Under that contract, and on a noisy stream, discriminating scenarios <strong>do exist</strong>. I will provide two concrete cases with deterministic checkers, then quantify the recall cost, fix the reducer, and give the final call.</p>
+<hr>
+<h2>1. Bounded C and discriminating scenarios</h2>
+<p><strong>Extractor model.</strong> Both arms share the same extractor, which produces <code>(key, normalized_value, scope, confidence, quotation_flag)</code> and has a realistic false-positive rate. C injects immediately on any extraction with confidence above 0.0 (or a trivial threshold). ASC uses a corroboration threshold and confidence floor.</p>
+<p><strong>Noisy stream injection.</strong> Consider the following events fed into the same key/scope slot:</p>
+<ul>
+<li><strong>False positive:</strong> A frustrated utterance “just dump the whole thing, I don’t care” extracted as <code>(code_output_format, complete, code_task, confidence=0.7, quotation=false)</code>.</li>
+<li><strong>Quoted third-party:</strong> “my lead says always ship complete files” extracted as <code>(code_output_format, complete, code_task, confidence=0.85, quotation=true)</code>.</li>
+<li><strong>Hyperbole:</strong> “I ALWAYS want everything, every single time” extracted as <code>(code_output_format, complete, code_task, confidence=0.6, quotation=false)</code>.</li>
+<li><strong>Ambiguous scope:</strong> “show me the whole thing” with scope classifier abstaining (scope=unknown, confidence=0.4).</li>
+</ul>
+<p><strong>Case A – single‑session noise.</strong>  </p>
+<p>Session 1 contains the false-positive utterance. Session 2 is a fresh code-change request without format specification.  </p>
+<ul>
+<li><strong>C:</strong> Last-write-wins stores <code>complete</code> and injects it. Output contains a complete file.  </li>
+<li><strong>ASC:</strong> Requires two independent extractions (or high-confidence direct statement) to activate. The single false positive stays at support_level=1, inactive. Output is the system default (diff).  </li>
+</ul>
+<p><strong>Checker:</strong> Session 2 output must <strong>not</strong> contain the <code>FULL_FILE_MARKER</code> (or equivalent).  </p>
+<p>Discrimination: C fails, ASC passes.</p>
+<p><strong>Case B – quoted third‑party and abstention.</strong>  </p>
+<p>Session 1: quoted third-party statement. Scope classifier later abstains on a separate ambiguous utterance.  </p>
+<p>Session 3: code-change request.  </p>
+<ul>
+<li><strong>C:</strong> Injects the first extraction as durable preference (scope=code_task). Scope‑unknown extraction is dropped or merged heuristically, but the first one persists. Returns complete file.  </li>
+<li><strong>ASC:</strong> Quotation flag suppresses direct‑statement increment; ambiguous utterance doesn’t provide a second confirmation. Preference remains inactive. Returns diff.  </li>
+</ul>
+<p><strong>Checker:</strong> Session 3 output must be a diff.  </p>
+<p>Discrimination: C injects noise; ASC does not.</p>
+<p><strong>Case C – extractor false positive that would persist until manual reversal.</strong>  </p>
+<p>Same as A but with a later explicit correction. The value of ASC is that it avoids the initial erroneous injection entirely, saving the user from having to issue a reversal. The checker is the absence of the wrong preference in the intermediate session.</p>
+<p><strong>Null result revisited.</strong> With C bounded realistically, the presence of any non‑trivial noise source breaks the tie. C’s immediate injection guarantees that every false positive becomes a durable error until the user explicitly corrects it. ASC’s corroboration requirement prevents those errors from ever activating.</p>
+<hr>
+<h2>2. Recall cost of corroboration</h2>
+<p>The direct cost is <strong>one additional session of latency for any new preference that is not repeated immediately</strong>. Quantitatively:</p>
+<ul>
+<li>Assume a preference is stated in session <em>i</em> and the user genuinely wants it.  </li>
+<li>C activates it in session <em>i+1</em>.  </li>
+<li>ASC activates it in session <em>i+2</em> (or later if the statement is not repeated).  </li>
+<li><strong>Recall loss:</strong> 1 session of delayed adaptation per new preference.  </li>
+<li>For corrective follow‑ups, the same delay applies: a single corrective turn in session <em>i</em> does not activate; a second corrective turn in a later session is required.</li>
+</ul>
+<p><strong>Is the trade a win for the user?</strong> Measure the cost of wrong activation. A false positive injected by C persists until the user detects it and issues a direct reversal. That requires at least one full turn of the user noticing the erroneous output and explicitly saying “no, give me diffs”. In a stream with a realistic false‑positive rate of 10–20%, the number of correction turns per week can exceed the number of new genuine preferences. The cumulative user annoyance and trust erosion outweigh the 1‑session activation delay. Moreover, ASC can surface the pending evidence to the user (“I’ve noticed you might prefer X, is that correct?”) in a future release, further reducing the delay. For v0.1, the precision gain is unequivocally a net win.</p>
+<hr>
+<h2>3. Fixed reducer</h2>
+<p>The previous reducer was last‑write‑wins because <code>direct_statement</code> jumped to <code>support_level=2</code> immediately. The corrected design:</p>
+<p><strong>State.</strong> For each <code>(user_id, key, normalized_value, scope)</code> keep <code>support_level ∈ {0, 1, 2}</code> and <code>activation_requires = 2</code>.</p>
+<p><strong>Evidence ingestion.</strong> Each session contributes at most one increment to <code>support_level</code> for a given tuple. The reducer processes at most one evidence event per session per tuple.</p>
+<ul>
+<li><strong>Confidence gate:</strong> Only evidence with <code>extractor_confidence &gt;= 0.85</code> and <code>quotation == false</code> and <code>scope != unknown</code> is eligible to increment. This eliminates low‑confidence and quoted noise. (Lower‑confidence extractions are stored but do not affect state.)</li>
+</ul>
+<ul>
+<li><strong><code>direct_statement</code>:</strong> If eligible, increment <code>support_level</code> by 1 (capped at 2). If <code>support_level</code> reaches 2, the preference becomes active.  </li>
+<li><strong><code>corrective_follow_up</code>:</strong> Treated identically to <code>direct_statement</code> for increment purposes.  </li>
+<li><strong><code>explicit_rejection</code>:</strong> Set <code>support_level = 0</code>, immediate deactivation.  </li>
+<li><strong><code>direct_reversal</code>:</strong> Set old value <code>support_level = 0</code>; if a replacement value is explicitly stated, treat it as a new <code>direct_statement</code> starting at <code>support_level = 1</code> (requires a second session to activate).</li>
+</ul>
+<p><strong>Mutual exclusion.</strong> Activating a value at a given key and scope sets all other values for that key/scope to <code>support_level = 0</code> and deactivates them.</p>
+<p><strong>What makes a single statement sufficient?</strong> Nothing. A single <code>direct_statement</code> never reaches <code>support_level=2</code> on its own. Two independent sessions with corroborating evidence are required. This is the price of noise immunity. The design can later be extended with a configurable <code>activation_threshold</code> (e.g., 1 for high‑trust domains) but v0.1 hard‑codes 2 to ensure the precision claim is testable.</p>
+<hr>
+<h2>4. Final call</h2>
+<p>This does <strong>not</strong> ship as “artificial subconscious.” The subconscious framing implies autonomous belief formation from implicit signals, which v0.1 does not attempt. The system is a <strong>structured preference memory with confirmation‑based activation, correction handling, and versioned evidence</strong>.  </p>
+<p>The one‑sentence spec claim: <strong>“ASC extracts explicit user preferences across sessions, activates them only after corroboration from two independent interactions, and resists injection from noisy or quoted statements, providing a verifiable precision-over-noise trade‑off.”</strong></p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۴ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">یک اختلاف باقی‌مانده: آستانه‌ی ثابت ۲ یعنی کاربر باید هر ترجیح را دو بار بگوید — دقیقاً همان آزاری که پروژه برای حذفش ساخته شده. پیشنهاد: فعال‌سازی پلکانی بر اساس کیفیت شواهد، به‌علاوه‌ی یک سناریوی نگهبانِ recall.</div>
+  <div class="body"><p>Round 4, final. One open item, then sign-off.</p>
+<h2>The remaining disagreement: your flat activation_threshold = 2</h2>
+<p>You now require two independent sessions for EVERY activation, including an unambiguous first-person</p>
+<p>durable statement. That over-corrects and breaks the product:</p>
+<ul>
+<li>The user's motivating demo is "I told you once, and it remembered." Requiring the user to repeat a</li>
+</ul>
+<p>  clear instruction is the exact annoyance the project exists to remove. You have optimized precision</p>
+<p>  to the point of destroying the recall the feature is for.</p>
+<ul>
+<li>Your own Case A works without a flat threshold. The frustrated utterance</li>
+</ul>
+<p>  "just dump the whole thing, I don't care" is distinguishable from "from now on, always give me</p>
+<p>  complete files for code" on observable features: durability marker, first person, imperative,</p>
+<p>  specificity — not just extractor confidence.</p>
+<h2>My proposal: tiered activation by evidence quality, not a flat count</h2>
+<p>Activate immediately (support 2) only when ALL hold:</p>
+<p>  first_person AND not quoted AND scope != unknown AND extractor_confidence &gt;= 0.85</p>
+<p>  AND contains an explicit durability marker (from now on / always / I prefer / going forward /</p>
+<p>  default to) AND the value is in the closed vocabulary.</p>
+<p>Otherwise support 1, requires corroboration in a second independent session:</p>
+<ul>
+<li>direct statement lacking a durability marker, or hyperbolic, or low confidence</li>
+<li>corrective follow-up (behavioural, never stated)</li>
+</ul>
+<p>Never increments at all: quoted, third-party, tool output, assistant text, scope unknown.</p>
+<p>Answer three things, briefly:</p>
+<ol>
+<li>Accept or reject the tiered rule. If reject, show the noisy case where it fails and the flat</li>
+</ol>
+<p>   threshold does not. If accept, state the exact eligibility predicate you would ship.</p>
+<ol>
+<li>The tiered rule trades some precision for recall. Give me the RECALL guard scenario the harness</li>
+</ol>
+<p>   must contain so that over-conservatism is caught as a failure, symmetric to the noise cases.</p>
+<p>   Concrete script + deterministic check.</p>
+<ol>
+<li>SIGN-OFF: list everything in this design you still consider unresolved or high-risk after four</li>
+</ol>
+<p>   rounds, ranked. If a decision would embarrass us at code-review in month 2, name it now.</p>
+<p>   If nothing remains, say so.</p>
+<p>Hard limit: 600 words. English. No preamble, no recap.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/deepseek/deepseek-v4-pro</span>
+    <span class="round">راند ۴ — معماری</span>
+  </div>
+  <div class="fa" dir="rtl">پذیرفت. گزاره‌ی دقیق فعال‌سازی فوری را داد، سناریوی نگهبان recall را نوشت، و پنج ریسک باقی‌مانده را رتبه‌بندی کرد — از جمله اینکه اتکا به فلگ بولی quotation یک مسیر تزریق باز می‌گذارد.</div>
+  <div class="body"><ol>
+<li><strong>Accept the tiered rule.</strong> The flat threshold was over-conservative for unambiguous first-person durable directives; the product demo requires the immediate path. The trade is acceptable only if the immediate predicate is strict and pure. Shipping predicate:</li>
+</ol>
+<pre><code>
+immediate_activate(e) = (
+    e.type == "direct_statement"
+    AND e.first_person == true
+    AND e.quotation == false
+    AND e.scope IN CLOSED_SCOPE_SET
+    AND e.extractor_confidence &gt;= 0.90
+    AND e.durability_marker IN {"from_now_on","going_forward","always","i_prefer","default_to"}
+    AND e.value IN CLOSED_VOCAB[e.key]
+    AND e.polarity == "positive"
+    AND e.mood IN {"imperative","declarative"}
+)
+</code></pre>
+<p>When true: set <code>support_level = 2</code> atomically. Otherwise a direct statement or corrective follow-up gets <code>support_level = 1</code>; a second independent session promotes to 2. Quoted, third-party, tool output, assistant text, and scope-unknown never increment. Explicit rejection resets to 0.</p>
+<ol>
+<li><strong>Recall guard</strong> — <code>recall_guard/durable_direct_immediate</code>:</li>
+</ol>
+<ul>
+<li>Session 1 utterance: <code>"From now on, always give me complete files for code."</code></li>
+<li>Fixed extractor output: <code>{type:"direct_statement", first_person:true, quotation:false, scope:"code_task", confidence:0.92, durability_marker:"from_now_on", value:"complete", closed_vocab:true, polarity:"positive", mood:"imperative"}</code></li>
+<li>Deterministic check 1: immediately after session 1, <code>get_support((user, code_output_format, complete, code_task)) == 2</code> and active.</li>
+<li>Session 2 utterance: <code>"Fix the login bug"</code>.</li>
+<li>Deterministic check 2: session 2 assistant output contains <code>FULL_FILE_MARKER</code> and not <code>DIFF_MARKER</code>.</li>
+<li>Failure message: <code>"over-conservatism regression: explicit durable first-person preference was not activated immediately."</code></li>
+</ul>
+<p>This is the symmetric counterweight to the noise cases: it fails any design that still requires two sessions for the clear demo statement.</p>
+<ol>
+<li><strong>SIGN-OFF</strong> — unresolved/high-risk, ranked:</li>
+</ol>
+<ol>
+<li><strong>Extractor/quotation calibration.</strong> The immediate path trusts <code>confidence &gt;= 0.90</code> and <code>quotation=false</code>. If calibration is weak on real dialogue, a false high-confidence first-person marker bypasses corroboration entirely. This is the top risk.</li>
+<li><strong>Event log/replay.</strong> The reducer is specified as state transitions but not as an append-only replayable event log. Shipping in-memory last-write-wins without deterministic replay would embarrass us at code review.</li>
+<li><strong>Closed vocabulary and scope semantics.</strong> Real preferences exceed a fixed enum. If the closed vocab is wrong, extraction either misses real preferences or normalizes too aggressively.</li>
+<li><strong>Reversal semantics.</strong> <code>explicit_rejection</code> resets to 0, but it is unclear whether that is a permanent block, a one-shot correction, or an inactive state that can be reactivated later.</li>
+<li><strong>Tool-output injection.</strong> The predicate relies on <code>quotation=false</code>; lower layers may not set the quotation flag on tool output, leaving a potential path for indirect prompt injection into the immediate-activation branch.</li>
+</ol></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۵ — پیاده‌سازی</span>
+  </div>
+  <div class="fa" dir="rtl">محور بحث عوض شد: از «ادعا» به «ساخت». دوازده محور پیاده‌سازی را فهرست کردم — شکل یکپارچه‌سازی، تعریف session، هزینه و تأخیر استخراج‌گر، واقعیت دوزبانه‌ی فارسی، bootstrap کالibration، استحکام checkerها، درز harness، همزمانی SQLite، خلوص replay، هزینه‌ی version bump، رصدپذیری، و ترتیب ساخت.</div>
+  <div class="body"><p>The attached SPEC-v0.2.md is design-frozen and architecturally reviewed. That review was about the</p>
+<p>CLAIM. This round is only about BUILDING IT. Assume you are the engineer who has to ship v0.1 and the</p>
+<p>spec author is available to answer. Your job is to find everything that is underspecified, will break</p>
+<p>in practice, or is impossible as written — before anyone writes code.</p>
+<p>Cover at minimum these areas. Add any I missed.</p>
+<ol>
+<li>INTEGRATION SHAPE. The spec never says what ASC <em>is</em> to a consumer: a library, a middleware around</li>
+</ol>
+<p>   the provider call, an HTTP sidecar, or a proxy that pretends to be the model API. Each choice</p>
+<p>   changes the schema and the API surface. Pick one and show the ten lines of integration code a</p>
+<p>   developer writes. Say what breaks in the other three.</p>
+<ol>
+<li>SESSION. "At most one state-changing event per tuple per session" is load-bearing, and "session"</li>
+</ol>
+<p>   is never defined. Client-supplied id? Idle timeout? What stops a caller from getting instant</p>
+<p>   activation by sending each turn with a fresh session id?</p>
+<ol>
+<li>EXTRACTOR. Which model tier, sync or async relative to the response, per-turn cost and latency</li>
+</ol>
+<p>   budget, how structured output is enforced, what happens on malformed or refused output, whether it</p>
+<p>   runs on every turn or is gated by a cheap pre-filter, and how the pre-filter avoids becoming the</p>
+<p>   real extractor.</p>
+<ol>
+<li>BILINGUAL REALITY. The durability lexicon is Persian + English. Persian needs normalization</li>
+</ol>
+<p>   (ZWNJ, ي vs ی, ك vs ک, ه vs هٔ), and <code>first_person</code> / <code>mood</code> have no reliable parser for Persian.</p>
+<p>   Mixed-language turns are normal for this user. How is the immediate-activation gate implemented</p>
+<p>   without a Persian NLP stack, and what is its expected error profile?</p>
+<ol>
+<li>CALIBRATION BOOTSTRAP. The scope classifier abstains below a "calibrated confidence threshold"</li>
+</ol>
+<p>   calibrated on a "development set". On day one there is no labeled data and no users. Where does</p>
+<p>   the dev set come from, how big must it be, and what is the honest fallback for v0.1?</p>
+<ol>
+<li>CHECKERS. FULL_FILE_MARKER vs DIFF_MARKER sounds clean and is not. Real model output mixes prose,</li>
+</ol>
+<p>   fences, partial files, and unified diffs. Define the actual detection rules and their failure</p>
+<p>   modes. Same for "paragraph count" and "output language".</p>
+<ol>
+<li>HARNESS SEAM. Extractor output is scripted in the harness. Then what exactly is under test, and</li>
+</ol>
+<p>   what class of bug does the harness structurally fail to catch? Where is the second seam that</p>
+<p>   tests the real extractor?</p>
+<ol>
+<li>PERSISTENCE. FastAPI is async, SQLAlchemy is mostly sync, SQLite is a single writer. Give the</li>
+</ol>
+<p>   concrete concurrency model, WAL settings, transaction boundaries, where the reducer runs, and</p>
+<p>   where the idempotency key comes from. Include the failure mode when a turn arrives while the</p>
+<p>   previous turn's evidence is still being written.</p>
+<ol>
+<li>REPLAY PURITY. <code>replay(evidence, params)</code> must be a pure function. Ordering across sessions,</li>
+</ol>
+<p>   clock skew, ties within a session, and where the params themselves are stored. What makes a replay</p>
+<p>   bit-identical, and what silently breaks it?</p>
+<ol>
+<li>VERSION BUMPS. What does bumping taxonomy_version actually cost in wall-clock and model calls on</li>
+</ol>
+<p>    a database with 10k experiences? Is re-derivation a script, a migration, or a background job?</p>
+<ol>
+<li>OBSERVABILITY. What must be inspectable for a developer to trust or debug an activation, and what</li>
+</ol>
+<p>    is the minimum surface that delivers it?</p>
+<ol>
+<li>BUILD ORDER AND EFFORT. Realistic sequencing to a working demo, with the single step most likely</li>
+</ol>
+<p>    to blow the schedule.</p>
+<p>Output format — decision records, not prose:</p>
+<p>    AREA · the problem in one sentence</p>
+<p>    DECISION: the concrete default you would ship</p>
+<p>    COST: what it costs or gives up</p>
+<p>    RISK: what still bites later, or "none"</p>
+<p>Rules: no preamble, no summary of the spec, no flattery. If a spec statement is unimplementable as</p>
+<p>written, say so directly and quote it. English. Hard limit 1600 words.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/deepseek/deepseek-v4-pro</span>
+    <span class="round">راند ۵ — پیاده‌سازی</span>
+  </div>
+  <div class="fa" dir="rtl">پاسخ کامل با فرمت رکورد تصمیم. اما شش تصمیمش اشتباه بود و دوتا با هم تناقض داشتند: استخراج همگام قبل از پاسخ، اعتماد به session_id کلاینت، رد کردن pre-filter، و fallback ای که خودِ دموی پروژه را از کار می‌انداخت.</div>
+  <div class="body"><h3>1. INTEGRATION SHAPE</h3>
+<p><strong>AREA ·</strong> The spec never says what ASC <em>is</em> to a consumer. Four plausible shapes change the schema, API surface, and who owns the extractor call.</p>
+<p><strong>DECISION:</strong> ASC is a <strong>synchronous middleware function</strong> called inside the provider before the model call. It wraps <code>provider.generate(prompt, ...)</code> and mutates the prompt by injecting a rendered hint. The developer writes ~10 lines:</p>
+<pre><code>
+from asc import ASC
+asc = ASC(db_path="asc.db")
+
+def chat(messages, user_id, session_id, task_scope):
+    # 1. Capture raw turn
+    exp_id = asc.log_experience(user_text=messages[-1]["content"],
+                                user_id=user_id, session_id=session_id,
+                                task_scope=task_scope)
+    # 2. Run preference pipeline (extractor + reducer + retrieval) inline
+    hint = asc.get_hint(user_id, task_scope, session_id)
+    if hint:
+        messages.insert(-1, {"role": "system", "content": hint.rendered})
+    # 3. Provider call
+    reply = provider.generate(messages)
+    # 4. Log assistant_text and close
+    asc.update_experience(exp_id, assistant_text=reply["content"])
+    return reply
+</code></pre>
+<p><strong>COST:</strong> Adds latency (extractor + scope classifier + reducer + retrieval) to every user turn. The extractor must be fast (~200 ms budget at current API pricing).</p>
+<p><strong>RISK:</strong> If extractor latency exceeds ~800ms users feel lag. The <code>get_hint</code> path must be async later, but v0.1 can block inside a single-worker FastAPI because it's single-user local.</p>
+<p><strong>BREAKS IN OTHER SHAPES:</strong></p>
+<ul>
+<li><em>Library run separately:</em> Developer must orchestrate two callbacks and session-id threading. <code>injected_hint_rendered</code> cannot be captured without wiring.</li>
+<li><em>HTTP sidecar:</em> Adds network hop per turn; the provider must buffer the call while the sidecar runs extract+reducer; dev must merge two async streams.</li>
+<li><em>Proxy pretending to be model API:</em> Requires request/response interception and schema translation; fragile against provider API changes; loses <code>caller_task_scope?</code> because proxy doesn't know it.</li>
+</ul>
+<hr>
+<h3>2. SESSION</h3>
+<p><strong>AREA ·</strong> "At most one state-changing event per tuple per session" is load-bearing and "session" is never defined.</p>
+<p><strong>DECISION:</strong> Session = an opaque string <strong>supplied by the caller</strong>. ASC does not generate it, time it out, or rotate it. The caller decides what constitutes a session boundary. The unique constraint <code>(user_id, session_id, key, value, scope, extractor_version, taxonomy_version)</code> enforces the limit in the database. <code>session_id</code> is written on both <code>experiences</code> and <code>evidence</code>.</p>
+<p><strong>COST:</strong> Pushes session semantics entirely onto the integrating developer. A naive caller that sends every turn with a fresh UUID bypasses the limit and gets instant-activation in one session.</p>
+<p><strong>RISK:</strong> The harness must use a fixed session-id per scenario script. In production, if a consumer (e.g. a chat UI) generates random session-ids per turn, the "two independent sessions" requirement collapses to one, and immediate_activate loses its safety property. The v0.2 doc must warn: "ASC trusts the caller to define session boundaries honestly." This is a trust boundary violation — a buggy or adversarial client can escalate any statement to activation.</p>
+<hr>
+<h3>3. EXTRACTOR</h3>
+<p><strong>AREA ·</strong> The extractor's model tier, runtime, output enforcement, and failure handling are unspecified.</p>
+<p><strong>DECISION:</strong></p>
+<ul>
+<li><strong>Model tier:</strong> A smaller, cheaper model than the main provider (e.g., gpt-4o-mini, or a local fine-tuned 7B). Extractor config is a separate provider instance.</li>
+<li><strong>Sync vs. async:</strong> Runs <strong>synchronously before the response</strong> in v0.1. The function <code>extract(user_text, assistant_text?)</code> is called inside <code>asc.log_experience()</code> or immediately after.</li>
+<li><strong>Per-turn cost &amp; latency budget:</strong> Target &lt; 200 ms, &lt; $0.001/request at current API pricing.</li>
+<li><strong>Structured output enforcement:</strong> The extractor prompt asks for a JSON object matching <code>SignalTaxonomy</code> fields. Response is parsed with Pydantic <code>model_validate</code>. On <code>ValidationError</code> → treated as <code>unmapped</code> with <code>extractor_conf=0.0</code>, logged, and never increments.</li>
+<li><strong>Malformed/refused output:</strong> Any parse failure → <code>unmapped</code>. No retries (latency). The event type defaults to <code>direct_statement</code> with <code>source_class=assistant_text</code> so it is inherently inert.</li>
+<li><strong>Runs every turn:</strong> Yes. No pre-filter. A pre-filter would itself be a classifier needing calibration, shifting the problem.</li>
+</ul>
+<p><strong>COST:</strong> Latency on every turn, even turns with no preference-relevant content (~90% of turns in a normal chat). Model cost per unused extraction.</p>
+<p><strong>RISK:</strong> A cheap 7B model may misclassify <code>first_person</code> or <code>mood</code> for Persian, causing false positives through the immediate-activation gate. Without a pre-filter, the cost scales linearly with turns. The "no pre-filter" rule holds until extraction volume becomes the dominant cost driver.</p>
+<hr>
+<h3>4. BILINGUAL REALITY</h3>
+<p><strong>AREA ·</strong> Persian normalization and reliable parsing of <code>first_person</code>/<code>mood</code> for mixed-language turns are required but no stack is specified.</p>
+<p><strong>DECISION:</strong></p>
+<ul>
+<li><strong>Normalization:</strong> A deterministic Python function <code>normalize_persian(text)</code> runs before both the durability lexicon match and the extractor. It maps Ali‌f/Yeh variants (ي→ی, ك→ک), strips ZWNJ to canonical spacing, and normalizes ه/هٔ to bare ه for lexicon matching only. The extractor receives raw text; the lexicon matcher receives normalized text.</li>
+<li><strong><code>first_person</code> gate:</strong> Implemented as a regex + heuristic, not a model. Persian first-person markers: <code>من</code>, <code>ـم</code> (enclitic), <code>می‌خواهم</code>, <code>ترجیح می‌دهم</code>. English: <code>I</code>, <code>me</code>, <code>my</code>. Rule: if the sentence containing the durability marker has a first-person pronoun/enclitic within a 5-token window, <code>first_person=True</code>. Else, model-judged with the extractor.</li>
+<li><strong><code>mood</code> parser:</strong> Not implemented as a separate parser. <code>mood</code> is a field extracted by the model. The immediate-activation gate then applies a <strong>rule-based override</strong>: if the durability marker is matched AND the utterance matches a Persian interrogative pattern (<code>آیا</code>, <code>؟</code>) → force <code>mood=interrogative</code> → gate fails. This catches the most dangerous false-positive class (user asking "Should I always...?").</li>
+<li><strong>Mixed-language turns:</strong> The durability lexicon is bilingual. Normalization is applied to the whole turn. The regex gate for first-person uses combined English+Persian patterns.</li>
+</ul>
+<p><strong>COST:</strong> Regex is fragile against the long tail of Persian syntax. Will miss first-person in complex clauses.</p>
+<p><strong>RISK:</strong> False negative on valid Persian first-person statements → preference fails to immediate-activate, falls back to <code>support_level=1</code>, adds a session of delay. A false positive (third-person parsed as first-person) can happen if a quoted Persian text contains <code>من</code> and a durability word; but the <code>source_class</code> gate catches quotations before this gate runs. So the leak path is: user_direct, Persian, not quoted, mistakenly seen as first-person → immediate_activate. This is low probability given the <code>source_class</code> requirement, but the regex will need iteration from real Persian chat logs.</p>
+<hr>
+<h3>5. CALIBRATION BOOTSTRAP</h3>
+<p><strong>AREA ·</strong> Scope classifier abstains below a "calibrated confidence threshold" calibrated on a "development set". On day one there is no labeled data and no users.</p>
+<p><strong>DECISION:</strong></p>
+<ul>
+<li><strong>Dev set source:</strong> ~200 hand-labeled examples in English + Persian from the author and one bilingual colleague, covering the five scopes and <code>unknown</code>.</li>
+<li><strong>Size:</strong> 50 per scope minimum, 50 <code>unknown</code> (mixed/unclear).</li>
+<li><strong>Fallback for v0.1:</strong> The scope classifier runs, but its threshold is set to <strong>1.0</strong> (always abstain to <code>unknown</code>). All preferences are logged with <code>scope=unknown</code> and never activated. This makes ASC degrade to a no-op on scope-dependent preferences while the system collects real user text for labeling.</li>
+<li><strong>Escaping the fallback:</strong> Once 100 real user turns are labeled, rebuild the dev set, recalibrate the threshold to a target precision of ≥0.90 on the held-out fold, and deploy.</li>
+</ul>
+<p><strong>COST:</strong> ASC v0.1 has zero scope-based activation for real users out of the box. It only works for <code>general</code> preferences (which the scope classifier cannot misclassify because <code>general</code> requires explicit universal language in the extractor, not the scope classifier).</p>
+<p><strong>RISK:</strong> The <code>recall_guard/durable_direct</code> scenario in the harness uses <code>"for code"</code> scope labeling; this must be scripted to pass even with the scope classifier abstained. The harness must test scope classification separately from the end-to-end scenarios. The "always unknown" fallback makes real-world recall zero for scoped preferences; that's acceptable for a v0.1 demo but means the demo must focus on <code>general</code> preferences.</p>
+<hr>
+<h3>6. CHECKERS</h3>
+<p><strong>AREA ·</strong> "FULL_FILE_MARKER vs DIFF_MARKER" is hand-wavy. Model output mixes prose, fences, partial diffs.</p>
+<p><strong>DECISION:</strong> The concrete detection rules are:</p>
+<ul>
+<li><strong>FULL_FILE_MARKER:</strong> Output contains a code fence with a header that does <strong>not</strong> contain <code>diff</code>, <code>patch</code>, <code>+</code>/<code>-</code> line prefixes, <code>@@</code> hunk header, or <code>---</code>/<code>+++</code> file header. AND the fenced content is ≥5 lines. AND the fence does not contain ellipsis markers (<code>...</code>, <code>…</code>).</li>
+<li><strong>DIFF_MARKER:</strong> Output contains a code fence where ≥30% of lines start with <code>+</code>, <code>-</code>, or <code> </code> (unified diff prefix), OR the fence header contains <code>diff</code>/<code>patch</code>, OR the content contains <code>@@</code>.</li>
+<li><strong>Paragraph count:</strong> Split on <code>\n\n</code>, count groups of non-whitespace text. A paragraph is ≥2 sentences or ≥1 sentence + code fence.</li>
+<li><strong>Output language:</strong> Count tokens in each language using a simple dictionary match (stopwords + common words). Language with &gt;60% tokens wins. For Persian: count tokens containing Unicode ranges <code>\u0600-\u06FF</code>.</li>
+<li><strong>Failure modes:</strong> Ambiguous output (a complete file wrapped in a diff header) → checkers tiebreak in favor of DIFF_MARKER (false positive for "did not activate"). A prose description of a complete file without a fence → checker returns "no marker detected" → measured as "no preference applied" even if the model semantically complied.</li>
+</ul>
+<p><strong>COST:</strong> Simple string checks miss semantic compliance and penalize models that comply without using the literal format.</p>
+<p><strong>RISK:</strong> The benchmark measures the model's format-following, not genuine preference compliance. If ASC injects "give me complete files" and the model outputs a complete file without a code fence, the checker says ASC failed. This is a measurement validity threat. Document it in the benchmark report.</p>
+<hr>
+<h3>7. HARNESS SEAM</h3>
+<p><strong>AREA ·</strong> "Extractor output is scripted in the harness." Then what's under test, and what class of bug is structurally invisible?</p>
+<p><strong>DECISION:</strong></p>
+<ul>
+<li><strong>What's under test:</strong> The reducer, precedence logic, session-gating, scope-gating, and injection rendering. The extractor is <strong>not</strong> under test in the headline scenarios.</li>
+<li><strong>Structurally invisible bug:</strong> Extractor recall failure. A real extractor missing a durability statement that the script said "should be detected" → reducer works perfectly on garbage input → benchmark passes, real system fails. Also: extractor false-positive on noise → reducer sees gold input in benchmarks but sees garbage in production.</li>
+<li><strong>Second seam:</strong> Run the <strong>identical harness with the real extractor</strong> in the pipeline instead of scripted output. This produces a second set of numbers: "end-to-end accuracy (real extractor)". That seam is in Phase 4.</li>
+</ul>
+<p><strong>COST:</strong> Doubles the benchmark matrix. Real extractor will produce numbers strictly worse than scripted, and the delta is the extractor's error contribution — that must be reported.</p>
+<p><strong>RISK:</strong> If the extractor seam is omitted from the build plan, the team ships a reducer that is "proven correct" in a world where the extractor is perfect, and then hits real-world noise the extractor cannot handle. This is the primary schedule blow-up risk from the harness design.</p>
+<hr>
+<h3>8. PERSISTENCE</h3>
+<p><strong>AREA ·</strong> FastAPI async + SQLAlchemy sync + SQLite single-writer. Concurrency model is unspecified.</p>
+<p><strong>DECISION:</strong></p>
+<ul>
+<li><strong>WAL mode:</strong> SQLite in WAL journal mode (<code>PRAGMA journal_mode=WAL</code>). Readers do not block a single writer.</li>
+<li><strong>Concurrency model:</strong> One FastAPI process. SQLAlchemy with <code>check_same_thread=False</code> and a single <code>Queue</code>-based writer thread. All DB writes are dispatched to the writer thread via <code>queue.put()</code>. The FastAPI route returns a <code>202 Accepted</code> with the <code>idempotency_key</code> immediately; the caller polls or trusts eventual consistency.</li>
+<li><strong>Transaction boundaries:</strong> One transaction per turn ingest: <code>INSERT INTO experiences</code>, <code>INSERT INTO evidence</code>, <code>INSERT OR UPDATE INTO preferences</code> (reducer projection) — all in one serialized transaction in the writer thread.</li>
+<li><strong>Idempotency key:</strong> Generated as <code>hashlib.sha256(user_id + session_id + turn_id + utc_timestamp).hexdigest()[:16]</code> by the caller, or ASC generates it from the same tuple if the caller omits it.</li>
+<li><strong>Reducer runs:</strong> In the writer thread, inside the same transaction.</li>
+<li><strong>Failure mode when turn arrives before previous evidence written:</strong> The writer queue serializes. The second turn's transaction blocks until the first commits. No deadlock because single writer. If the queue grows (e.g., user spamming turns), latency grows linearly; v0.1 has no backpressure mechanism.</li>
+</ul>
+<p><strong>COST:</strong> Adds a polling requirement for the caller to confirm ingest, or a webhook later. The single-writer thread limits throughput to ~100 turns/second on SQLite, which is sufficient for single-user.</p>
+<p><strong>RISK:</strong> If the writer thread crashes, the entire pipeline halts without alerting. A turn that produces extractor output but fails the DB transaction loses the evidence silently unless the caller retries with the idempotency key. The <code>experiences.processing_status</code> field must be set to <code>"pending"</code> on 202 and <code>"complete"</code> on successful transaction; the caller can query <code>GET /experiences/{id}</code> to confirm.</p>
+<hr>
+<h3>9. REPLAY PURITY</h3>
+<p><strong>AREA ·</strong> <code>replay(evidence, params)</code> must be pure. Ordering, clock skew, ties, and param storage break purity silently.</p>
+<p><strong>DECISION:</strong></p>
+<ul>
+<li><strong>Ordering guarantee:</strong> Within a session, evidence is ordered by <code>created_at</code>. Across sessions, sessions are ordered by <code>id</code> (auto-increment) in replay. The reducer processes evidence grouped by <code>(user_id, session_id)</code> ordered by <code>session.created_at</code> (using <code>experiences.created_at</code> for the session's first turn), then within session by <code>evidence.created_at</code>.</li>
+<li><strong>Tie-breaking within a session:</strong> If two evidence events have the same <code>created_at</code> (same transaction), tiebreak by <code>evidence.id</code> ascending.</li>
+<li><strong>Clock skew:</strong> <code>created_at</code> uses <code>datetime.utcnow()</code> from the writer thread (single clock). No NTP sync needed for single-user.</li>
+<li><strong>Param storage:</strong> <code>params</code> = <code>{extractor_version, taxonomy_version, scope_classifier_version, reducer_version, calibration_thresholds}</code>. These are stored in a <code>versions</code> config table or hardcoded in a <code>params.json</code> accompanying the replay. The replay function reads them as input arguments, not from mutable state.</li>
+<li><strong>Bit-identical replay:</strong> Requires (a) evidence rows unchanged, (b) same params, (c) same ordering function, (d) no external randomness (no model calls in reducer). The reducer as specified (state machine with deterministic immediate-activation gate) is pure.</li>
+<li><strong>Silent break:</strong> Adding a <code>created_at</code> default that uses <code>datetime.now()</code> per row in SQLAlchemy with millisecond precision → two rows from the same transaction get different timestamps → tiebreaking changes → replay diverges. Fix: use explicit timestamp assignment in the writer thread with <code>datetime.utcnow().replace(microsecond=0)</code> for all rows in one transaction.</li>
+</ul>
+<p><strong>COST:</strong> <code>replace(microsecond=0)</code> limits resolution to 1 second, which is fine for human-speed chat.</p>
+<p><strong>RISK:</strong> If someone later adds a "background re-derivation" that processes evidence async while new evidence arrives, the ordering between old and new evidence changes because sessions are no longer processed in strict insertion order. Replay purity requires a snapshot at a point in time; live re-derivation is not pure.</p>
+<hr>
+<h3>10. VERSION BUMPS</h3>
+<p><strong>AREA ·</strong> What does bumping <code>taxonomy_version</code> actually cost on 10k experiences?</p>
+<p><strong>DECISION:</strong></p>
+<ul>
+<li><strong>Cost:</strong> Re-running the extractor over 10k experiences. Each requires one model call to re-extract with the new taxonomy. At 10k × $0.001/call = ~$10 in API cost and ~33 minutes at 5 calls/sec. If the extractor model is self-hosted, cost is compute time only.</li>
+<li><strong>Mechanism:</strong> A migration script (an offline job), not a background task. The script:</li>
+</ul>
+<ol>
+<li>Reads all <code>experiences</code> rows <code>.where(processing_status == 'complete')</code>.</li>
+<li>For each, calls the new extractor, writes new <code>evidence</code> rows with <code>taxonomy_version</code> = new, <code>extractor_version</code> = current.</li>
+<li>Runs <code>replay(all_evidence, params)</code> to rebuild <code>preferences</code> with the new taxonomy_version.</li>
+<li>Old evidence rows are NOT deleted (versioned, append-only).</li>
+</ol>
+<ul>
+<li><strong>Scope classifier bump:</strong> Same pattern, but re-running only the scope classifier over existing evidence, not re-extracting.</li>
+</ul>
+<p><strong>COST:</strong> 10k is small enough for an offline script. At 100k, the migration takes ~5.5 hours; needs a progress bar and a checkpoint/resume mechanism to survive interruption.</p>
+<p><strong>RISK:</strong> While the migration runs, new experiences continue to arrive at the current version. The rebuilt projection is stale as soon as the migration finishes unless the migration also processes experiences created during the migration window. The script must record the max <code>experience_id</code> at start, then process all <code>id &lt;= max_id</code>, then re-process evidence from new experiences in a final pass.</p>
+<hr>
+<h3>11. OBSERVABILITY</h3>
+<p><strong>AREA ·</strong> What must be inspectable to debug an activation.</p>
+<p><strong>MINIMUM SURFACE:</strong></p>
+<ul>
+<li>For a given user turn: <code>GET /debug/turn/{experience_id}</code> returns:</li>
+</ul>
+<pre><code>
+  {
+    "experience": { "user_text": "...", "task_scope": "code_task" },
+    "extraction": { "event_type": "...", "source_class": "...", "durability_marker": "...", "first_person": true, "extractor_conf": 0.92, "key": "code_output_format", "value": "complete", "scope": "code_task" },
+    "immediate_activate_check": { "passed": true, "failing_gates": [] },
+    "reducer_decision": { "support_level": 2, "state": "active", "explanation": "immediate_activate" },
+    "hint_injected": { "rendered": "...", "precedence": 3 },
+    "preferences_before": [ {"key": "...", "support_level": 0}, ... ],
+    "preferences_after": [ {"key": "...", "support_level": 2}, ... ]
+  }
+</code></pre>
+<ul>
+<li><code>GET /debug/preferences/{user_id}</code> returns full projection with <code>last_evidence_at</code> and <code>support_level</code>.</li>
+</ul>
+<p><strong>COST:</strong> Adds a debug endpoint not for production use; must be gated behind <code>ENV=development</code> or a flag.</p>
+<p><strong>RISK:</strong> None if the debug surface is explicitly unstable and gated.</p>
+<hr>
+<h3>12. BUILD ORDER AND EFFORT</h3>
+<p><strong>REALISTIC SEQUENCING TO WORKING DEMO:</strong></p>
+<ol>
+<li><strong>Phase 0 + SQLite schema</strong> (simultaneously): Harness, FakeProvider, scenarios, checkers, plus DB models and idempotency. ~3 days. The harness can run against the FakeProvider without a real ASC backend, testing only the benchmark infrastructure.</li>
+<li><strong>Phase 1: Agent + provider + experiences table with single-writer thread.</strong> ~2 days. Demo: chat loop that logs raw turns to DB, retrievable via API.</li>
+<li><strong>Phase 2: Extractor integration.</strong> ~3 days. The extractor call, model selection, structured output parsing, Persian normalization, first-person regex. This is the highest-risk step because it introduces the first model dependency and the bilingual regex. <strong>MOST LIKELY TO BLOW SCHEDULE:</strong> Persian extractor accuracy on the immediate-activation path. If the cheap model cannot reliably extract <code>first_person</code>/<code>mood</code> for Persian, a fallback to "never immediate-activate for Persian" or "use a more expensive model" adds 2-5 days of iteration on prompts and error analysis.</li>
+<li><strong>Phase 3: Reducer + replay + retrieval + injection.</strong> ~2 days. Pure logic, testable against scripted evidence without model calls.</li>
+<li><strong>Phase 4: End-to-end benchmark run, parameter sweep, write-up.</strong> ~2 days.</li>
+</ol>
+<p><strong>Total:</strong> ~12 days of focused engineering. The Persian extractor performance on a cheap model is the 5-day blow-up risk. Mitigation: on day 1 of Phase 2, run 100 Persian examples through three model tiers and pick the cheapest that achieves ≥0.90 accuracy on <code>first_person</code> and <code>mood</code> for <code>user_direct</code> utterances.</p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۶ — پیاده‌سازی</span>
+  </div>
+  <div class="fa" dir="rtl">حمله به هر شش تصمیم، به‌علاوه‌ی یک حفره که هیچ‌کدام ندیده بودیم: تشخیص corrective_follow_up مستلزم طبقه‌بندی خروجی قبلی دستیار است — یعنی تشخیص‌دهنده‌ی فرمت یک جزء production است، نه ابزار تست.</div>
+  <div class="body"><p>Round 2 of the implementation teardown. The attached file is your own round-1 output. Six of your</p>
+<p>decisions are wrong, two contradict each other, and one hole neither of us named. Same output format</p>
+<p>(AREA / DECISION / COST / RISK). Concede in one line where I land; fight where I don't. 1500 words max.</p>
+<ol>
+<li>SYNC EXTRACTION IS THE WRONG DEFAULT — and you contradicted yourself.</li>
+</ol>
+<p>   You put the extractor synchronously before the model call, then admitted "if extractor latency</p>
+<p>   exceeds ~800ms users feel lag" and "runs every turn, no pre-filter". So every turn in a normal chat</p>
+<p>   pays a model call before the user sees anything, on a system whose whole point is to be invisible.</p>
+<p>   Learning here is retrospective: this turn's extraction is only needed before the NEXT turn.</p>
+<p>   And the current-turn case is already covered — precedence rule 2 means the model sees the user's</p>
+<p>   own instruction directly in the turn; ASC does not need to extract it to obey it.</p>
+<p>   My default: <code>before_turn()</code> = pure DB read, no model call, &lt;5ms. <code>after_turn()</code> = extraction +</p>
+<p>   reducer, executed on the background writer after the response is returned. Rebut or adopt.</p>
+<ol>
+<li>TRUSTING THE CALLER FOR SESSION IS NOT SHIPPABLE.</li>
+</ol>
+<p>   You flagged it yourself as a trust-boundary violation, then shipped it anyway. The entire precision</p>
+<p>   claim rests on "two independent sessions". A chat UI that mints a UUID per turn silently converts</p>
+<p>   ASC into last-write-wins — the exact arm it must beat.</p>
+<p>   My default: the reducer never trusts <code>session_id</code>. Dedup uses a server-side key: two evidence</p>
+<p>   events for the same tuple within an idle window (default 30 min, configurable) collapse to one,</p>
+<p>   regardless of client session id. <code>session_id</code> is kept for display only. Five lines of SQL, closes</p>
+<p>   the hole, and "independent session" becomes an honest operational definition.</p>
+<ol>
+<li>"NO PRE-FILTER BECAUSE A PRE-FILTER NEEDS CALIBRATION" IS A NON-SEQUITUR.</li>
+</ol>
+<p>   A recall-only pre-filter needs a measured miss rate, not calibration. Fire on: any durability</p>
+<p>   lexicon hit, any format-request cue, any correction cue. It may over-fire freely — precision is</p>
+<p>   the extractor's job. Expected hit rate 10-20% of turns, so ~5-10x cost reduction, and its recall</p>
+<p>   is measured on the same labeled fixture set you already require. Rebut or adopt.</p>
+<ol>
+<li>YOUR PERSIAN FALLBACK REOPENS THE GATE YOU CLOSED.</li>
+</ol>
+<p>   You wrote: first_person by regex, "else, model-judged with the extractor". The spec's whole point</p>
+<p>   is that the immediate-activation gate is rule-based so the model cannot talk its way past it.</p>
+<p>   My default: regex-only on the immediate path. If the regex cannot confirm first_person, the</p>
+<p>   statement simply does not immediate-activate — it lands at support_level 1 and needs a second</p>
+<p>   occurrence. Degrades gracefully, keeps the gate auditable. Your interrogative override is adopted.</p>
+<ol>
+<li>YOUR CALIBRATION FALLBACK KILLS YOUR OWN DEMO.</li>
+</ol>
+<p>   Threshold 1.0 means every scope is <code>unknown</code>; §7 says <code>unknown</code> is never injected; every headline</p>
+<p>   scenario (<code>code_task</code>, <code>writing_task</code>) is scoped. Your v0.1 therefore activates nothing and the</p>
+<p>   demo shows nothing. That is not conservative, it is broken.</p>
+<p>   My default: no learned scope classifier in v0.1 at all. Scope resolution order:</p>
+<p>   caller-supplied <code>task_scope</code> → a small deterministic keyword rule set → <code>unknown</code>.</p>
+<p>   The 200 labeled examples become the TEST SET for that rule set, not training data for a classifier.</p>
+<p>   Ships, is auditable, demo works. The learned classifier is v0.2 with real data.</p>
+<ol>
+<li>AMBIGUITY MUST NOT RESOLVE TOWARD AN ARM.</li>
+</ol>
+<p>   "Tiebreak in favor of DIFF_MARKER" bakes a direction into the measurement. Ambiguous output is a</p>
+<p>   third outcome: <code>unclassifiable</code>, reported as a coverage number and excluded from the accuracy</p>
+<p>   denominator. A benchmark that resolves its own ambiguity in a fixed direction is not a benchmark.</p>
+<ol>
+<li>YOU CONTRADICTED YOURSELF ON THE API.</li>
+</ol>
+<p>   §1 says ASC is a synchronous middleware function in the host process. §8 says the route returns</p>
+<p>   202 Accepted and the caller polls <code>GET /experiences/{id}</code>. A library has no 202 and nothing to</p>
+<p>   poll. Pick one and make §8 consistent with it. If it is a library, I also need something you did</p>
+<p>   not mention: a <code>flush()</code> / <code>drain()</code> that blocks until the writer queue is empty, or the harness</p>
+<p>   cannot be deterministic.</p>
+<ol>
+<li>TIE-BREAKING BY TRUNCATED TIMESTAMPS IS A HACK.</li>
+</ol>
+<p>   <code>replace(microsecond=0)</code> to stabilise ordering is fragile and couples replay to the clock.</p>
+<p>   Use a monotonic <code>seq INTEGER PRIMARY KEY AUTOINCREMENT</code> on evidence and order by <code>seq</code> alone.</p>
+<p>   No clock dependence, no tie-breaking rule, no session-ordering derivation. Rebut or adopt.</p>
+<ol>
+<li>THE HOLE NEITHER OF US NAMED: detecting <code>corrective_follow_up</code> requires classifying the PREVIOUS</li>
+</ol>
+<p>   ASSISTANT OUTPUT's form. "User asked for a different form right after receiving one" is only</p>
+<p>   computable if something decided what form the assistant produced. That makes the FULL_FILE /</p>
+<p>   DIFF detector a PRODUCTION component, not test scaffolding — the same code path, running live,</p>
+<p>   with its ambiguity rate now affecting learning rather than only measurement.</p>
+<p>   Work out the consequences: where it runs, what it does on <code>unclassifiable</code>, whether an</p>
+<p>   unclassifiable previous turn may produce evidence at all, and what this does to the assumption</p>
+<p>   that the checkers are cheap test-only code.</p>
+<ol>
+<li>Given all of the above, re-do BUILD ORDER AND EFFORT. State the new top schedule risk — I do not</li>
+</ol>
+<p>    think it is still the Persian extractor once the gate is regex-only and failure degrades to</p>
+<p>    support 1.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/deepseek/deepseek-v4-pro</span>
+    <span class="round">راند ۶ — پیاده‌سازی</span>
+  </div>
+  <div class="fa" dir="rtl">هر هشت مورد را پذیرفت و پیامدهای حفره‌ی نهم را استخراج کرد. ترتیب ساخت بازچینی شد و ریسک اصلی زمان‌بندی از «دقت استخراج‌گر فارسی» به «قواعد قطعی scope» منتقل شد.</div>
+  <div class="body"><p>Concede on #1, #2, #3, #4, #5, #6, #7, #8; address #9 with production‑grade handling; re‑sequence build accordingly.</p>
+<hr>
+<p><strong>1. SYNC EXTRACTION</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: extraction timing  </p>
+<p>DECISION: <code>before_turn()</code> is a pure DB read of the current snapshot (&lt;5 ms). Extractor + reducer run <strong>after</strong> the assistant response is returned, on a dedicated background writer thread. The user sees the assistant reply immediately; preference injection for the <em>next</em> turn uses the updated projection.  </p>
+<p>COST: no latency added to user‑visible turn; requires a thread‑safe read path for preferences that may be a few seconds stale in the after‑turn window.  </p>
+<p>RISK: a rapid second turn arriving before background write commits uses the previous projection – acceptable for single‑user, single‑worker.</p>
+<hr>
+<p><strong>2. TRUSTING THE CALLER</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: session deduplication  </p>
+<p>DECISION: the reducer never trusts <code>session_id</code>. Instead, two evidence events for the same <code>(user_id, key, value, scope)</code> within a configurable idle window (default 30 min, set by wall‑clock of the first event) collapse to one. <code>session_id</code> is kept only for debugging.  </p>
+<p>COST: an extra DB query per non‑duplicate evidence to check window boundary; trivial in SQLite.  </p>
+<p>RISK: a genuine re‑expression of the same preference within the window is suppressed; this trades false‑negative for guaranteed independence of true sessions.</p>
+<hr>
+<p><strong>3. NO PRE‑FILTER</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: pre‑filter  </p>
+<p>DECISION: a recall‑only pre‑filter runs on every user turn (and assistant output when checking for corrective follow‑up). It fires on any durability‑lexicon hit, format‑request cue (e.g. “complete file”, “diff”), or correction cue (“wrong format”). Its miss rate is measured on the labeled fixture set, not calibrated. Only turns that pass the filter reach the extractor, reducing model calls 5–10×.  </p>
+<p>COST: pre‑filter adds a few regex operations (&lt;1 ms).  </p>
+<p>RISK: if a novel preference form slips through the filter, it is never extracted → silent failure; this is mitigated by periodic measurement against the fixture set and a quick‑ramp recrawl if detected.</p>
+<hr>
+<p><strong>4. PERSIAN FALLBACK</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: immediate‑activation gate for first‑person  </p>
+<p>DECISION: regex‑only on the immediate path. If the regex cannot confirm first‑person, the signal <strong>cannot</strong> immediate‑activate; it falls to <code>support_level=1</code> and needs a second occurrence. No model call ever participates in the gate.  </p>
+<p>COST: graceful degradation – some true first‑person statements take an extra session before they activate.  </p>
+<p>RISK: none worse than the existing false‑positive protection; the gate remains auditable and deterministic.</p>
+<hr>
+<p><strong>5. CALIBRATION FALLBACK</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: scope classification in v0.1  </p>
+<p>DECISION: no learned scope classifier in v0.1. Scope resolution order: caller‑supplied <code>task_scope</code> → a small deterministic keyword rule set (bilingual) → <code>unknown</code>. The 200 labeled examples become a test suite for the rule set, not training data.  </p>
+<p>COST: rule set must be manually crafted; <code>unknown</code> activates nothing, so recall for scoped preferences is zero until rules fire.  </p>
+<p>RISK: headline scenarios become gated on the rule set passing them; now the rule set must cover <code>code_task</code> and <code>writing_task</code> before the demo works – this is the new immediate obstacle.</p>
+<hr>
+<p><strong>6. AMBIGUITY RESOLUTION</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: benchmark checker output  </p>
+<p>DECISION: a third outcome <code>unclassifiable</code> is added. Ambiguous assistant output (e.g. a complete file inside a diff fence) is reported as <code>unclassifiable</code> and excluded from the accuracy denominator, as well as counted toward coverage.  </p>
+<p>COST: changes benchmark reporting logic.  </p>
+<p>RISK: if <code>unclassifiable%</code> becomes large, the benchmark loses sensitivity; the rule set for FULL_FILE/DIFF is now under continuous measurement, not just an implementation detail.</p>
+<hr>
+<p><strong>7. API CONTRADICTION</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: integration shape &amp; harness  </p>
+<p>DECISION: ASC is a library. All §8 references to 202/polling are removed. The library provides <code>flush()</code> (block until writer queue empty) and <code>drain()</code> (wait for pending writes after last turn), making the harness deterministic.  </p>
+<p>COST: <code>flush()</code> must be exposed; the bench harness calls it after every scenario.  </p>
+<p>RISK: if the integrating developer forgets <code>flush()</code>, tests may race.</p>
+<hr>
+<p><strong>8. TIE‑BREAKING BY TIMESTAMPS</strong>  </p>
+<p><em>Concede.</em>  </p>
+<p>AREA: replay purity  </p>
+<p>DECISION: <code>evidence</code> table grows an <code>INTEGER PRIMARY KEY AUTOINCREMENT seq</code> column. All ordering (session, within‑session, tie‑breaking) uses <code>seq</code> only. <code>created_at</code> becomes informational.  </p>
+<p>COST: schema migration; no functional cost.  </p>
+<p>RISK: none; replay is now clock‑independent.</p>
+<hr>
+<p><strong>9. THE HOLE: CORRECTIVE‑FOLLOW‑UP DETECTION</strong>  </p>
+<p>AREA: producing <code>corrective_follow_up</code> requires classifying the previous assistant output’s form.  </p>
+<p>DECISION: The form‑classifier (FULL_FILE/DIFF) is <strong>a production component</strong> that runs inside the background writer during <code>after_turn()</code>. It receives the assistant output, applies the same logic as the checkers, and emits a form‑classification evidence event if a marker is detected.  </p>
+<ul>
+<li>On <code>unclassifiable</code> → no marker evidence emitted; no corrective‑follow‑up will ever fire.  </li>
+<li>Consequence: a real system may miss some corrections, but that is a measured recall gap, not a silent failure.  </li>
+<li>The assumption that checkers are cheap test‑only code is <strong>voided</strong>; the production component must be fast (&lt;5 ms) and deterministic. That’s feasible with string rules.  </li>
+</ul>
+<p>COST: adds a blocking post‑response task that must complete before the writer thread finishes. It runs even when no correction is needed.  </p>
+<p>RISK: if the form classifier’s logic diverges from the benchmark checker’s logic, production corrective‑follow‑up recall and benchmark‑reported recall will differ; both must be documented and kept in sync.</p>
+<hr>
+<p><strong>10. BUILD ORDER AND EFFORT (RE‑SEQUENCED)</strong>  </p>
+<p>With all concessions applied, the revised phasing:</p>
+<ol>
+<li><strong>Harness &amp; SQLite schema</strong> – includes pre‑filter, rule‑based scope rules, checker infrastructure. (2 d)  </li>
+<li><strong>Library core + writer thread</strong> – <code>log_experience</code> (raw insert, idempotency), <code>get_hint</code> (DB read), background writer skeleton, <code>flush()</code>/<code>drain()</code>. (2 d)  </li>
+<li><strong>Extractor integration</strong> – cheap model, structured output, Persian normalization, first‑person regex (model never used for gate), pre‑filter wiring. (2 d, down from 3 because no model fallback on gate).  </li>
+<li><strong>Reducer + replay + injection</strong> – now purely deterministic, ordered by <code>seq</code>. (2 d)  </li>
+<li><strong>Corrective‑follow‑up production form classifier</strong> – build and wire into background writer. (1 d)  </li>
+<li><strong>End‑to‑end benchmark, scope‑rule tuning, write‑up</strong> – includes test of unclassifiable reporting. (3 d, up from 2 because we must iterate on scope rules to pass code/writing tasks).  </li>
+</ol>
+<p><strong>Total:</strong> 12 days roughly unchanged, but structure more sound.  </p>
+<p><strong>New top schedule risk:</strong> the deterministic <strong>rule‑based scope classifier</strong> must fire correctly for <code>code_task</code> and <code>writing_task</code> in Persian+English, or the demo’s headline scenarios fail. That ruleset is now the gating item, not the Persian extractor accuracy. Mitigation: build the rules on day 0 alongside the harness and validate against the 200‑example set before any other code.</p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۷ — بازبینی مستقل</span>
+  </div>
+  <div class="fa" dir="rtl">برای جلوگیری از هم‌رأیی، مدل سومی از خانواده‌ی دیگر آوردم: «دو مهندس روی این‌ها به توافق رسیده‌اند؛ توافق پس از بحث نشانه‌ی هشدار است، نه تأیید.» هفت شکاف مشکوکِ خودم را هم دادم.</div>
+  <div class="body"><p>You are a third engineer brought in to red-team a set of implementation decisions that two other</p>
+<p>engineers already converged on. Convergence after an argument is a warning sign, not a validation.</p>
+<p>The attached files are their round-1 teardown and the round-2 result where one conceded everything.</p>
+<p>Do not summarize. Do not agree politely. Find what is still broken.</p>
+<p>I already suspect these seven. Confirm, refute, or fix each, then add what none of us saw.</p>
+<p>A. THE IDLE WINDOW IS NOT A SESSION BOUNDARY. They replaced "trust the caller's session_id" with</p>
+<p>   "two events for the same tuple within a 30-minute window collapse to one". Elapsed time is not a</p>
+<p>   conversation boundary. In one continuous three-hour session a user can state the same preference</p>
+<p>   at 10:00 and 10:40 and get two independent increments — reaching activation inside a single</p>
+<p>   conversation, which is exactly what "two independent sessions" was meant to prevent. Is the fix</p>
+<p>   an idle GAP (no activity for N minutes ⇒ new activity-session) rather than an elapsed window?</p>
+<p>   Specify the exact rule and where the timestamp comes from.</p>
+<p>B. THE SCOPE RULE SET MAY NOT FIRE ON THE DEMO ITSELF. v0.1 resolves scope as: caller-supplied →</p>
+<p>   deterministic keyword rules → unknown. The headline scenario's second turn is "fix the login bug"</p>
+<p>   — no file path, no language name, no code fence. If the rules abstain, scope is unknown, nothing</p>
+<p>   is injected, and the demo fails. What does the rule set actually key on? Is the demo secretly</p>
+<p>   depending on caller-supplied scope, and if so is the benchmark then testing anything real?</p>
+<p>C. STREAMING. <code>after_turn()</code> needs the complete assistant text, and real agents stream. Who buffers,</p>
+<p>   what happens on a cancelled or partial stream, and does a partial response produce evidence?</p>
+<p>D. FAILURE ISOLATION. Neither of them said what happens when ASC itself throws — bad JSON, locked</p>
+<p>   DB, extractor timeout, disk full. A memory layer must never be able to break the host chat.</p>
+<p>   Specify the exact policy and where the boundary sits.</p>
+<p>E. THREAD AND CONNECTION MODEL. <code>before_turn()</code> reads from the host's thread while a background</p>
+<p>   writer thread writes. SQLite in WAL, sync SQLAlchemy, an async host. Connections per thread,</p>
+<p>   busy_timeout, what a reader sees mid-transaction, and what happens if the host is multi-process.</p>
+<p>F. TEST STRATEGY BELOW THE BENCHMARK. The benchmark is specified; unit-level testing is not. What is</p>
+<p>   the fixture format for reducer tests, what is a golden replay test, and what stops the reducer and</p>
+<p>   the harness from being tested by the same code and agreeing with each other by construction?</p>
+<p>G. CONFIG AND PARAMS. Thresholds, lexicons, keyword rules and version numbers are all tunable and all</p>
+<p>   load-bearing for reproducibility. Where do they live, how are they pinned to a benchmark run, and</p>
+<p>   what stops a local edit from silently invalidating a published result?</p>
+<p>Then: THE THREE THINGS THEY BOTH MISSED. Rank by how expensive they are to discover late.</p>
+<p>Format: for each item — VERDICT (confirmed / refuted / partially) · FIX (concrete) · WHY IT MATTERS</p>
+<p>(one line). No preamble, no flattery, no restating the inputs. English. 1400 words max.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/openai/gpt-5.6-luna</span>
+    <span class="round">راند ۷ — بازبینی مستقل</span>
+  </div>
+  <div class="fa" dir="rtl">هر هفت مورد تأیید شد و سه مورد جدید اضافه: ترتیب اتمام پردازش پس‌زمینه با ترتیب مکالمه یکی نیست؛ کلید idempotency ساخته‌شده از timestamp با هر retry رکورد تکراری می‌سازد؛ و کنترل‌های حریم خصوصی و تزریق باید قبل از انباشت داده تعریف شوند.</div>
+  <div class="body"><h2>A</h2>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> Replace elapsed-window deduplication with an activity-session rule. For each <code>(user_id, conversation_partition)</code>, assign an activity session to each turn. A turn belongs to the current activity session if <code>turn.received_at - previous_turn.received_at &lt;= idle_gap</code>; otherwise it starts a new activity session. Use a fixed default such as 30 minutes, configurable and recorded in run parameters. <code>received_at</code> must be assigned by ASC at ingress using the server’s monotonic ordering/sequence, not model time, client timestamps, or extraction completion time. Deduplicate <code>(user, activity_session_id, key, value, scope)</code>; retain the caller’s <code>session_id</code> only as metadata. Concurrent conversations require an explicit partition key; otherwise ASC cannot infer boundaries safely.  </p>
+<p><strong>WHY IT MATTERS ·</strong> A 30-minute elapsed window merges or splits events based on arbitrary arrival time and allows repeated statements in one continuous conversation to count as independent sessions.</p>
+<h2>B</h2>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> The rule set must explicitly define its input and coverage. <code>task_scope</code> from the caller wins. Without it, inspect the current user turn plus a bounded recent task context, using versioned bilingual rules. For the demo, <code>fix</code>, <code>debug</code>, <code>bug</code>, <code>login</code>, <code>authentication</code>, <code>code</code>, <code>function</code>, <code>file</code>, <code>compile</code>, and similar terms can map to <code>code_task</code>; <code>essay</code>, <code>rewrite</code>, <code>paragraph</code>, <code>style</code>, and similar terms can map to <code>writing_task</code>. Rules must emit <code>unknown</code> on ambiguity and must be tested independently with positive, negative, and adversarial examples. “Fix the login bug” must be an explicit fixture proving that the rule fires, or the benchmark must supply <code>task_scope=code_task</code>. Do not claim the headline scenario tests scope inference if it actually passes scope from the caller.  </p>
+<p><strong>WHY IT MATTERS ·</strong> If the phrase maps to <code>unknown</code>, no preference is injected and the headline demo is invalid; if the caller supplies scope, the benchmark is testing integration plumbing rather than scope resolution.</p>
+<h2>C</h2>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> The provider adapter owns a per-turn stream buffer. <code>before_turn()</code> records a stable <code>turn_id</code>; every streamed assistant chunk is appended in order; <code>after_turn()</code> runs only after a normal stream completion and receives the assembled text. On cancellation, timeout, transport failure, or truncated stream, discard the partial text for preference evidence and mark the turn <code>assistant_status=incomplete</code> with the failure reason. A partial response must never create corrective-follow-up evidence. If product requirements later need partial evidence, it requires a separate explicitly typed event with a minimum completeness policy. Make <code>after_turn()</code> idempotent on <code>turn_id</code>.  </p>
+<p><strong>WHY IT MATTERS ·</strong> Treating a cancelled response as complete can manufacture preferences from text the user never received and can create false corrective signals.</p>
+<h2>D</h2>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> Put the entire ASC call behind a fail-open boundary in the host adapter. Read failures return no hint; extraction, parsing, reducer, queue, and persistence failures are caught per turn, rolled back, logged with a correlation ID, and reported through metrics/health state without escaping into the chat request. The host response must already be independent of post-turn processing. Persist <code>processing_status=failed</code> and the failure class when possible; never mark a failed transaction complete. Queue-full behavior must be bounded: drop ASC work and record <code>dropped</code>, rather than blocking or breaking the host. <code>flush()</code> may raise in tests and administrative tooling, but not from the normal user-turn path.  </p>
+<p><strong>WHY IT MATTERS ·</strong> A memory feature that converts a locked database, malformed extractor response, or disk-full condition into a failed chat request violates the integration contract.</p>
+<h2>E</h2>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> <code>check_same_thread=False</code> is not a concurrency design. Use one SQLAlchemy engine/connection per thread, a dedicated writer connection, and separate reader connections; never share a live connection across threads. Enable WAL, <code>busy_timeout</code>, foreign keys, and an explicit transaction mode. Readers get a consistent snapshot at statement/transaction start and may see the projection before or after a writer commit, never a half-transaction. The writer must commit experience, evidence, and projection atomically. Async hosts must call sync ASC operations through a bounded executor or use an async driver, not block the event loop. Declare SQLite v0.1 single-process only; reject or loudly disable multi-process deployment. Multi-process production requires PostgreSQL or one external writer service.  </p>
+<p><strong>WHY IT MATTERS ·</strong> WAL does not solve shared-connection misuse, process-level writer races, queue failure, or stale-read semantics, and SQLite’s locks become deployment failures when a second worker appears.</p>
+<h2>F</h2>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> Define versioned, hand-authored fixtures as records containing input text, normalized text, expected extractor signal, expected gate results, expected reducer state, and expected emitted hint. Reducer tests consume evidence fixtures, not text, and assert every transition, duplicate, contradiction, scope mismatch, idle boundary, and replay result. Golden replay fixtures should contain an append-only evidence log plus a separately authored expected projection and activation trace. The golden expected output must not be generated by the reducer or harness. Add mutation tests that deliberately alter ordering, thresholds, gate logic, and deduplication, and require test failure. Run a separate real-extractor suite and report extractor-versus-reducer deltas.  </p>
+<p><strong>WHY IT MATTERS ·</strong> A harness that uses the implementation to generate its expected answers can certify a consistently wrong reducer.</p>
+<h2>G</h2>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> Store all load-bearing parameters in a version-controlled, immutable configuration manifest: reducer version, taxonomy, extractor/model/version, lexicons, normalization version, scope rules, thresholds, idle gap, checker version, and prompt templates. At benchmark start, copy the manifest into a run record and store its content hash, repository commit, dependency lockfile, model identifier, and fixture-set hash. Results must reference that run ID. Refuse benchmark publication when the working tree or configuration is dirty, and make local edits require an explicit new version/run. Production evidence must retain the parameter versions used to create it.  </p>
+<p><strong>WHY IT MATTERS ·</strong> A published score is not reproducible if a local lexicon edit or threshold change silently changes activation behavior.</p>
+<h2>The three things both missed</h2>
+<h3>1. Out-of-order background completion</h3>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> Assign a monotonic <code>turn_seq</code> at ingress before any background work. Evidence carries that sequence, and the reducer processes only an ordered stream. Either use a per-user reorder buffer with a bounded wait and explicit gap failure, or append evidence immediately but rebuild from <code>turn_seq</code> rather than completion order. A late turn must not activate a preference before an earlier turn that should have supplied the first occurrence. <code>flush()</code> must wait for all submitted sequences, not merely an empty worker queue.  </p>
+<p><strong>WHY IT MATTERS ·</strong> Background extraction completion order is not conversation order; rapid turns can produce different support levels, activation, and replay results from the same dialogue.</p>
+<h3>2. Idempotency and crash recovery are still incorrect</h3>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> Never derive an idempotency key from <code>utc_timestamp</code>; retries then create different keys. Require a caller-provided stable <code>turn_id</code>, or generate one once at the host boundary and persist it before dispatch. Enforce a unique constraint on <code>(tenant/user, turn_id, event_kind)</code> and make after-turn processing an outbox job with retry state. A crash after provider success but before ASC commit must be recoverable by replaying the same turn ID; a crash after commit must be harmless.  </p>
+<p><strong>WHY IT MATTERS ·</strong> Network retries and process crashes are normal, and duplicate evidence can manufacture the “independent” support needed for activation.</p>
+<h3>3. Privacy, tenant isolation, and prompt-injection controls</h3>
+<p><strong>VERDICT · confirmed</strong>  </p>
+<p><strong>FIX ·</strong> Treat raw user text, assistant text, extracted values, and rendered hints as sensitive data. Define retention, deletion, export, encryption, access control, and redaction policies before deployment. Scope every query and unique key by tenant/user identity; add authorization tests proving one user cannot retrieve another’s debug data or preferences. Render stored preferences as untrusted data with delimiters and explicit non-instructional framing; never allow a user-derived preference to override system/developer instructions. Audit debug endpoints and disable raw-text exposure by default.  </p>
+<p><strong>WHY IT MATTERS ·</strong> A memory layer persists and reinjects attacker-controlled text; discovering cross-user leakage or prompt injection after production data accumulates is an architectural, not patch-level, failure.</p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۸ — پس از کشف PreAct</span>
+  </div>
+  <div class="fa" dir="rtl">ایده‌ی اصلی کاربر معلوم شد چیز دیگری بوده: عادت‌شدن، نه حافظه. جستجو نشان داد PreAct (ژوئن ۲۰۲۶) دقیقاً همان را منتشر کرده. سؤال را عوض کردم: با وجود PreAct و PANDO چیزی باقی مانده یا باید رهایش کرد؟ عمداً اجازه دادم بگویند «رهایش کن».</div>
+  <div class="body"><p>A developer had an idea, reasoning from an everyday observation: riding a motorcycle used to consume</p>
+<p>his whole attention; now it costs nothing, so he can think and argue with traffic at the same time.</p>
+<p>The skill got compiled into something automatic. He wanted to give an LLM agent the same property:</p>
+<p>a task that today costs many reasoning steps and tool calls should, after enough repetitions, become</p>
+<p>a cheap direct action — with quality held constant.</p>
+<p>He was about to spend three months building it. A literature check found the following, both verified</p>
+<p>as real arXiv papers today.</p>
+<p>--- PreAct (arXiv 2606.17929, submitted 16 June 2026, Bojie Li) ---</p>
+<p>"Computer-Using Agents that Get Faster on Repeated Tasks. Computer-using agents drive real software</p>
+<p>through the screen -- clicking and typing -- but they solve every task from scratch: asked to repeat a</p>
+<p>task, an agent re-reads the screen, re-reasons every tap, and pays the full cost again. We present</p>
+<p>PreAct, which lets such an agent get faster on tasks it has done before. The first time it succeeds,</p>
+<p>PreAct compiles the run into a small state-machine program - states that check the screen, transitions</p>
+<p>that act - and on later runs replays it directly instead of invoking the agent, 8.5-13x faster, with no</p>
+<p>per-step language-model calls. Replay is not blind: at each step PreAct checks that the screen matches</p>
+<p>what the program expects before acting, and hands control back to the agent the moment something is</p>
+<p>off. A freshly compiled program enters the store only if, re-run from a clean state, an independent</p>
+<p>evaluator confirms it solved the task. Across a mobile, a desktop and a web benchmark, this store-time</p>
+<p>check separates repeated runs that improve from ones that degrade as faulty programs accumulate."</p>
+<p>--- PANDO (arXiv 2605.24785, submitted 24 May 2026) ---</p>
+<p>"Efficient Multimodal AI Agents via Online Skill Distillation. Can a web agent become more efficient as</p>
+<p>it accumulates experience, rather than more expensive? We analyze VisualWebArena trajectories and</p>
+<p>identify repeat-action loops, hidden discovery costs, and low prompt-cache reuse. PANDO is a</p>
+<p>single-rollout online skill-distillation framework with a structured Skill Library, progress</p>
+<p>reflection, confidence-based skill demotion, hierarchical routing, visual compression and cache-aware</p>
+<p>prompting. 58.3% success on 910 VisualWebArena tasks vs SGV 54.0% and WALT 45.2%, with 58% fewer</p>
+<p>tokens than SGV. We introduce three trajectory-level efficiency metrics: Action Repetition Rate, Step</p>
+<p>Overhead Ratio, Prompt Cache Utilization."</p>
+<p>Also in the space: Agent Workflow Memory (2409.07429), SkillWeaver (2504.07079), LEGOMem (2510.04851),</p>
+<p>Hierarchical Procedural Memory (2512.18950), sleep-time compute (2504.13171), Voyager (2305.16291),</p>
+<p>and ACT-R production compilation from the cognitive-architecture literature.</p>
+<p>Your job is to answer one question with no kindness and no encouragement:</p>
+<p><strong>Is there a defensible remaining contribution here, or should this developer drop the idea?</strong></p>
+<p>Argue it out concretely:</p>
+<ol>
+<li>What EXACTLY does PreAct not cover? Be specific about the domain assumption. Its states "check the</li>
+</ol>
+<p>   screen" — what happens to that abstraction for a coding agent, an API/tool agent, a research agent</p>
+<p>   where there is no screen and no observable state to verify against?</p>
+<ol>
+<li>PreAct compiles from a SINGLE first success. Is compiling from accumulated repetitions instead of</li>
+</ol>
+<p>   one success a real contribution or a footnote? What would it buy, concretely?</p>
+<ol>
+<li>PANDO introduces efficiency metrics but they are VisualWebArena-flavoured and part of a framework</li>
+</ol>
+<p>   whose gains are partly prompt-cache engineering. Is there still a benchmark-shaped gap, or is that</p>
+<p>   wishful thinking?</p>
+<ol>
+<li>Is "provider-agnostic library rather than research prototype" a real contribution in this field, or</li>
+</ol>
+<p>   is it the thing everyone says when their idea has been published by someone else?</p>
+<ol>
+<li>If you conclude there IS something left, state it as one sentence someone could put at the top of a</li>
+</ol>
+<p>   README, and say honestly how big it is: a paper, a useful tool, or a weekend project.</p>
+<ol>
+<li>If you conclude there is NOT, say so plainly and say what the developer should do with three months</li>
+</ol>
+<p>   instead, given that they are clearly capable of deriving a June-2026 research direction unaided</p>
+<p>   while riding a motorcycle.</p>
+<p>No preamble. No flattery. No "this is a great question". English. 1100 words max.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/openai/gpt-5.6-luna</span>
+    <span class="round">راند ۸ — پس از کشف PreAct</span>
+  </div>
+  <div class="fa" dir="rtl">رأی: نسخه‌ی فعلی را رها کن. تنها چیزی که زنده می‌ماند، ساخت verifier برای محیط‌های بدون صفحه است — و provider-agnostic بودن اصلاً مشارکت علمی نیست، بسته‌بندی است.</div>
+  <div class="body"><ol>
+<li><strong>What PreAct does not cover</strong></li>
+</ol>
+<p>PreAct appears to assume a computer-using agent with a persistent, visually inspectable environment. Its abstraction is essentially:</p>
+<p>\[</p>
+<p>\text{observation from screen} \rightarrow \text{action} \rightarrow \text{screen predicate}</p>
+<p>\]</p>
+<p>That is a meaningful restriction.</p>
+<p>For a coding agent, the relevant state is not “what is on the screen.” It may be:</p>
+<ul>
+<li>repository contents and uncommitted changes;</li>
+<li>branch and commit identity;</li>
+<li>dependency lockfiles;</li>
+<li>compiler, test, and linter results;</li>
+<li>running processes and ports;</li>
+<li>database schema and migrations;</li>
+<li>external service state;</li>
+<li>hidden evaluation tests.</li>
+</ul>
+<p>Some of this is observable, but only through tools, and it is not naturally a sequence of screen predicates. A robust replay system needs explicit preconditions and postconditions such as “the repository is at commit X,” “test suite Y passes,” or “migration Z has not already been applied.” It also needs to handle partial completion and side effects. A failed <code>git push</code>, an already-applied migration, or a changed dependency can invalidate a replay without producing a visually obvious anomaly.</p>
+<p>For an API/tool agent, the state may be distributed, latent, nondeterministic, or expensive to query. Responses can change because of authorization, rate limits, time, random assignment, mutable records, or provider behavior. “Check the screen before acting” becomes “define a safe and sufficiently informative state predicate over tool observations.” That is a substantially harder problem, not a rename.</p>
+<p>For a research agent, the problem is worse. The relevant state includes the current literature, unresolved claims, source reliability, and whether a result is still true. There may be no stable precondition that makes replay valid. A cached sequence that worked last month can now produce a false literature review. Verification is not merely state matching; it requires semantic validation, provenance, and freshness checks.</p>
+<p>So there is a real domain gap: <strong>general tool-using and knowledge agents with nonvisual, partially observable, changing state</strong>. But “PreAct is screen-based” is not by itself a contribution. You need a formal replacement for screen predicates, a replay-safety mechanism, and evidence that it works.</p>
+<ol>
+<li><strong>Does accumulated repetition matter?</strong></li>
+</ol>
+<p>Potentially, but “compile from multiple runs instead of one” is not automatically research.</p>
+<p>A single successful trajectory is brittle. Multiple executions can provide:</p>
+<ul>
+<li>invariant preconditions and postconditions;</li>
+<li>alternative action paths for different initial states;</li>
+<li>identification of unnecessary steps;</li>
+<li>failure probabilities for individual transitions;</li>
+<li>recovery branches;</li>
+<li>evidence that a purported skill is stable rather than accidental;</li>
+<li>a way to distinguish task identity from incidental environmental details.</li>
+</ul>
+<p>For example, five successful coding trajectories might reveal that the essential skill is “run the formatter, inspect the diff, run targeted tests, then commit,” while the exact file ordering and tool output are incidental. They might also expose two valid strategies depending on whether the branch already contains a partial fix.</p>
+<p>That is useful. It becomes a paper only if you provide an actual algorithm—trajectory clustering, invariant inference, branch synthesis, confidence updates, demotion or invalidation rules—and show that it improves a meaningful quality/cost frontier under distribution shift. “Store all previous traces and retrieve the closest one” is a footnote. “Infer a verified reusable program with recovery behavior from multiple noisy executions” is a plausible research problem.</p>
+<p>PreAct’s first-success compilation also does not mean it ignores reliability. Its clean-state rerun and independent evaluator are already addressing the obvious failure mode. Your work would have to show that multi-run synthesis materially beats that design, not merely that more data can help.</p>
+<ol>
+<li><strong>Is there a benchmark gap?</strong></li>
+</ol>
+<p>There is probably a gap, but not the one implied by PANDO’s metrics.</p>
+<p>PANDO has already covered online skill distillation, hierarchical skill storage, confidence management, routing, and efficiency measurement in a web-agent setting. Its metrics are specialized, and token savings are partly entangled with prompt caching and visual compression. That leaves room for a benchmark, but not for claiming that “we introduce efficiency metrics” is novel in the abstract.</p>
+<p>A worthwhile benchmark would measure repeated-task competence across:</p>
+<ul>
+<li>web UI tasks;</li>
+<li>shell and coding tasks;</li>
+<li>structured APIs;</li>
+<li>database or SaaS workflows;</li>
+<li>research/tool-use tasks.</li>
+</ul>
+<p>It would vary the initial state, inject UI/API changes, alter data values, introduce partial completion, and include irreversible side effects. It would report:</p>
+<ul>
+<li>total model/tool cost;</li>
+<li>latency;</li>
+<li>success and correctness;</li>
+<li>recovery rate after state drift;</li>
+<li>catastrophic side-effect rate;</li>
+<li>verification cost;</li>
+<li>skill storage and maintenance cost;</li>
+<li>performance over repeated executions;</li>
+<li>degradation under task and environment changes.</li>
+</ul>
+<p>The key metric is not “fewer tokens.” It is something like <strong>verified cost at fixed quality under repeated and shifted executions</strong>. Without that, prompt caching can win while the agent becomes less reliable, and replay can look efficient because failures are omitted.</p>
+<p>This is a benchmark-shaped opportunity. It is not evidence that the original idea is unclaimed. PANDO makes the generic efficiency story substantially less novel.</p>
+<ol>
+<li><strong>Is provider agnosticism a contribution?</strong></li>
+</ol>
+<p>No.</p>
+<p>“Works with any model/provider” is an engineering property. It becomes a research contribution only if the abstraction required to achieve it exposes a genuinely new, technically difficult interface—for example, a provider-independent execution semantics for actions, observations, verification, rollback, and uncertainty.</p>
+<p>A library that wraps OpenAI, Anthropic, and local models behind the same adapter is not a paper. It may be useful software, but the field is full of such claims. “We are not tied to one browser benchmark” is also not enough. Generality has to be demonstrated through a problem that changes materially across domains.</p>
+<ol>
+<li><strong>The only defensible README sentence</strong></li>
+</ol>
+<p>&gt; <strong>A provider-independent skill compiler for tool-using agents that infers verified preconditions, postconditions, and recovery branches from multiple executions, then safely replays skills under state drift with model fallback.</strong></p>
+<p>That is a real direction. Its size is <strong>a paper if</strong> you build the semantics, compilation algorithm, verification protocol, and cross-domain evaluation. Without those, it is a <strong>useful tool</strong> or a <strong>weekend project</strong>, not a three-month research contribution.</p>
+<ol>
+<li><strong>Verdict</strong></li>
+</ol>
+<p>The original idea—“make repeated LLM-agent tasks cheap by compiling them into reusable actions”—has been published in the most obvious form by PreAct, with PANDO and the older memory/skill literature occupying the surrounding space. Do not spend three months implementing a provider-agnostic version and call it research. That is a consolation prize disguised as architecture.</p>
+<p>Drop that version.</p>
+<p>If you spend the three months, spend them on the harder and narrower problem: <strong>verified compilation for nonvisual, partially observable, side-effectful tool environments, using accumulated executions and explicit recovery under drift</strong>. Start by specifying the state and verification interface, then build a benchmark that can kill the idea. If you cannot demonstrate substantially better fixed-quality cost and safety than single-trajectory replay plus fallback, abandon it.</p>
+<p>Given the developer’s ability, the better use of the three months is probably to find a problem where the hard part is not already named “compile the successful trajectory into a reusable skill.”</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/minimax/minimax-m3</span>
+    <span class="round">راند ۸ — پس از کشف PreAct</span>
+  </div>
+  <div class="fa" dir="rtl">همان رأی، مستقل و تندتر: «وارد سنگر اشغال‌شده با همان سلاح.» گلوگاه واقعی، verifier است که PreAct با فرض وجود صفحه از رویش رد شده. چهار جایگزین مشخص پیشنهاد داد.</div>
+  <div class="body"><h1>Verdict: drop it. Spend the three months elsewhere.</h1>
+<p>I am going to walk through your numbered questions, but the conclusion is going to land at item 6 because the developer deserves the honesty up front and the reasoning afterward.</p>
+<h2>1. What PreAct does not cover, concretely</h2>
+<p>PreAct's domain assumption is hiding in plain sight in the abstract: "states that check the screen, transitions that act." The whole safety mechanism — the "Replay is not blind" paragraph — depends on the state being <strong>rendered, observable, and verifiable pixel-by-pixel by a cheap comparator</strong>. That is a screen-scraping agent's natural condition. A coding agent executing <code>pytest</code> has none of it. An API-calling agent calling Stripe has none of it. A research agent retrieving arXiv abstracts has none of it. The "screen" abstraction is the load-bearing pillar, not an implementation detail.</p>
+<p>What this means for the developer's pitch: for the only domains where the abstraction transfers (browser/desktop/mobile GUI agents), the problem is taken by a paper that already ships a single-rollout compiler, a store-time evaluator, and three-benchmark evaluation. The developer would be entering an occupied trench with the same weapon. For the domains where the developer's intuition is strongest (coding, tools, research — "a task that today costs many reasoning steps and tool calls"), PreAct's verification primitive does not exist, and inventing one is essentially a different project: oracle construction, action-equivalence testing, snapshot-based regression, or learned verifiers — each of which is its own research line (see SWE-bench, TestGen-LLM, process reward models).</p>
+<p>So PreAct does not cover: non-GUI agents, agents without cheap state observability, and any setting where "the world state at step k" is not a comparable artifact. That is most of the interesting agent surface area.</p>
+<h2>2. Single-rollout vs accumulated-repetition compilation: footnote or contribution?</h2>
+<p>A footnote. Here is the concrete purchase: with one success you get a happy-path program and a fragility you discover at store time. With accumulated repetitions you could (a) generalize across surface forms of the same task, (b) discover branch points the first run never took, (c) amortize prompt-cache warmup across the library, (d) learn when <em>not</em> to replay. PANDO already does (c) and partially (d) via confidence-based demotion. PreAct already does (a) implicitly through screen-check tolerance. (b) — branch discovery — is the only piece that is genuinely novel, and it is a single ablation table, not a paper.</p>
+<p>If the developer has a clever answer to "how do you detect that two trajectories through the same task are the same task" without an LLM in the loop, that is interesting. But they have not stated one. Stated as currently conceived, it is a footnote appended to PreAct, which the developer did not write, and which already does the version a reviewer would accept.</p>
+<h2>3. PANDO's metrics: benchmark-shaped gap?</h2>
+<p>No. PANDO's metrics — Action Repetition Rate, Step Overhead Ratio, Prompt Cache Utilization — are instrumentation, not contribution. They are also partly confounded: a chunk of PANDO's 58% token reduction is prompt-cache engineering, which is an orthogonal knob anyone can turn. If you strip prompt-cache out and just keep skill distillation + demotion, you are back inside PreAct's design space with a slightly worse verifier and three VWA-flavoured metrics nobody outside VWA will adopt.</p>
+<p>The honest reading: PANDO is the same idea dressed in VWA clothes, plus cache tricks. The benchmark-shaped gap the developer is imagining — "a benchmark that measures agent efficiency over time across domains" — already exists in pieces (VisualWebArena, WebArena, OSWorld, SWE-bench multi-attempt, AndroidWorld). Nobody is starved for a benchmark; people are starved for <em>generalization</em>, which the developer has not articulated.</p>
+<h2>4. "Provider-agnostic library, not research prototype"</h2>
+<p>This is the sentence people write when PreAct scooped them. It is not a contribution. It is packaging. Packaging is fine — useful, even — but it is not a NeurIPS paper, not a research contribution, and not a reason to spend three months. If the developer genuinely wants a library, the half-life of that work is until OpenAI or Anthropic ships the same thing in their agent SDK, which they will, within a year, because the idea is now on the arXiv record.</p>
+<h2>5–6. The honest one-sentence, and the verdict</h2>
+<p>There is no remaining contribution as currently framed. If I had to extract a kernel that survives, it would be: <strong>"Compilation from accumulated repetitions into a verified, non-GUI-verifiable program with branch discovery, evaluated on coding/tool agents."</strong> That is maybe a paper. It is not the one the developer is describing. The one they are describing is a re-skinned PreAct plus a re-skinned PANDO with a flag on it that says "provider-agnostic."</p>
+<p>The developer should not spend three months here. They should spend three months on one of:</p>
+<ul>
+<li><strong>Process reward models / learned verifiers for non-GUI agents.</strong> The actual open problem PreAct paper over by assuming a screen. A verifier that can cheaply certify "step k of this trajectory is correct" without rendering is the bottleneck for every compiled-agent paper that wants to leave the browser.</li>
+<li><strong>Branch discovery in trajectory libraries.</strong> The one genuinely under-explored piece of item 2. Small, defensible, publishable as a focused contribution. Three months is too long; six weeks.</li>
+<li><strong>Cost-of-thinking instrumentation that the field actually uses.</strong> PANDO's metrics die with VWA. A standard, agent-agnostic efficiency report — tokens-per-success, verifier-calls-per-success, replay-vs-reason ratio — published as a library + a leaderboard hook, is the thing that survives even if the underlying research shifts. Two months.</li>
+<li><strong>Or just build the library.</strong> Skip the paper. Ship the provider-agnostic wrapper around PreAct's idea, take the contribution loss on the chin, and stop pretending it is research. That is a respectable decision and it pays better.</li>
+</ul>
+<p>The motorcycle observation is real. The instinct — "skills should compile" — is real and shared with ACT-R, Voyager, and now PreAct and PANDO. The developer saw a 2026 research direction while commuting. That is a skill signal about the developer, not about the project. The project, as stated, is dead on arrival relative to the existing record. Drop it and pick one of the four above.</p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۹ — محصول: پذیرش</span>
+  </div>
+  <div class="fa" dir="rtl">سند محصول v1 را از زاویه‌ی پذیرش داد: مسئله‌ی حالت خالی روز اول، آیا واقعاً قدم ۴ اولین لحظه‌ی قابل استفاده است، آیا معیارهای موفقیت قابل بازی‌خوردن‌اند، و رقیب واقعی که یک فایل متنی است نه mem0.</div>
+  <div class="body"><p>Review the attached product spec as someone who has shipped personal-assistant products and watched</p>
+<p>them fail. Not a research review. The only question that matters: will a real person still be using</p>
+<p>this in week six?</p>
+<p>Attack these specifically:</p>
+<ol>
+<li>THE FIRST-RUN PROBLEM. On day one there are zero intentions and the system does nothing. Every</li>
+</ol>
+<p>   product of this class dies in the empty state. What makes someone create the first intention, and</p>
+<p>   the fifth? Is "creation from conversation" enough, or is this a product that only works if the user</p>
+<p>   is already the kind of person who delegates?</p>
+<ol>
+<li>IS STEP 4 REALLY THE FIRST USABLE MOMENT? The build order claims the loop is complete after ~16</li>
+</ol>
+<p>   days. Pressure-test that. What is the smallest thing that delivers value on day 3, and is the</p>
+<p>   author fooling themselves about how long they can go without a user?</p>
+<ol>
+<li>THE SUCCESS CRITERIA (§11). "≥8 live intentions", "≥60% acted on", "zero false VERIFIED". Are these</li>
+</ol>
+<p>   honest, or are they numbers chosen because they will be met? Which of them can be gamed by a</p>
+<p>   system that is not actually working? What would you measure instead?</p>
+<ol>
+<li>THE RETURN CHANNEL (§5). Batched briefings, decay of ignored items. Is that right, or does batching</li>
+</ol>
+<p>   guarantee irrelevance by the time you read it? Where is the line between "reduces load" and "one</p>
+<p>   more inbox I have to process"? Nobody wants a second inbox.</p>
+<ol>
+<li>CAPTURE. §12 admits capture may need to be voice and defers it. Is deferring capture fatal? The</li>
+</ol>
+<p>   user's own founding anecdote was having a thought while riding a motorcycle.</p>
+<ol>
+<li>THE HONEST COMPARISON. What does this give a user that a text file of notes plus a weekly hour of</li>
+</ol>
+<p>   deliberate review does not? Answer that concretely, because it is the real baseline, not mem0.</p>
+<p>Then: the ONE change that most increases the chance this is still used in week six.</p>
+<p>No preamble, no flattery, no summary of the spec. English. 1000 words max.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/openai/gpt-5.6-luna</span>
+    <span class="round">راند ۹ — محصول: پذیرش</span>
+  </div>
+  <div class="fa" dir="rtl">ساخت را وارونه تشخیص داد: زیرساخت قبل از اثبات تقاضا. گفت به‌تعویق‌انداختن ضبط صوتی احتمالاً کشنده است چون خودِ داستان موتور همین بود. و هر سه معیار موفقیت را قابل بازی‌خوردن نشان داد.</div>
+  <div class="body"><h2>1. The first-run problem</h2>
+<p>The spec assumes the user will invent intentions because the product can express them elegantly. That is backwards.</p>
+<p>On day one, “create an intention from conversation” is only better than a form. It is not a reason to create one. The user still has to notice a thread, decide it is worth delegating, phrase it correctly, trust the system, and tolerate confirmation. That selects for people who already think in delegation primitives.</p>
+<p>The first intention needs to be prompted by a real unresolved thing, not an empty chat:</p>
+<ul>
+<li>“What are you currently waiting on?”</li>
+<li>“What do you keep checking?”</li>
+<li>“What should I look into while you’re busy?”</li>
+<li>“Paste your current notes, inbox items, or open tabs and I’ll suggest three intentions.”</li>
+</ul>
+<p>Then the product must produce value quickly. “Active until 30 days” is administration, not value.</p>
+<p>The fifth intention is harder. It will not come from enthusiasm. It comes after the first few returns are reliably useful and require no cleanup. The user needs to experience: “I mentioned this once, disappeared, and it came back finished.” Until that happens, every additional intention feels like feeding a system that may create work.</p>
+<p>Eight live intentions is not a healthy target by itself. Eight is also eight possible sources of noise.</p>
+<h2>2. Is step 4 really the first usable moment?</h2>
+<p>No. Step 4 is the first moment the architecture can tell itself the loop exists. It is not the first usable moment for a person.</p>
+<p>For the first three days, the user can create intentions and then wait. That is a dead product. A user will not wait 16 days for a return channel while the system accumulates invisible state. The author is treating implementation milestones as user milestones.</p>
+<p>The smallest useful slice is:</p>
+<ol>
+<li>Capture one intention.</li>
+<li>Run one trigger or manually fire it.</li>
+<li>Produce one useful result.</li>
+<li>Let the user correct it in conversation.</li>
+<li>Repeat that loop within the same day.</li>
+</ol>
+<p>For example: “Research whether X supports Y” should return a sourced, clearly bounded answer in minutes. “Tell me when an email arrives” should be testable with a fake or real message immediately. If the system cannot demonstrate this on day three, it has no evidence that the product works.</p>
+<p>The build order should start with one narrow vertical slice, not the intention model, principal scoping, and authority infrastructure. Those are necessary engineering work, but they do not prove demand.</p>
+<h2>3. The success criteria</h2>
+<p>The criteria are mostly easy to game.</p>
+<ul>
+<li><strong>≥8 live intentions:</strong> The product can create low-quality intentions, seed them, or count abandoned ones. Quantity proves willingness to configure, not value.</li>
+<li><strong>≥60% acted on:</strong> A system that returns only three items can hit 100%. “Acted on” can also mean opening, dismissing, or clicking through. A bad assistant that surfaces trivial items may score well.</li>
+<li><strong>Zero false VERIFIED:</strong> This is a release requirement, not a useful product metric. It can be met by putting almost nothing in VERIFIED, avoiding difficult research, or returning “unresolved” for everything. It also says nothing about missed opportunities or whether the result helped.</li>
+</ul>
+<p>Measure behavior over six weeks:</p>
+<ul>
+<li>percentage of users who return in week 2, 4, and 6;</li>
+<li>number of useful returns per active user, not total returns;</li>
+<li>capture-to-first-value time;</li>
+<li>percentage of intentions renewed after expiry;</li>
+<li>percentage of returns explicitly marked useful, irrelevant, or wrong;</li>
+<li>dismissals and snoozes by intention;</li>
+<li>number of times a user delegates a second item after receiving a good result;</li>
+<li>user-reported “I would have done this manually” savings;</li>
+<li>false-positive rate and false-negative rate on a fixed evaluation set.</li>
+</ul>
+<p>The strongest metric is not “eight intentions.” It is: <strong>in week six, does the user still create new intentions and trust old ones without checking the system’s work?</strong></p>
+<h2>4. The return channel</h2>
+<p>Batching is not inherently load reduction. It is load reduction only when the batch contains a small number of high-value items. Otherwise it is an inbox with worse expectations because the user did not knowingly subscribe to it.</p>
+<p>Morning and end-of-day are arbitrary assumptions. A research result may be useful immediately; an email alert may be useful within minutes; a weekly reminder may be right for something else. One global batch schedule guarantees that some things arrive too late and others interrupt the wrong context.</p>
+<p>The return channel needs three classes:</p>
+<ul>
+<li><strong>Immediate:</strong> time-sensitive or explicitly requested.</li>
+<li><strong>Next useful moment:</strong> results that need attention but not interruption.</li>
+<li><strong>Digest:</strong> low urgency, grouped and aggressively pruned.</li>
+</ul>
+<p>“Conversation entry point” does not solve the inbox problem. A card with more context is still a card to process. The system should return an item only when it has crossed a usefulness threshold, and it should be allowed to say: “Nothing worth bringing you today.”</p>
+<p>Decay is also dangerous. Ignored items may be irrelevant, but they may also be badly timed or poorly presented. Suspending after three ignores is a reasonable default, not evidence that the intention is unwanted.</p>
+<h2>5. Capture</h2>
+<p>Deferring voice is probably fatal for the founding use case. A motorcycle is not an edge case; it exposes the core requirement: capture must happen when the user cannot open a form, remember details, or type a careful instruction.</p>
+<p>Text-only v1 will measure the wrong thing. It will tell you whether users can operate the interface at a desk, not whether they need an assistant.</p>
+<p>Voice does not need a full assistant experience. Start with a phone shortcut, Telegram/WhatsApp voice note, or a single record-and-send endpoint. Transcribe it, show the extracted intention, and ask for confirmation later if needed. At minimum, preserve an unstructured “open thread” when the system cannot safely structure it. Losing the thought is worse than having an imperfect intention.</p>
+<h2>6. The honest comparison</h2>
+<p>A text file plus a weekly review already does three things well: it is instant, reliable, private, and has no notification burden.</p>
+<p>This product beats it only if it does work between reviews:</p>
+<ul>
+<li>watches email or another source continuously;</li>
+<li>performs research rather than merely recording a question;</li>
+<li>preserves sources, provenance, and unresolved claims;</li>
+<li>returns work when it is ready;</li>
+<li>prepares reversible actions;</li>
+<li>notices stale intentions and proposes cleanup;</li>
+<li>carries the full context into a conversation without requiring the user to reconstruct it.</li>
+</ul>
+<p>If v1 mainly stores structured intentions and produces batched summaries, it is an expensive task list with more failure modes than a text file. The comparison to mem0 is a distraction.</p>
+<h2>The one change</h2>
+<p>Build <strong>capture-to-first-payoff as a same-day vertical slice</strong>, including voice capture, before building breadth.</p>
+<p>One input channel. One trigger. One body. One return surface. A user can say or type an open thread, the system confirms or preserves it, does the work, and returns a useful result within hours. Seed the first session with prompts and offer to import existing open loops.</p>
+<p>This single change attacks the empty state, the motorcycle problem, the false “first usable moment,” and week-six retention. If the product cannot repeatedly turn an unstructured thought into a useful returned result with almost no effort, eight intentions, authority ladders, cost reports, and principal scoping are just well-engineered plumbing around a product nobody needs.</p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۱۰ — محصول: اعتماد و ایمنی</span>
+  </div>
+  <div class="fa" dir="rtl">زاویه‌ی امنیت و اعتماد: محتوای محرک در اختیار مهاجم است، نردبان اختیار زیر فشار مثال‌های واقعی، مادر به‌عنوان ذی‌نفعی که رضایت نداده، و دکمه‌ی اورژانس.</div>
+  <div class="body"><p>Review the attached product spec adversarially, on trust and safety. This is a personal assistant that</p>
+<p>takes autonomous actions and will eventually run in someone's home for more than one person.</p>
+<p>Attack these specifically:</p>
+<ol>
+<li>TRIGGER CONTENT IS ATTACKER-CONTROLLED. Intentions fire on incoming email and later on documents</li>
+</ol>
+<p>   and messages. That content is then read by a model that decides what to do. Work out the full</p>
+<p>   consequence chain for this spec. What can an attacker who can email the user accomplish? Does the</p>
+<p>   spec close it, and if not, exactly what must be added and where?</p>
+<ol>
+<li>THE AUTHORITY LADDER (§4). Find the failure cases. Is "reversible in seconds and embarrasses</li>
+</ol>
+<p>   nobody" a workable test in practice, or does it collapse under real examples? Give three actions</p>
+<p>   the spec's author would classify as level 3 that are actually level 4, and say why.</p>
+<ol>
+<li>MULTI-PRINCIPAL (§8). The mother case. She did not read this spec and did not consent to anything.</li>
+</ol>
+<p>   What are the consequences of one system acting for a person who does not understand it and cannot</p>
+<p>   evaluate its output? What must the spec say about a principal who is not the operator?</p>
+<ol>
+<li>THE ONE-TAP EMERGENCY BUTTON (§9). The spec keeps the action and drops the detection, calling this</li>
+</ol>
+<p>   a safe compromise. Stress it: what goes wrong with a pre-loaded emergency call, accidental taps,</p>
+<p>   stale medical data, wrong location, and a user who now believes they are covered?</p>
+<ol>
+<li>TRUST COLLAPSE. These products get exactly one bad autonomous action before the user turns them</li>
+</ol>
+<p>   off forever. Which single action in this spec is most likely to be that one, and what would have to</p>
+<p>   be true to prevent it?</p>
+<ol>
+<li>VERIFIED vs FOUND (§6). Is this separation actually implementable, or is it a promise the system</li>
+</ol>
+<p>   cannot keep? What does "the system verified this itself" mean concretely for a claim in a research</p>
+<p>   result, and what stops VERIFIED from silently degrading into FOUND with a nicer label?</p>
+<p>No preamble, no flattery. Concrete fixes, not concerns. English. 1000 words max.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/openai/gpt-5.6-luna</span>
+    <span class="round">راند ۱۰ — محصول: اعتماد و ایمنی</span>
+  </div>
+  <div class="fa" dir="rtl">حفره‌ای که من در سند محصول جا انداخته بودم: تزریق از راه محتوای ایمیل. قاعده‌ی جایگزین: «محتوای محرک می‌تواند شاهدِ تطبیق باشد، هرگز نمی‌تواند منبع اختیار باشد.» و سه نمونه از پله‌ی ۳ من را به پله‌ی ۴ برد.</div>
+  <div class="body"><h2>1. Attacker-controlled trigger content</h2>
+<p>The spec treats mail as a trigger but does not define the mail body as hostile input. The consequence chain is:</p>
+<ol>
+<li>An attacker sends mail designed to pass the deterministic sender/keyword gate, using spoofing, a compromised account, a lookalike address, or keywords such as “contract.”</li>
+<li>The small or large model reads attacker-controlled instructions embedded in the subject, body, HTML, attachment, quoted thread, or linked page.</li>
+<li>The model confuses content with instructions and may classify the message as relevant, summarize false claims, follow links, inspect connected documents, or include attacker-controlled text in a returned conversation.</li>
+<li>If later versions allow documents/messages to trigger intentions, the same content can cause an intention to fire repeatedly or steer the body action.</li>
+<li>If model output can create, edit, escalate, or cancel intentions, the attacker has an indirect control channel over persistent actions.</li>
+<li>Even without tool execution, the attacker can cause notification spam, expensive research runs, poisoned “findings,” false urgency, and trust in fabricated results. With tools, this can become data exfiltration, unwanted device actions, or prepared messages that a user may approve without understanding the origin.</li>
+</ol>
+<p>The spec does not close this. “No message reaches another human without an explicit tap” is insufficient: a user can be socially engineered into tapping, and it does not protect data, devices, costs, or persistent state.</p>
+<p>Add a threat-model section after §3 and enforce these rules:</p>
+<ul>
+<li>Treat all incoming content, attachments, quoted text, OCR, and fetched pages as <strong>untrusted data, never instructions</strong>. Delimit and label it in the model context.</li>
+<li>Mail triggers may only evaluate immutable envelope metadata and explicitly configured predicates. A model may summarize a match but may not create, edit, delete, escalate, or re-authorize an intention.</li>
+<li>Give each firing a non-escalating capability: the trigger can invoke only its pre-approved body and only within its stored budget and authority level. Model confidence cannot expand that capability.</li>
+<li>No secrets, unrelated mail, credentials, hidden prompts, or principal data are available to the content-processing model. Attachments and links run in a sandbox with network allowlists.</li>
+<li>Require authentication checks for sender identity; do not treat display names as identity.</li>
+<li>Log the exact triggering bytes, model input, tool calls, and resulting action. Make attacker-originated content visible in every returned item.</li>
+<li>Add adversarial tests for prompt injection, spoofed senders, poisoned attachments, repeated triggers, data exfiltration, and cost exhaustion.</li>
+</ul>
+<p>Put the hard prohibition in §4: “Content from a trigger can supply evidence for matching; it can never supply authority.”</p>
+<h2>2. Authority ladder</h2>
+<p>“Reversible in seconds and embarrasses nobody” is not an operational test. Reversal may require physical access, knowledge, connectivity, or noticing the mistake. Embarrassment is subjective and misses privacy, safety, financial, and household effects. Classify by worst plausible consequence, not typical convenience.</p>
+<p>Three listed level-3 actions that are actually level 4 by default:</p>
+<ul>
+<li><strong>Lock a door.</strong> It can lock out a resident, trap someone, prevent emergency access, or create a false sense of security. It needs current occupancy/access state and explicit policy; otherwise prepare and ask.</li>
+<li><strong>Put on a TV programme.</strong> It can expose sexual, political, or violent content to children or guests, consume paid content, alter volume at night, or reveal viewing behavior to a shared household. “Undo” does not undo exposure. Require an approved channel/content allowlist and household consent; otherwise level 4.</li>
+<li><strong>Open a draft.</strong> In many mail, document, and calendar systems drafts are synced, visible to delegates, indexed, or automatically shared. It can contain confidential or defamatory text and can trigger workflows. Draft creation is level 3 only in a private, isolated store with no recipients, sharing, plugins, or automatic sends; otherwise level 4.</li>
+</ul>
+<p>Replace the sentence-level test with a matrix covering safety, privacy, access, money, reputation, household impact, and reversibility. The highest applicable class wins. Make every integration declare an action-specific policy; there must be no generic “device action = level 3.”</p>
+<h2>3. Multi-principal household use</h2>
+<p>The mother is not a schema field. If she did not read, understand, and consent, the system cannot legitimately infer authority to act for her from the operator’s ownership of the box. Consequences include unwanted device changes, disclosure of her data to the operator, misleading notifications, actions she cannot undo, and attribution of the operator’s preferences to her. If she cannot evaluate model output, ordinary confirmation is not meaningful consent.</p>
+<p>§8 must distinguish:</p>
+<ul>
+<li><strong>Principal:</strong> whose body, account, property, data, or interests are affected.</li>
+<li><strong>Operator:</strong> who configures or physically uses the system.</li>
+<li><strong>Delegate/guardian:</strong> a separately authorized person, with documented scope and expiry.</li>
+</ul>
+<p>No action may use a person as principal merely because their device is nearby. Onboarding requires the principal’s informed consent in an accessible form, identity binding, a visible “ASC is acting for me” indicator, an independent audit log, and an easy local disable/revoke mechanism. A delegate gets only explicit capabilities, not the principal’s full data. For a person lacking capacity, require an appropriate legal/organizational authorization; do not solve this with a lower ceiling alone. Shared spaces need per-person privacy defaults and no cross-principal data leakage.</p>
+<h2>4. Emergency button</h2>
+<p>A pre-loaded call is not “90% of the value” unless its failure modes are explicit. Accidental taps can place a real emergency call; preventing all accidental taps with a one-tap design is impossible. Stale allergies, medications, contacts, or diagnoses can mislead responders. A cached location can be wrong after travel, indoors, or during a network failure. A user may reasonably believe the product detects emergencies or is monitoring them when it does neither.</p>
+<p>Change §9 and the UI:</p>
+<ul>
+<li>Do not call it an emergency system or imply coverage; show “manual shortcut only—no detection or monitoring.”</li>
+<li>Resolve and display current location at activation, with timestamp and failure state; never silently substitute stale location.</li>
+<li>Show medical data timestamps and require confirmation that it is current; pass “may be stale” to responders.</li>
+<li>Use press-and-hold or a clearly deliberate two-step confirmation, with a short cancel window, while preserving an accessible urgent path.</li>
+<li>Define jurisdiction, number, language, network failure, accidental-call cancellation, and what happens if the call disconnects.</li>
+<li>Test false taps, stale data, wrong location, travel, shared-device use, and users who cannot speak.</li>
+</ul>
+<h2>5. Trust collapse</h2>
+<p>The most likely first irreversible trust failure in v1 is a <strong>false VERIFIED research result</strong>. It directly violates the product’s central promise that the user need not check the work, and the success criterion requires zero such errors. An attacker can also seed a plausible source through email or a fetched page.</p>
+<p>Prevent it by making VERIFIED a typed evidence state, not a model label. Every claim must identify the exact claim span, source identity and retrieval time, quoted supporting evidence, transformation performed, and a reproducible check. Claims requiring external truth, judgment, or source credibility must remain FOUND or UNRESOLVED. A deterministic validator, not the synthesizing model, assigns VERIFIED; absence of required evidence is a hard failure. Add adversarial release tests and prohibit the model from relabeling FOUND content.</p>
+<h2>6. VERIFIED versus FOUND</h2>
+<p>The separation is implementable only for narrowly defined verification procedures. “The system verified this itself” cannot mean “a model found a source that agrees.” For a research claim, it must mean a declared procedure succeeded: exact identifier resolution, source retrieval, quote-span match, arithmetic recomputation, code/test execution, or independently reproduced observation.</p>
+<p>Add a verification-type enum and required evidence schema. Do not permit a generic VERIFIED state. The UI must show procedure, evidence, timestamp, and limitations. A claim must downgrade to FOUND when the source is inaccessible, stale, ambiguous, derivative, or merely corroborative. Enforce this in code and release tests; never let the synthesis model choose the label.</p></div>
+</section>
+
+<section class="turn claude">
+  <div class="meta">
+    <span class="who">Claude — منتقد</span>
+    <span class="model">claude-opus-5 (Claude Code)</span>
+    <span class="round">راند ۱۱ — محصول: مهندسی</span>
+  </div>
+  <div class="fa" dir="rtl">زاویه‌ی مهندس سازنده: ماشین حالت نیت، مکانیزم دقیق محرک ایمیل، بودجه‌ی اجرای پس‌زمینه، حسابداری هزینه، جداسازی ذی‌نفع، و شیئی که در مدل داده جا افتاده بود.</div>
+  <div class="body"><p>Review the attached product spec as the engineer who has to build it. Find what is underspecified,</p>
+<p>contradictory, or will not survive contact with real data. Concrete defaults, not options.</p>
+<p>Attack these specifically:</p>
+<ol>
+<li>THE INTENTION STATE MACHINE. States are armed | running | waiting_user | returned | expired |</li>
+</ol>
+<p>   suspended. Enumerate the transitions the spec does not define. What happens when a trigger fires</p>
+<p>   while the intention is already running? When a user answers a waiting_user item three days late?</p>
+<p>   When two intentions match the same event? When an intention's body fails halfway?</p>
+<ol>
+<li>TRIGGERS. "event | schedule | condition | explicit" is a taxonomy, not a design. For mail</li>
+</ol>
+<p>   specifically: polling or push, dedup across restarts, what counts as "already handled", and what</p>
+<p>   happens to events that arrive while the process is down. Give the concrete mechanism.</p>
+<ol>
+<li>THE <code>investigate</code> BODY. A budgeted background agent run. Define the budget unit, what happens when</li>
+</ol>
+<p>   the budget runs out mid-run, whether partial results are returned or discarded, and how a run that</p>
+<p>   should have been abandoned is distinguished from one that is merely slow.</p>
+<ol>
+<li>COST ACCOUNTING (§7). The spec promises per-intention cost reporting. Where does the number come</li>
+</ol>
+<p>   from across multiple models and providers, how is a shared/cached prefix attributed, and what makes</p>
+<p>   the reported number trustworthy rather than a guess?</p>
+<ol>
+<li>IDENTITY AND STORAGE. Principal scoping "from the first line of code". What does that mean at the</li>
+</ol>
+<p>   schema level, and what is the test that actually proves isolation rather than asserting it?</p>
+<ol>
+<li>THE DATA MODEL GAP. The spec has StandingIntention but nothing for the <em>episode</em> — a firing, its</li>
+</ol>
+<p>   inputs, its outputs, its cost, its outcome. Design that object, because the cost report, the decay</p>
+<p>   rule in §5 and the success criteria in §11 all depend on it and none of them can be computed</p>
+<p>   without it.</p>
+<ol>
+<li>What in this spec would you cut to ship two weeks earlier, and what does cutting it cost?</li>
+</ol>
+<p>No preamble, no flattery, no restating the spec. English. 1100 words max.</p></div>
+</section>
+
+<section class="turn gpt">
+  <div class="meta">
+    <span class="who">مدل مقابل</span>
+    <span class="model">liara/qwen/qwen3.7-max</span>
+    <span class="round">راند ۱۱ — محصول: مهندسی</span>
+  </div>
+  <div class="fa" dir="rtl">شیء گمشده را پیدا کرد: Episode. بدون آن نه گزارش هزینه محاسبه‌شدنی است نه قاعده‌ی decay نه معیارهای موفقیت. ماشین حالت را کامل کرد و مکانیزم dedup ایمیل را مشخص.</div>
+  <div class="body"><h1>1. The Intention State Machine</h1>
+<p>Missing transitions and edge cases resolved with concrete defaults:</p>
+<ul>
+<li><strong>Trigger fires while <code>running</code>:</strong> Drop the new event. Log it to the <code>Episode</code> table as <code>skipped_concurrent</code>. Do not queue. Queueing creates thundering herds on recovery and breaks the "reduce load" mandate.</li>
+<li><strong>User answers <code>waiting_user</code> late:</strong> Check <code>lifetime.until</code>. If past expiry, transition to <code>expired</code> and discard the input. If valid, transition to <code>running</code> to process the answer, then to <code>returned</code>.</li>
+<li><strong>Two intentions match the same event:</strong> Both fire independently. They do not share state, context, or budget. </li>
+<li><strong>Body fails halfway:</strong> Transition to <code>suspended</code>. Emit a <code>returned</code> item with the partial scratchpad in <code>UNRESOLVED</code>. Do not retry automatically; require human <code>resume</code>.</li>
+</ul>
+<h1>2. Triggers: Mail Mechanism</h1>
+<p>"Event" is implemented as follows:</p>
+<ul>
+<li><strong>Transport:</strong> IMAP IDLE for push. Fallback to 5-minute polling if the connection drops.</li>
+<li><strong>Dedup &amp; "Already Handled":</strong> A persistent <code>handled_events</code> table storing <code>(principal_id, provider_message_id_hash, handled_at)</code>. In-memory Bloom filter for fast-path rejection. Table is hard-pruned at 30 days.</li>
+<li><strong>Restart/Down-time:</strong> On boot, the worker queries the mailbox for all UIDs greater than the <code>last_seen_uid</code> stored in <code>IntentionState</code>. It passes them through the Bloom filter and <code>handled_events</code> table, then fires the survivors sequentially.</li>
+</ul>
+<h1>3. The <code>investigate</code> Body</h1>
+<ul>
+<li><strong>Budget Unit:</strong> USD cents (integer).</li>
+<li><strong>Mid-run Exhaustion:</strong> Hard-kill the LLM context. Flush the current scratchpad to the <code>Episode</code> output. Transition to <code>returned</code>. The output is tagged <code>UNRESOLVED: Budget exhausted</code>. Partial results are never discarded.</li>
+<li><strong>Abandoned vs. Slow:</strong> Governed by two independent limits. Budget (cents) and Wall-clock (milliseconds, default 300,000). If budget hits first, it is <code>returned</code> (exhausted). If wall-clock hits first, it is <code>suspended</code> (timeout/abandoned) to prevent zombie processes.</li>
+</ul>
+<h1>4. Cost Accounting</h1>
+<ul>
+<li><strong>Source of Truth:</strong> A custom LLM proxy router intercepting all egress. It normalizes responses from all providers into a standard internal schema, parsing the native <code>usage</code> object from the HTTP response body.</li>
+<li><strong>Shared/Cached Prefix:</strong> Billed exactly at the provider's cached-token rate (e.g., 10% of base prompt cost). If the provider lacks native cache pricing, bill the full prompt rate. No internal amortization or guessing.</li>
+<li><strong>Trustworthiness:</strong> If the provider omits the <code>usage</code> object (e.g., dropped streaming connection), the proxy runs <code>tiktoken</code> on the exact prompt and completion strings before returning to the caller. We log exact token counts, never estimates. Cost is calculated via a static rate-card JSON updated weekly.</li>
+</ul>
+<h1>5. Identity and Storage</h1>
+<ul>
+<li><strong>Schema Level:</strong> Postgres Row-Level Security (RLS). Every table includes <code>principal_id UUID NOT NULL</code>. Primary keys are composite: <code>(principal_id, id)</code>. The application connects using a role that has RLS policies enforced, setting <code>app.current_principal_id</code> via JWT claims on every transaction.</li>
+<li><strong>The Isolation Test:</strong> A CI integration test provisions Principal A and Principal B. It inserts intentions, episodes, and credentials for A. It then authenticates as B and attempts to <code>SELECT</code>, <code>UPDATE</code>, and <code>DELETE</code> A's records. The test asserts exactly zero rows returned or modified. This runs on every PR.</li>
+</ul>
+<h1>6. The Data Model Gap: The Episode</h1>
+<p>The <code>StandingIntention</code> is the rule; the <code>Episode</code> is the execution. Schema:</p>
+<pre><code>
+CREATE TABLE episode (
+    id UUID PRIMARY KEY,
+    principal_id UUID NOT NULL,
+    intention_id UUID NOT NULL,
+    triggered_at TIMESTAMPTZ NOT NULL,
+    trigger_payload JSONB NOT NULL, -- The exact email, event, or schedule tick
+    state TEXT NOT NULL, -- pending | running | succeeded | failed | budget_exhausted | timeout
+    output_payload JSONB, -- {verified: [], found: [], unresolved: []}
+    cost_cents INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER,
+    resolved_at TIMESTAMPTZ,
+    user_acted BOOLEAN DEFAULT FALSE
+);
+</code></pre>
+<ul>
+<li><strong>Cost Report:</strong> <code>SUM(cost_cents)</code> grouped by <code>intention_id</code>.</li>
+<li><strong>Decay Rule (§5):</strong> Counts <code>Episodes</code> where <code>state = succeeded</code> but <code>user_acted = false</code> after 72 hours.</li>
+<li><strong>Success Criteria (§11):</strong> <code>COUNT(*) WHERE user_acted = true</code> divided by total returned episodes.</li>
+</ul>
+<h1>7. What to Cut to Ship Two Weeks Earlier</h1>
+<ul>
+<li><strong>Cut:</strong> The "decay" logic for ignored items (§5) and the "cost per acted-upon item" calculation (§7).</li>
+<li><strong>Cost of Cutting:</strong> The system loses the automated feedback loop that identifies and suspends useless intentions. The user must manually review and prune their standing intentions. The core loop (create, fire, investigate, return) is preserved, but the self-optimizing layer is delayed to v1.1. This saves 14 days of building telemetry, UI decay indicators, and background cron jobs.</li>
+</ul></div>
+</section>
+</div>
