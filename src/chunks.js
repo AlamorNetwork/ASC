@@ -11,6 +11,7 @@
  * embeddings alone miss literal quotes.
  */
 import { config } from './config.js';
+import { routerFetch } from './llm.js';
 import * as store from './db.js';
 import { getSetting } from './db.js';
 
@@ -60,14 +61,15 @@ const fromBlob = (buf) =>
   new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
 
 export async function embed(texts) {
-  const { key, base } = config.router;
-  const res = await fetch(`${base}/embeddings`, {
+  const { key } = config.router;
+  const model = EMBED_MODEL();
+  const res = await routerFetch('/embeddings', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: EMBED_MODEL(), input: texts }),
-  });
+    body: JSON.stringify({ model, input: texts }),
+  }, { label: `embeddings/${model}` });
   const raw = await res.text();
-  if (!res.ok) throw new Error(`embeddings ${res.status}: ${raw.slice(0, 200)}`);
+  if (!res.ok) throw new Error(`embeddings ${res.status} (${model}): ${raw.slice(0, 200)}`);
   const json = JSON.parse(raw.replace(/\s*data:\s*\[DONE\]\s*$/, '').trim());
   const vectors = (json.data ?? []).sort((a, b) => a.index - b.index).map((d) => d.embedding);
   return { vectors, costToman: json.usage?.total_cost_toman ?? 0 };

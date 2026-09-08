@@ -440,6 +440,12 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
         } else if (step.kind === 'lead') {
           if (step.lead) await showTrail(`💡 ${esc(step.lead)}`);
           else if (step.missing) await showTrail(`   <i>هنوز پیدا نشده: ${esc(step.missing)}</i>`);
+        } else if (step.kind === 'widening') {
+          await showTrail(`🔎 در ${step.count} پرونده‌ی دیگر خودت هم می‌گردم…`);
+        } else if (step.kind === 'elsewhere') {
+          for (const e of step.elsewhere) {
+            await showTrail(`📁 <b>#${e.dossier.id}</b> ${esc(e.dossier.topic)} — ${e.rows.length} پاساژ مرتبط`);
+          }
         }
       },
       onDelta: (soFar) => {
@@ -455,13 +461,27 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
     const tail = research?.hops
       ? `<i>${toman(total)} تومان · ${research.hops} گام · ${research.passages.length} پاساژ · پرونده #${dossierId}</i>`
       : `<i>${toman(total)} تومان · پرونده #${dossierId}</i>`;
+    // Every answer can become a standing question, so a line of enquiry can keep
+    // going without being asked again.
     await tg.edit(chatId, placeholder.message_id, `${esc(text)}\n\n${tail}`);
+    await tg.send(chatId, '<i>می‌خواهی همین را مرتب پیگیری کنم؟</i>', {
+      buttons: [[{ text: '👁 همین را پیگیری کن', callback_data: `watchq:${dossierId}` }]],
+    });
 
-    // The corpus was searched properly and does not hold it. Offer the web, never
+    // Material sat in another dossier of theirs. Offer to link, since that makes the
+    // connection permanent instead of a one-off lucky find.
+    if (research?.elsewhere?.length) {
+      const first = research.elsewhere[0].dossier;
+      await tg.send(chatId,
+        `📁 مطالب مرتبط در پرونده‌ی <b>#${first.id}</b> «${esc(first.topic)}» هم بود.\n\n<i>وصلشان کنم تا از این به بعد با هم جست‌وجو شوند؟</i>`,
+        { buttons: [[{ text: `🔗 وصل کن به #${first.id}`, callback_data: `linkto:${first.id}` }]] });
+    }
+
+    // Neither this dossier nor the user's other sources hold it. Offer the web, never
     // take it — going online is a spend the user should choose.
     if (research?.notInCorpus) {
       await tg.send(chatId,
-        'در اسناد این پرونده پیدا نشد. بروم در وب تحقیق کنم؟',
+        'در هیچ‌کدام از اسناد تو پیدا نشد. بروم در وب تحقیق کنم؟',
         { buttons: [[{ text: '🌐 تحقیق در وب', callback_data: `webresearch:${dossierId}` }]] });
     }
   } catch (err) {
@@ -890,6 +910,35 @@ export async function run() {
           if (d && lastUser) {
             runWebResearch(chatId, principalId, id, d.topic, lastUser.text)
               .catch((e) => console.error('[webresearch]', e));
+          }
+        } else if (action === 'watchq') {
+          // Turn the question just asked into a standing one.
+          const lastUser = [...store.conversation(principalId, id, 12)]
+            .reverse().find((m) => m.role === 'user');
+          if (!lastUser) {
+            await tg.answerCallback(cb.id, 'سؤالی پیدا نشد');
+          } else {
+            try {
+              const wid = createWatch({
+                principalId, dossierId: id, question: lastUser.text, everyHours: 24,
+              });
+              await tg.answerCallback(cb.id, 'ساخته شد');
+              await tg.edit(chatId, cb.message.message_id,
+                `👁 <b>پیگیری #${wid}</b>\n\n«${esc(lastUser.text.slice(0, 120))}»\n\n` +
+                'هر ۲۴ ساعت دنبالش می‌گردم و <i>فقط وقتی چیز تازه‌ای باشد</i> خبر می‌دهم.', []);
+            } catch (err) {
+              await tg.answerCallback(cb.id, err.message.slice(0, 60));
+            }
+          }
+        } else if (action === 'linkto') {
+          const home = settings.activeDossier(principalId);
+          try {
+            store.linkDossiers(principalId, home, id);
+            await tg.answerCallback(cb.id, 'وصل شد');
+            await tg.edit(chatId, cb.message.message_id,
+              `${cb.message.text}\n\n🔗 وصل شد — از این به بعد با هم جست‌وجو می‌شوند.`, []);
+          } catch (err) {
+            await tg.answerCallback(cb.id, err.message.slice(0, 60));
           }
         } else if (action === 'unwatch') {
           store.setIntentionState(principalId, id, 'suspended');

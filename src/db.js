@@ -341,11 +341,12 @@ export const dossierScope = (principalId, id) =>
 
 export const insertIntention = (i) => db.prepare(`
   INSERT INTO intentions (principal_id, title, created_from, dossier_id, trigger_kind,
-                          every_hours, body_kind, authority, next_run_at, until_at, created_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                          every_hours, body_kind, authority, next_run_at, until_at,
+                          question, created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 `).run(i.principalId, i.title, i.createdFrom ?? null, i.dossierId ?? null,
        i.triggerKind ?? 'schedule', i.everyHours, i.bodyKind ?? 'watch_dossier',
-       i.authority ?? 'notify', i.nextRunAt, i.untilAt ?? null,
+       i.authority ?? 'notify', i.nextRunAt, i.untilAt ?? null, i.question ?? null,
        new Date().toISOString()).lastInsertRowid;
 
 export const listIntentions = (principalId) =>
@@ -442,6 +443,9 @@ function addColumn(table, column, type) {
 // rather than paying to read the same pages again.
 addColumn('documents', 'sha256', 'TEXT');
 addColumn('documents', 'read_pages', 'INTEGER');
+// A watch can carry its own question, so "keep looking into this" is not limited to
+// the dossier's headline topic.
+addColumn('intentions', 'question', 'TEXT');
 db.exec(`CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(principal_id, dossier_id, sha256)`);
 
 const now = () => new Date().toISOString();

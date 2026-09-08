@@ -13,12 +13,33 @@ function parseRouterBody(raw) {
 // silently skipped where it is not.
 let reasoningCanBeDisabled = true;
 
+/**
+ * A network failure says nothing about which call died, so every request carries a
+ * label and retries a couple of times before giving up. A dropped connection to the
+ * provider is common enough that failing the whole turn on the first one is wrong.
+ */
+export async function routerFetch(path, init, { label = 'router', tries = 3 } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      return await fetch(`${base}${path}`, init);
+    } catch (err) {
+      lastErr = err;
+      const cause = err.cause?.code ?? err.name;
+      console.warn(`[llm] ${label} attempt ${attempt}/${tries} failed: ${cause}`);
+      if (attempt < tries) await new Promise((r) => setTimeout(r, 400 * attempt));
+    }
+  }
+  const cause = lastErr?.cause?.code ?? lastErr?.message ?? 'unknown';
+  throw new Error(`ارتباط با ${label} برقرار نشد (${cause}) — ${base}`);
+}
+
 async function post(body) {
-  const res = await fetch(`${base}/chat/completions`, {
+  const res = await routerFetch('/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
+  }, { label: `chat/${body.model}` });
   return { res, raw: await res.text() };
 }
 
@@ -91,15 +112,24 @@ export async function chatStream({ model, system, history = [], content, maxToke
   for (const m of history) messages.push({ role: m.role, content: m.text });
   if (content) messages.push({ role: 'user', content });
 
-  const res = await fetch(`${base}/chat/completions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true }),
-  });
+  let res;
+  try {
+    res = await routerFetch('/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true }),
+    }, { label: `stream/${model}` });
+  } catch (err) {
+    // An endpoint that cannot stream should still answer, just without the typing effect.
+    console.warn('[llm] streaming unavailable, falling back:', err.message);
+    const out = await chat({ model, system, content: messages.at(-1)?.content, maxTokens });
+    onDelta?.(out.text);
+    return out;
+  }
 
   if (!res.ok || !res.body) {
     const raw = await res.text().catch(() => '');
-    if (!res.ok) throw new Error(`router ${res.status}: ${raw.slice(0, 300)}`);
+    if (!res.ok) throw new Error(`router ${res.status} (${model}): ${raw.slice(0, 300)}`);
   }
 
   const reader = res.body.getReader();

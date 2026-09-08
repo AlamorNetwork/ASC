@@ -393,6 +393,43 @@ await check('multi-hop search follows a lead to different wording', async () => 
   }
 });
 
+await check('when leads run dry it searches the user other dossiers', async () => {
+  const { investigate } = await import('../src/investigate.js');
+  const p = `wide-${Date.now()}`;
+  const here = store.insertDossier({ principalId: p, topic: 'پرونده‌ی اصلی' });
+  const other = store.insertDossier({ principalId: p, topic: 'پرونده‌ی دیگر' });
+
+  const dHere = store.insertDocument({ principalId: p, dossierId: here, filename: 'h.txt', kind: 'text', extraction: 'local' });
+  const dOther = store.insertDocument({ principalId: p, dossierId: other, filename: 'o.txt', kind: 'text', extraction: 'local' });
+  store.insertChunks(p, here, dHere, [{ seq: 0, text: 'مطلبی کاملاً بی‌ربط درباره‌ی هواشناسی و بارش باران.' }]);
+  store.insertChunks(p, other, dOther, [{ seq: 0, text: 'زرتشت و آموزه‌های او در متون پهلوی بررسی شده است.' }]);
+
+  const ask = async () => ({
+    data: { queries: ['زرتشت'], enough: false, lead: null, missing: 'چیزی نبود', next_queries: [] },
+    usage: {},
+  });
+
+  const steps = [];
+  const out = await investigate({
+    principalId: p, dossierId: here, question: 'درباره‌ی زرتشت چه می‌دانیم؟',
+    maxHops: 2, ask, onStep: (s) => steps.push(s),
+  });
+
+  if (!out.elsewhere.length) throw new Error('the other dossier was never searched');
+  if (out.elsewhere[0].dossier.id !== other) throw new Error('wrong dossier reported');
+  if (out.notInCorpus) throw new Error('claimed nothing was found while material sat in another dossier');
+  if (!steps.some((s) => s.kind === 'elsewhere')) throw new Error('the find was not reported live');
+
+  // A principal with no other dossiers must not be told to look anywhere.
+  const lone = `lone-${Date.now()}`;
+  const only = store.insertDossier({ principalId: lone, topic: 'تنها' });
+  const outLone = await investigate({
+    principalId: lone, dossierId: only, question: 'هیچ', maxHops: 1, ask,
+  });
+  if (outLone.elsewhere.length) throw new Error('found material where there is none');
+  return 'found it next door, and reported it live';
+});
+
 await check('multi-hop stops instead of looping forever', async () => {
   const { investigate } = await import('../src/investigate.js');
   const p = `hopstop-${Date.now()}`;

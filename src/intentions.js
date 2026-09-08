@@ -23,13 +23,19 @@ export const nextRun = (everyHours, from = Date.now()) =>
  * @param everyHours how often to look
  * @param days how long the intention lives before it must be renewed
  */
-export function createWatch({ principalId, dossierId, title, createdFrom, everyHours = 24, days = 60 }) {
+export function createWatch({
+  principalId, dossierId, title, createdFrom, question = null, everyHours = 24, days = 60,
+}) {
   const d = store.getDossier(principalId, dossierId);
   if (!d) throw new Error('پرونده پیدا نشد');
+  const label = question
+    ? `پیگیری «${question.slice(0, 50)}${question.length > 50 ? '…' : ''}»`
+    : `پیگیری «${d.topic}»`;
   return store.insertIntention({
     principalId,
-    title: title || `پیگیری «${d.topic}»`,
+    title: title || label,
     createdFrom,
+    question,
     dossierId,
     triggerKind: 'schedule',
     everyHours,
@@ -81,8 +87,13 @@ export async function fire(intention) {
   const before = store.dossierClaims(principalId, dossier.id);
   const openQuestions = before.filter((c) => c.status === 'disputed').map((c) => c.text);
 
+  // A watch created from a specific question keeps chasing that question; one created
+  // on a dossier follows the dossier as a whole.
   const question = [
-    `درباره‌ی «${dossier.topic}» چه چیز تازه‌ای هست که قبلاً نمی‌دانستیم؟`,
+    intention.question
+      ? `این پرسش را دنبال کن: ${intention.question}`
+      : `درباره‌ی «${dossier.topic}» چه چیز تازه‌ای هست که قبلاً نمی‌دانستیم؟`,
+    intention.question ? `زمینه: «${dossier.topic}»` : null,
     openQuestions.length ? `سؤال‌های باز: ${openQuestions.slice(0, 3).join(' · ')}` : null,
     'روی منابع تازه و یافته‌های جدید تمرکز کن، نه تکرار آنچه شناخته‌شده است.',
   ].filter(Boolean).join('\n');

@@ -54,7 +54,7 @@ const summarise = (rows, limit = 12) => rows.slice(0, limit)
  * @returns {{passages, trail, hops, exhausted, costToman}}
  */
 export async function investigate({
-  principalId, dossierId, question, maxHops = 4, perHop = 6, onStep,
+  principalId, dossierId, question, maxHops = 4, perHop = 6, onStep, searchOtherDossiers = true,
   // The planner is injectable so the loop can be exercised without a model, and so a
   // different search strategy can be dropped in later.
   ask = chatJson,
@@ -124,15 +124,48 @@ export async function investigate({
     queries = next;
   }
 
+  // The leads ran out here, but the answer may sit in another dossier of the user's
+  // own — material they already paid to read. Searching their own sources is free
+  // and is checked before offering to spend money on the web.
+  let elsewhere = [];
+  if ((exhausted || !seen.size) && searchOtherDossiers) {
+    const scope = new Set(store.dossierScope(principalId, dossierId));
+    const others = store.listDossiers(principalId, 50)
+      .map((d) => d.id).filter((id) => !scope.has(id));
+
+    if (others.length) {
+      await onStep?.({ kind: 'widening', count: others.length });
+      const terms = [question, ...trail.flatMap((t) => t.queries)].slice(0, 5);
+      const hits = new Map();
+      for (const t of terms) {
+        for (const row of store.searchChunks(principalId, others, t, 8)) {
+          if (!hits.has(row.id)) hits.set(row.id, row);
+        }
+      }
+      const byDossier = new Map();
+      for (const row of hits.values()) {
+        const list = byDossier.get(row.dossier_id) ?? [];
+        list.push(row);
+        byDossier.set(row.dossier_id, list);
+      }
+      elsewhere = [...byDossier.entries()].map(([id, rows]) => ({
+        dossier: store.getDossier(principalId, id), rows,
+      })).filter((e) => e.dossier);
+
+      if (elsewhere.length) await onStep?.({ kind: 'elsewhere', elsewhere });
+    }
+  }
+
   return {
     passages: [...seen.values()],
     trail,
     hops: trail.length,
     exhausted,
     costToman,
-    // True when the corpus simply does not hold the answer, which is when going to
-    // the web is worth offering — but never without being asked.
-    notInCorpus: seen.size === 0 || (exhausted && trail.at(-1)?.missing),
+    elsewhere,
+    // True when neither this dossier nor the user's other sources hold it, which is
+    // when going to the web is worth offering — but never without being asked.
+    notInCorpus: !elsewhere.length && (seen.size === 0 || (exhausted && trail.at(-1)?.missing)),
   };
 }
 
