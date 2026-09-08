@@ -93,7 +93,20 @@ The longer reasoning behind these choices, and the reviews that produced them, a
 ## Commands
 
 ```
-/start    what it does
-/cost     spend per dossier, and how often you acted on it
-/recent   the last captures
+/start      what it does
+/cost       spend per dossier, and how often you acted on it
+/recent     the last captures
 ```
+
+Inspection, for looking at what was actually stored:
+
+```
+/db         row counts and total spend
+/c <id>     one capture, including the raw model output
+/d <id>     one dossier: every claim with its verification method and note
+/eps        recent research episodes: state, cost, duration
+/sql SELECT …   read-only query, 20 rows max
+```
+
+`/sql` accepts a single `SELECT` and nothing else — no second statement, no `PRAGMA`,
+no `ATTACH`, no writes — and only the owner chat can reach it.

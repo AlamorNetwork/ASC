@@ -138,7 +138,7 @@ async function handleCommand(chatId, principalId, text) {
       ['سلام. ویس بفرست یا بنویس.', '',
        'هر چیزی که بفرستی ثبت می‌شود — حتی اگر نفهمم چه می‌خواهی.',
        'اگر درخواست تحقیق باشد، دکمه‌اش را می‌زنی و در پس‌زمینه انجام می‌دهم.', '',
-       '/cost — گزارش هزینه', '/recent — آخرین ثبت‌ها'].join('\n'));
+       '/cost — گزارش هزینه', '/recent — آخرین ثبت‌ها', '/db — دیتابیس'].join('\n'));
     return true;
   }
   if (text.startsWith('/cost')) {
@@ -160,6 +160,89 @@ async function handleCommand(chatId, principalId, text) {
       `#${r.id} · ${KIND_LABEL[r.kind] ?? r.kind} — ${esc(r.title || r.transcript.slice(0, 50))}`).join('\n'));
     return true;
   }
+
+  // ------------------------------------------------------------ inspection
+
+  if (text.startsWith('/db')) {
+    const s = store.stats(principalId);
+    await tg.send(chatId, [
+      '🗄 <b>وضعیت دیتابیس</b>', '',
+      `ثبت‌ها: ${s.captures}`,
+      `پرونده‌ها: ${s.dossiers}`,
+      `دورهای تحقیق: ${s.episodes}`,
+      `ادعاها: ${s.claims} — که ${s.verified} تا تأیید شده`,
+      `جمع هزینه: ${toman(s.spent)} تومان`, '',
+      '<code>/c &lt;id&gt;</code> ثبت · <code>/d &lt;id&gt;</code> پرونده · <code>/eps</code> دورها',
+      '<code>/sql SELECT …</code> پرس‌وجوی خواندنی',
+    ].join('\n'));
+    return true;
+  }
+
+  if (text.startsWith('/c ')) {
+    const row = store.getCapture(principalId, Number(text.slice(3).trim()));
+    if (!row) return (await tg.send(chatId, 'پیدا نشد.'), true);
+    await tg.send(chatId, [
+      `🎧 <b>ثبت #${row.id}</b> · ${row.source} · ${row.created_at.slice(0, 19)}`, '',
+      esc(row.transcript), '',
+      `kind=${row.kind} · confidence=${row.confidence} · ${toman(row.cost_toman)} تومان`,
+      row.topic ? `topic: ${esc(row.topic)}` : '',
+      row.request ? `request: ${esc(row.request)}` : 'request: null',
+      row.durability ? `durability: ${esc(row.durability)}` : '',
+      '', '<b>raw</b>', `<pre>${esc(JSON.stringify(JSON.parse(row.raw_json), null, 1))}</pre>`,
+    ].filter(Boolean).join('\n'));
+    return true;
+  }
+
+  if (text.startsWith('/d ')) {
+    const id = Number(text.slice(3).trim());
+    const d = store.getDossier(principalId, id);
+    if (!d) return (await tg.send(chatId, 'پیدا نشد.'), true);
+    const claims = store.dossierClaims(principalId, id);
+    const mark = { verified: '✅', disputed: '⚠️', found: '📄', unresolved: '❓' };
+    const L = [`📁 <b>پرونده #${d.id}</b> · ${esc(d.topic)} · ${d.state}`, ''];
+    for (const c of claims) {
+      L.push(`${mark[c.status] ?? '·'} ${esc(c.text)}`);
+      const bits = [];
+      if (c.verify_method) bits.push(`<i>${c.verify_method}</i>`);
+      if (c.verify_note) bits.push(esc(c.verify_note));
+      if (c.source_url) bits.push(esc(c.source_url));
+      if (bits.length) L.push(`   ↳ ${bits.join(' · ')}`);
+      if (c.quote) L.push(`   «${esc(c.quote.slice(0, 160))}»`);
+    }
+    if (!claims.length) L.push('<i>هنوز ادعایی ثبت نشده.</i>');
+    await tg.send(chatId, L.join('\n'));
+    return true;
+  }
+
+  if (text.startsWith('/eps')) {
+    const rows = store.recentEpisodes(principalId);
+    if (!rows.length) return (await tg.send(chatId, 'هنوز دوری اجرا نشده.'), true);
+    await tg.send(chatId, rows.map((e) =>
+      `#${e.id} · پرونده ${e.dossier_id} · ${e.state} · ${toman(e.cost_toman)} تومان · ` +
+      `${e.duration_ms ? Math.round(e.duration_ms / 1000) + 'ث' : '—'}${e.user_acted ? ' · اقدام شد' : ''}`
+    ).join('\n'));
+    return true;
+  }
+
+  if (text.startsWith('/sql')) {
+    const sql = text.slice(4).trim();
+    if (!sql) {
+      await tg.send(chatId, ['<code>/sql SELECT …</code> — فقط خواندنی، حداکثر ۲۰ سطر.', '',
+        'جدول‌ها: <code>captures</code> · <code>dossiers</code> · <code>episodes</code> · <code>claims</code>', '',
+        'مثال:', '<code>/sql SELECT status, count(*) FROM claims GROUP BY status</code>'].join('\n'));
+      return true;
+    }
+    try {
+      const rows = store.readOnlyQuery(sql);
+      if (!rows.length) return (await tg.send(chatId, 'بدون نتیجه.'), true);
+      const body = rows.map((r) => JSON.stringify(r)).join('\n');
+      await tg.send(chatId, `<pre>${esc(body.slice(0, 3500))}</pre>\n${rows.length} سطر`);
+    } catch (err) {
+      await tg.send(chatId, `❌ ${esc(err.message)}`);
+    }
+    return true;
+  }
+
   return false;
 }
 

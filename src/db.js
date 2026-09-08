@@ -133,3 +133,39 @@ export const costReport = (principalId) => db.prepare(`
 export const recentCaptures = (principalId, limit = 10) =>
   db.prepare(`SELECT * FROM captures WHERE principal_id = ? ORDER BY id DESC LIMIT ?`)
     .all(principalId, limit);
+
+// ---------------------------------------------------------------- inspection
+
+export const stats = (principalId) => ({
+  captures: db.prepare(`SELECT COUNT(*) n FROM captures WHERE principal_id = ?`).get(principalId).n,
+  dossiers: db.prepare(`SELECT COUNT(*) n FROM dossiers WHERE principal_id = ?`).get(principalId).n,
+  episodes: db.prepare(`SELECT COUNT(*) n FROM episodes WHERE principal_id = ?`).get(principalId).n,
+  claims:   db.prepare(`SELECT COUNT(*) n FROM claims   WHERE principal_id = ?`).get(principalId).n,
+  verified: db.prepare(`SELECT COUNT(*) n FROM claims WHERE principal_id = ? AND status = 'verified'`).get(principalId).n,
+  spent:    db.prepare(`SELECT COALESCE(SUM(cost_toman),0) t FROM episodes WHERE principal_id = ?`).get(principalId).t
+          + db.prepare(`SELECT COALESCE(SUM(cost_toman),0) t FROM captures WHERE principal_id = ?`).get(principalId).t,
+});
+
+export const getDossier = (principalId, id) =>
+  db.prepare(`SELECT * FROM dossiers WHERE principal_id = ? AND id = ?`).get(principalId, id);
+
+export const listDossiers = (principalId, limit = 10) =>
+  db.prepare(`SELECT * FROM dossiers WHERE principal_id = ? ORDER BY id DESC LIMIT ?`).all(principalId, limit);
+
+export const recentEpisodes = (principalId, limit = 10) =>
+  db.prepare(`SELECT * FROM episodes WHERE principal_id = ? ORDER BY id DESC LIMIT ?`).all(principalId, limit);
+
+/**
+ * Read-only query surface for inspecting data during testing.
+ * Only the owner can reach this, and only a single SELECT is allowed through.
+ */
+export function readOnlyQuery(sql, limit = 20) {
+  const trimmed = sql.trim().replace(/;+\s*$/, '');
+  if (!/^select\b/i.test(trimmed)) throw new Error('فقط SELECT مجاز است');
+  if (/;/.test(trimmed)) throw new Error('فقط یک دستور در هر بار');
+  if (/\b(attach|pragma|insert|update|delete|drop|alter|create|replace)\b/i.test(trimmed)) {
+    throw new Error('این دستور خواندنی نیست');
+  }
+  const capped = /\blimit\b/i.test(trimmed) ? trimmed : `${trimmed} LIMIT ${limit}`;
+  return db.prepare(capped).all();
+}
