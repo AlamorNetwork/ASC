@@ -13,6 +13,7 @@ import { relatedDossiers } from './chunks.js';
 import { startScheduler } from './scheduler.js';
 import * as menu from './menu.js';
 import { deepInvestigate } from './deep.js';
+import { route } from './router.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
@@ -341,6 +342,103 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
     console.error('[deep] failed:', err);
     await tg.edit(chatId, status.message_id, `${head}\n\n❌ ${esc(String(err.message ?? err))}`);
   }
+}
+
+/**
+ * One typed message, sent to whichever procedure it was asking for.
+ *
+ * The rule that keeps this honest: anything free happens immediately, anything that
+ * spends is proposed with a button. A misread intent should cost a wasted sentence,
+ * never a research round nobody asked for.
+ */
+async function handleTypedMessage(chatId, principalId, msg) {
+  const text = msg.text;
+  const active = settings.activeDossier(principalId);
+  const dossier = active ? store.getDossier(principalId, active) : null;
+
+  const decision = await route({
+    text,
+    hasDossier: !!dossier,
+    topic: dossier?.topic ?? null,
+    hasDocs: dossier ? store.dossierDocuments(principalId, active).length > 0 : false,
+  });
+
+  switch (decision.intent) {
+    case 'chat':
+    case 'summarise':
+    case 'search':
+      // All three are the same procedure; chat.js already drops retrieval for a
+      // summary and runs it for a question.
+      if (dossier) return handleChatTurn(chatId, principalId, active, text);
+      return offerADossier(chatId, principalId, text, msg);
+
+    case 'open': {
+      const recent = store.listDossiers(principalId, 5);
+      if (!recent.length) break;
+      return void await tg.send(chatId, 'کدام پرونده؟', {
+        buttons: recent.map((d) => [{
+          text: `📁 ${d.topic.slice(0, 40)}`, callback_data: `m:open:${d.id}`,
+        }]),
+      });
+    }
+
+    case 'research': {
+      const topic = decision.topic ?? text;
+      const avg = settings.recentAverageCost(principalId);
+      const id = store.insertDossier({ principalId, topic, question: text });
+      return void await tg.send(chatId, [
+        `🔎 <b>${esc(topic)}</b>`, '',
+        'این یعنی یک دور تحقیق در وب — منابع را باز می‌کنم و نقل‌قول‌ها را می‌سنجم.',
+        avg ? `<i>دورهای اخیر حدود ${toman(avg * 310000)} تومان بوده‌اند.</i>` : '',
+        '', `<i>${esc(decision.why || 'به نظرم تحقیق تازه می‌خواهی')}</i>`,
+      ].filter(Boolean).join('\n'), {
+        buttons: [[
+          { text: '🔎 برو', callback_data: `research:${id}` },
+          { text: '✋ نه، فقط ثبت کن', callback_data: `keep:${id}` },
+        ]],
+      });
+    }
+
+    case 'deep': {
+      // The ceiling conversation already exists and is the right one to reuse — deep
+      // is the most expensive thing here and never starts without a number.
+      const topic = decision.topic ?? dossier?.topic ?? text;
+      const dossierId = active ?? store.insertDossier({ principalId, topic, question: text });
+      pendingDeep.set(`deep${dossierId}`, { dossierId, question: text, resumeId: null });
+      return void await tg.send(chatId, [
+        '🕳 <b>کاوش عمیق</b>', '', `«${esc(text.slice(0, 120))}»`, '',
+        'تا وقتی سرنخی هست ادامه می‌دهم — اسناد خودت و وب، دور به دور.',
+        'هر وقت خواستی با دکمه‌ی «نگه دار» متوقفش کن؛ همان‌جا ذخیره می‌شود.', '',
+        '<i>سقف هزینه را انتخاب کن:</i>',
+      ].join('\n'), {
+        buttons: [
+          [{ text: '۵۰ هزار تومان', callback_data: `deepgo:deep${dossierId}:0.16` },
+           { text: '۱۵۰ هزار', callback_data: `deepgo:deep${dossierId}:0.48` }],
+          [{ text: '۵۰۰ هزار', callback_data: `deepgo:deep${dossierId}:1.6` },
+           { text: '♾ بی‌سقف', callback_data: `deepgo:deep${dossierId}:none` }],
+        ],
+      });
+    }
+  }
+
+  // 'keep', and anything that fell through: the thought is worth more than the routing.
+  const { capture, usage } = await captureFromText(text);
+  await handleCapture(chatId, principalId, { ...capture, source: 'text' }, usage, msg.message_id);
+}
+
+/** Asked for something about a dossier, with none open. */
+async function offerADossier(chatId, principalId, text, msg) {
+  const recent = store.listDossiers(principalId, 3);
+  if (!recent.length) {
+    const { capture, usage } = await captureFromText(text);
+    return handleCapture(chatId, principalId, { ...capture, source: 'text' }, usage, msg.message_id);
+  }
+  await tg.send(chatId, 'دربارهٔ کدام پرونده؟ هیچ‌کدام باز نیست.', {
+    // The menu already owns opening a dossier; `m:` routes there.
+    buttons: recent.map((d) => [{
+      text: `📁 ${d.topic.slice(0, 40)}`, callback_data: `m:open:${d.id}`,
+    }]),
+  });
 }
 
 /** A web round on an existing dossier, when its own documents did not hold the answer. */
@@ -729,7 +827,8 @@ async function handleCommand(chatId, principalId, text, isOwner) {
           ? 'ویس با این پیاده می‌شود، ارزان‌تر'
           : 'خاموش؛ ویس را همان مدل capture می‌شنود'}</i>`,
         `research  <code>${esc(m.research)}</code> <i>(باید جست‌وجوگر باشد)</i>`,
-        `structure <code>${esc(m.structure)}</code> <i>(گفتگو و ساختاردهی)</i>`, '',
+        `structure <code>${esc(m.structure)}</code> <i>(گفتگو و ساختاردهی)</i>`,
+        `router    <code>${esc(m.router)}</code> <i>(تشخیص می‌دهد چه می‌خواهی — ارزان‌ترین کافی است)</i>`, '',
         '<code>/model research openai/gpt-…</code>',
         '<code>/model transcribe none</code> خاموش کردن',
         '<code>/models</code> فهرست کامل'].join('\n'));
@@ -1273,36 +1372,11 @@ export async function run() {
       }
 
       if (msg.text) {
-        // With a dossier open, plain text is conversation about it. Voice is always
-        // a new capture, so a thought can still be dropped mid-discussion.
-        const active = settings.activeDossier(principalId);
-        if (active) {
-          await tg.typing(chatId);
-          await handleChatTurn(chatId, principalId, active, msg.text);
-          continue;
-        }
-
-        // "Summarise it" with nothing open refers to whatever was last worked on. Sending
-        // it down the capture path turned the word itself into a research topic, which is
-        // both wrong and expensive — so it asks instead.
-        if (chat.isAboutTheConversation(msg.text)) {
-          const recent = store.listDossiers(principalId, 3);
-          if (recent.length) {
-            await tg.send(chatId, [
-              'دربارهٔ کدام پرونده؟ هیچ‌کدام باز نیست.',
-            ].join('\n'), {
-              // The menu already owns opening a dossier; `m:` routes there.
-              buttons: recent.map((d) => [{
-                text: `📁 ${d.topic.slice(0, 40)}`, callback_data: `m:open:${d.id}`,
-              }]),
-            });
-            continue;
-          }
-        }
-
+        // Which of this program's procedures the message is asking for. Free ones run;
+        // ones that spend are proposed. See router.js for why the model chooses the
+        // procedure and never performs it.
         await tg.typing(chatId);
-        const { capture, usage } = await captureFromText(msg.text);
-        await handleCapture(chatId, principalId, { ...capture, source: 'text' }, usage, msg.message_id);
+        await handleTypedMessage(chatId, principalId, msg);
         continue;
       }
 

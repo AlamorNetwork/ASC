@@ -80,6 +80,10 @@ export const config = {
     research: env.MODEL_RESEARCH || 'openai/gpt-6-astra:online',
     // Cheap text work.
     structure: env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
+    // One small classification per message: which procedure the user is asking for.
+    // The cheapest thing that can follow instructions is the right model here — put a
+    // free one first and something dependable behind it.
+    router: env.MODEL_ROUTER || env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
     // Multilingual embeddings for retrieval. 1024 dims, and good on Persian.
     embed: env.MODEL_EMBED || 'intfloat/multilingual-e5-large',
     // Cross-encoder for the last step of retrieval. Empty disables reranking.

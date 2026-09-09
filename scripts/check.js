@@ -861,6 +861,76 @@ await check('a repeated query is embedded once, not every time', async () => {
 
 // «جمع‌بندی کن» once became a research episode on the topic "summarising", because a
 // deep run left no dossier open and the message fell through to capture.
+await check('the router answers the obvious cases without a model', async () => {
+  const { route } = await import('../src/router.js');
+  // A model call to classify what a regex already knows is exactly the sort of cost
+  // that hides in plain sight, so the free paths are asserted to stay free.
+  const boom = () => { throw new Error('the router paid for a decision it did not need'); };
+
+  const meta = await route({ text: 'جمع‌بندی کن', hasDossier: true, ask: boom });
+  if (meta.intent !== 'summarise') throw new Error(`meta went to ${meta.intent}`);
+  if (meta.decidedBy !== 'rule') throw new Error('a meta request cost a model call');
+
+  const word = await route({ text: 'میترائیسم', hasDossier: false, ask: boom });
+  if (word.intent !== 'keep') throw new Error(`a lone word went to ${word.intent}`);
+
+  const empty = await route({ text: '   ', hasDossier: true, ask: boom });
+  if (empty.intent !== 'keep') throw new Error('empty text was routed somewhere');
+  return 'meta, one word and empty are free';
+});
+
+await check('the router degrades to the old behaviour instead of failing', async () => {
+  const { route } = await import('../src/router.js');
+  const dead = () => { throw new Error('endpoint down'); };
+
+  // With the router unavailable, a dossier open means chat and nothing open means keep —
+  // which is what this program did before there was a router at all.
+  const open = await route({ text: 'این نظریه از کجا آمد؟', hasDossier: true, ask: dead });
+  if (open.intent !== 'chat') throw new Error(`fell back to ${open.intent}`);
+  const shut = await route({ text: 'یک فکری به سرم زد درباره‌ی ساختار', hasDossier: false, ask: dead });
+  if (shut.intent !== 'keep') throw new Error(`fell back to ${shut.intent}`);
+
+  // A reply naming something that is not an intent must not be acted on.
+  const nonsense = await route({
+    text: 'برو تحقیق کن', hasDossier: true,
+    ask: async () => ({ data: { intent: 'delete_everything', topic: 'x' }, usage: {} }),
+  });
+  if (nonsense.intent !== 'chat') throw new Error(`invented intent survived: ${nonsense.intent}`);
+
+  // research without a subject cannot be carried out, so it must not be proposed.
+  const vague = await route({
+    text: 'یه چیزی پیدا کن', hasDossier: true,
+    ask: async () => ({ data: { intent: 'research', topic: null }, usage: {} }),
+  });
+  if (vague.intent === 'research') throw new Error('research was proposed with no topic');
+  return 'down, invented and topicless all land somewhere safe';
+});
+
+await check('spending is proposed, never started by the router alone', async () => {
+  const { COSTS_MONEY, INTENTS } = await import('../src/router.js');
+  for (const paid of ['research', 'deep']) {
+    if (!COSTS_MONEY.has(paid)) throw new Error(`${paid} is not marked as costing money`);
+  }
+
+  // Every paid intent must reach a button in app.js rather than a call. Asserted on the
+  // source because the alternative is driving Telegram, and this is the rule that keeps
+  // a misread message from spending on its own.
+  const src = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('async function handleTypedMessage'),
+                         src.indexOf('async function offerADossier'));
+  for (const forbidden of ['runDeep(', 'runResearch(', 'startResearch(']) {
+    if (body.includes(forbidden)) {
+      throw new Error(`handleTypedMessage calls ${forbidden} directly — spending without asking`);
+    }
+  }
+  for (const needed of ['callback_data: `research:', 'deepgo:']) {
+    if (!body.includes(needed)) throw new Error(`no confirmation button for ${needed}`);
+  }
+  const unknown = INTENTS.filter((i) => !['chat', 'summarise', 'search', 'research', 'deep', 'keep', 'open'].includes(i));
+  if (unknown.length) throw new Error(`unhandled intents: ${unknown.join(', ')}`);
+  return 'research and deep both go through a button';
+});
+
 await check('asking for a summary is about the conversation, not a topic', async () => {
   const { isAboutTheConversation } = await import('../src/chat.js');
 
