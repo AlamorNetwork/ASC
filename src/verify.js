@@ -47,17 +47,34 @@ const BROWSER_HEADERS = {
   'Accept-Language': 'fa,en-US;q=0.9,en;q=0.8',
 };
 
+/**
+ * Whether a failure means the page is not there, or only that we were not let in.
+ *
+ * A model that gives a 404, a domain that does not resolve, or a URL with a space in
+ * the middle of it did not cite a source — it made one up, and that is the single worst
+ * thing a research model can do. A 403 from Britannica is our problem instead. Putting
+ * both in one bucket is how qwen's invented Iranica link first passed for a blocked one.
+ */
+function fabricated(status, err) {
+  if (status === 404 || status === 410) return true;
+  const m = String(err ?? '');
+  return /Failed to parse URL|Invalid URL|ENOTFOUND|EAI_AGAIN|ERR_INVALID_URL/i.test(m);
+}
+
 async function get(url, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', headers: BROWSER_HEADERS });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      return { ok: false, error: `HTTP ${res.status}`, missing: fabricated(res.status) };
+    }
     const ct = res.headers.get('content-type') ?? '';
     const body = await res.text();
     return { ok: true, text: ct.includes('html') ? htmlToText(body) : body };
   } catch (err) {
-    return { ok: false, error: err.name === 'AbortError' ? 'timeout' : err.message };
+    const error = err.name === 'AbortError' ? 'timeout' : (err.cause?.code ?? err.message);
+    return { ok: false, error, missing: fabricated(null, `${error} ${err.message}`) };
   } finally {
     clearTimeout(timer);
   }
@@ -90,13 +107,14 @@ async function fetchText(url, timeoutMs = 15000) {
 
   let result = await get(url, timeoutMs);
   if (!result.ok) {
-    const live = result.error;
+    const { error: live, missing } = result;
     const archived = await fromArchive(url);
     // Named so a quote matched against a years-old snapshot is never passed off as a
     // match against the page as it stands today.
     result = archived.ok
       ? { ...archived, note: `از آرشیو اینترنت (${archived.archived?.slice(0, 8) ?? 'نسخه‌ی بایگانی'})` }
-      : { ok: false, error: live };
+      // A URL the archive has never seen either is a URL that very likely never existed.
+      : { ok: false, error: live, missing };
   }
 
   pageCache.set(url, result);
@@ -147,10 +165,17 @@ export async function verifyClaim({ sourceUrl, quote }) {
 
   const page = await fetchText(sourceUrl);
   if (!page.ok) {
-    return {
-      status: 'found', method: null, reason: 'unreachable',
-      note: `منبع باز نشد (${page.error}) — نتوانستم بررسی کنم، نه اینکه غلط باشد`,
-    };
+    // A page that does not exist is a fabricated citation, and worse than no citation:
+    // it looks like evidence. A page that exists but will not let us in is our limit.
+    return page.missing
+      ? {
+        status: 'found', method: null, reason: 'fabricated_url',
+        note: `این آدرس وجود ندارد (${page.error}) — منبع ساختگی است`,
+      }
+      : {
+        status: 'found', method: null, reason: 'unreachable',
+        note: `منبع باز نشد (${page.error}) — نتوانستم بررسی کنم، نه اینکه غلط باشد`,
+      };
   }
 
   const out = verifyAgainstText(

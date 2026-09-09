@@ -730,6 +730,8 @@ const server = http.createServer((req, res) => {
   // /blocked stands in for Britannica and Encyclopaedia Iranica, which refuse this
   // fetcher outright.
   if (req.url?.startsWith('/blocked')) { res.writeHead(403); res.end('no'); return; }
+  // A page that is simply not there — what an invented citation looks like.
+  if (req.url?.includes('404')) { res.writeHead(404); res.end('gone'); return; }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(fixture);
 });
@@ -752,7 +754,23 @@ await check('a source we cannot open is not the same as a claim that is wrong', 
   });
   if (wrong.reason !== 'quote_absent') throw new Error(`a missing quote was scored as ${wrong.reason}`);
 
-  return 'unreachable and quote_absent are told apart';
+  // qwen cited "https://www.encyclopedi iranica.com/..." — a domain with a space in it.
+  // Scoring that as "we could not open the page" flattered it enormously.
+  const invented = await verifyClaim({
+    sourceUrl: 'https://www.encyclopedi iranica.com/articles/mithraism-i',
+    quote: 'هر نقل‌قولی، چون این آدرس اصلاً وجود ندارد',
+  });
+  if (invented.reason !== 'fabricated_url') {
+    throw new Error(`a malformed URL was scored as ${invented.reason}`);
+  }
+
+  const gone = await verifyClaim({
+    sourceUrl: `${fixtureUrl}nothing-here-404`,
+    quote: 'هر نقل‌قولی، چون این صفحه وجود ندارد',
+  });
+  if (gone.reason !== 'fabricated_url') throw new Error(`a 404 was scored as ${gone.reason}`);
+
+  return 'unreachable, quote_absent and fabricated_url are told apart';
 });
 
 await check('verify rejects an unsupported quote', async () => {

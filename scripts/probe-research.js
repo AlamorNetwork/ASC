@@ -58,24 +58,30 @@ for (const model of candidates) {
     // scored a model that cited Encyclopaedia Iranica the same as one that invented a
     // URL, which is the opposite of the truth.
     const unreachable = found.filter((c) => c.verifyReason === 'unreachable').length;
-    const wrong = found.filter((c) => c.verifyReason === 'quote_absent').length;
+    // A URL that does not exist counts against the model, and hard. Inventing a citation
+    // is worse than admitting there isn't one.
+    const fake = found.filter((c) => c.verifyReason === 'fabricated_url').length;
+    const wrong = found.filter((c) => c.verifyReason === 'quote_absent').length + fake;
     const checkable = claims - unreachable;
 
     results.push({
-      model, ms, claims, verified, unreachable, wrong,
+      model, ms, claims, verified, unreachable, wrong, fake,
       rate: checkable ? verified / checkable : 0,
       costToman: out.costToman,
       perVerified: verified ? out.costToman / verified : null,
       summary: out.output.summary,
       verifiedClaims: out.output.verified,
       unreachableClaims: found.filter((c) => c.verifyReason === 'unreachable'),
+      fakeClaims: found.filter((c) => c.verifyReason === 'fabricated_url'),
       disputes: out.output.disputed.length,
       unresolved: out.output.unresolved.length,
       note: out.output.sourceQualityNote,
     });
 
     console.log(`   ✅ ${(ms / 1000).toFixed(0)}s · ${Math.round(out.costToman).toLocaleString('en-US')} toman` +
-      ` · ${verified}/${claims} verified` + (unreachable ? ` · ${unreachable} unreachable` : ''));
+      ` · ${verified}/${claims} verified` +
+      (fake ? ` · ⚠ ${fake} invented URL(s)` : '') +
+      (unreachable ? ` · ${unreachable} unreachable` : ''));
   } catch (err) {
     console.log(`   ✖  ${String(err.message ?? err).slice(0, 160)}`);
     results.push({ model, failed: String(err.message ?? err) });
@@ -92,8 +98,8 @@ if (!ok.length) {
 function report() {
   console.log('\n' + '─'.repeat(92));
   console.log('model'.padEnd(36) + 'toman'.padStart(9) + 'claims'.padStart(8) +
-    'verified'.padStart(10) + 'wrong'.padStart(7) + 'unreach'.padStart(9) +
-    'rate'.padStart(7) + 'per verified'.padStart(14));
+    'verified'.padStart(10) + 'wrong'.padStart(7) + 'invented'.padStart(10) +
+    'unreach'.padStart(9) + 'rate'.padStart(7));
   console.log('─'.repeat(92));
   for (const r of ok) {
     console.log(
@@ -101,10 +107,10 @@ function report() {
       Math.round(r.costToman).toLocaleString('en-US').padStart(9) +
       String(r.claims).padStart(8) +
       String(r.verified).padStart(10) +
-      String(r.wrong).padStart(7) +
+      String(r.wrong - r.fake).padStart(7) +
+      (r.fake ? `⚠ ${r.fake}` : '0').padStart(10) +
       String(r.unreachable).padStart(9) +
-      (Math.round(r.rate * 100) + '%').padStart(7) +
-      (r.perVerified ? Math.round(r.perVerified).toLocaleString('en-US') : '—').padStart(14));
+      (Math.round(r.rate * 100) + '%').padStart(7));
   }
   console.log('─'.repeat(92));
   console.log('rate counts only claims we could actually check — unreachable pages are our failure');
@@ -120,7 +126,20 @@ function report() {
     }
   }
 
-  const barren = ok.filter((r) => r.wrong > 0 && r.verified === 0);
+  const liars = ok.filter((r) => r.fake > 0);
+  if (liars.length) {
+    console.log('\n⚠ INVENTED SOURCES — the worst failure a research model has:');
+    for (const r of liars) {
+      for (const c of r.fakeClaims) {
+        console.log(`   ${r.model.split('/').pop()} → ${c.sourceUrl}`);
+      }
+    }
+    console.log('   These URLs do not exist. A model that fabricates a citation is not');
+    console.log('   cheap research at any price — the whole point here is that a claim');
+    console.log('   can be traced. Do not use one of these for research.');
+  }
+
+  const barren = ok.filter((r) => r.wrong > r.fake && r.verified === 0);
   if (barren.length) {
     console.log(`\n⚠ ${barren.map((r) => r.model).join(', ')} gave quotes that were not on the pages they cited.`);
     console.log('That is not cheap research — it is confident text with nothing behind it.');
