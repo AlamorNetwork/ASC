@@ -131,6 +131,16 @@ await check('an exhausted key is set aside and the next one is used', async () =
     if (p.blamesTheModel(kind)) throw new Error(`${kind} is about the key, not the model`);
   }
 
+  // Which free models are up changed completely between two probe runs minutes apart,
+  // so the chain has to be long — and a long chain of down links must not cost a failed
+  // round trip each, on every call.
+  if (p.modelResting('kira', 'glm-5.3-free')) throw new Error('a model started out resting');
+  p.restModel('kira', 'glm-5.3-free');
+  if (!p.modelResting('kira', 'glm-5.3-free')) throw new Error('a failed model was not set aside');
+  if (p.modelResting('kira', 'qwen3.8-flash-free')) throw new Error('resting one model rested another');
+  // Resting a model must not touch the key it failed on — there is nothing wrong with it.
+  if (p.keysAvailable(kira).length !== 0) throw new Error('unrelated: keys changed');
+
   const status = p.providerStatus(providers).find((s) => s.name === 'kira');
   if (status.ready !== 0 || status.keys !== 2) throw new Error('status does not reflect the cool-off');
 

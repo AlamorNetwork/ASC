@@ -57,9 +57,11 @@ try {
   console.log(`could not list models: ${String(err.message).slice(0, 80)}`);
 }
 
+// All of the free ones, not a sample: the chain wants every model that has ever worked,
+// and testing them costs nothing.
 const models = process.argv.slice(3).length
   ? process.argv.slice(3)
-  : listed.filter((m) => m.is_free).map((m) => m.id).slice(0, 6);
+  : listed.filter((m) => m.is_free).map((m) => m.id);
 
 if (!models.length) {
   console.log('\nNothing to test. Name some models as arguments.\n');
@@ -143,7 +145,10 @@ if (working.length) {
             { role: 'system', content: 'فقط JSON بده: {"intent":"chat | research | keep"}' },
             { role: 'user', content: 'برو در مورد آیین میترائیسم تحقیق کن' },
           ],
-          max_tokens: 120,
+          // Room for a reasoning model to think and still answer. Measuring with a tight
+          // budget punishes exactly the models that llm.js retries successfully, which
+          // would report them as broken when production handles them fine.
+          max_tokens: 900,
         }),
         signal: AbortSignal.timeout(60000),
       });
@@ -164,13 +169,26 @@ if (working.length) {
 
 console.log('');
 if (working.length) {
-  const chain = working.map((r) => `${r.model}@${provider.name}`).join(',');
-  console.log('These answered, fastest first:');
+  console.log('Answered, fastest first:');
   for (const r of working) console.log(`  ${String(Math.round(r.ms / 100) / 10).padStart(5)}s  ${r.model}`);
+
+  // A model that returned 5xx is not a model to leave out. Which of these is up changes
+  // from one run to the next — a set that answered a minute ago can be entirely down
+  // now — so a chain built only from this sample would be built from a coin toss. A
+  // link that is down costs one instant 502 and moves on, so the cheap thing is to
+  // include everything and let the runtime sort it out, ordered by what we did measure.
+  const alsoTried = models.filter((m) => !working.some((w) => w.model === m));
+  const chain = [...working.map((r) => r.model), ...alsoTried]
+    .map((m) => `${m}@${provider.name}`).join(',');
 
   console.log('\nstructure — planning and assessing inside a run, called dozens of times.');
   console.log('A few seconds here disappear into work that already takes minutes:');
   console.log(`  MODEL_STRUCTURE=${chain},${config.models.structure}`);
+  if (alsoTried.length) {
+    console.log(`\n  The ${alsoTried.length} that failed just now are in the chain on purpose. Which of these`);
+    console.log('  models is up changes between runs, a down link costs one instant 502,');
+    console.log('  and leaving it out is what turns a bad minute into a missing model.');
+  }
 
   // The router runs on every message with the user waiting, so its budget is patience,
   // not money. A free model that takes ten seconds is a worse router than a cheap one

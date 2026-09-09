@@ -116,8 +116,26 @@ export function providerStatus(providers) {
   }));
 }
 
+/**
+ * A model that the provider could not serve, set aside briefly.
+ *
+ * Measured on kiraai's free tier: which models are up changes between runs minutes
+ * apart — a set that answered fine can be entirely 502 the next time. The answer is a
+ * long chain, but a long chain of mostly-down links would pay a failed round trip for
+ * each of them on every single call. Remembering which ones just failed turns that into
+ * one bad call rather than every call, and the memory is short because the outages are.
+ */
+const restingModels = new Map();   // `${provider}@${model}` -> usable again at
+const MODEL_REST = 2 * 60_000;
+
+export const restModel = (providerName, model) =>
+  restingModels.set(`${providerName}@${model}`, Date.now() + MODEL_REST);
+
+export const modelResting = (providerName, model) =>
+  (restingModels.get(`${providerName}@${model}`) ?? 0) > Date.now();
+
 /** Test seam and a way to clear a cool-off after fixing a key. */
-export const clearCooling = () => cooling.clear();
+export const clearCooling = () => { cooling.clear(); restingModels.clear(); };
 
 /**
  * Turns `a@kira,b@kira,c` into the ordered list of attempts to make.

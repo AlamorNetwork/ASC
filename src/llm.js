@@ -1,6 +1,9 @@
 import { config } from './config.js';
 import * as store from './db.js';
-import { planFor, keysAvailable, setAside, kindOfFailure, blamesTheModel, bareModel } from './providers.js';
+import {
+  planFor, keysAvailable, setAside, kindOfFailure, blamesTheModel, bareModel,
+  restModel, modelResting,
+} from './providers.js';
 
 const { key, base } = config.router;
 
@@ -22,7 +25,13 @@ async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
 
   let last = null;
 
-  for (const { model, provider } of plan) {
+  // Every link is tried if it has to be, but one that failed a moment ago is skipped
+  // first — with a long chain of free models, most of which may be down, paying for
+  // their failures on every call is the difference between a chain and a delay.
+  const ordered = [...plan.filter((p) => !modelResting(p.provider.name, p.model)),
+                   ...plan.filter((p) => modelResting(p.provider.name, p.model))];
+
+  for (const { model, provider } of ordered) {
     const usable = keysAvailable(provider);
     if (!usable.length) {
       last ??= new Error(`${provider.name}: همه‌ی کلیدها موقتاً کنار گذاشته شده‌اند`);
@@ -49,7 +58,9 @@ async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
       if (blamesTheModel(kind)) {
         // Their gateway is down for this model, or does not carry it. Another key gets
         // the same answer, so go straight to the next link of the chain — and leave the
-        // key alone, since there is nothing wrong with it.
+        // key alone, since there is nothing wrong with it. The model is set aside for a
+        // couple of minutes so the rest of this investigation does not pay for it again.
+        restModel(provider.name, model);
         console.warn(`[llm] ${model}@${provider.name} unavailable (${res.status}), next in chain`);
         break;
       }
