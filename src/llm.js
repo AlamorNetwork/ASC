@@ -18,20 +18,34 @@ let reasoningCanBeDisabled = true;
  * label and retries a couple of times before giving up. A dropped connection to the
  * provider is common enough that failing the whole turn on the first one is wrong.
  */
-export async function routerFetch(path, init, { label = 'router', tries = 3 } = {}) {
+export async function routerFetch(path, init, {
+  label = 'router', tries = 3, timeoutMs = 120000,
+} = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= tries; attempt++) {
+    // Without an explicit deadline a hung connection waits on Node's default, which
+    // is long enough to look like the whole program has stopped.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      return await fetch(`${base}${path}`, init);
+      return await fetch(`${base}${path}`, { ...init, signal: ctrl.signal });
     } catch (err) {
       lastErr = err;
-      const cause = err.cause?.code ?? err.name;
+      const timedOut = err.name === 'AbortError';
+      const cause = timedOut ? `timeout after ${timeoutMs / 1000}s` : (err.cause?.code ?? err.name);
       console.warn(`[llm] ${label} attempt ${attempt}/${tries} failed: ${cause}`);
+      // A timeout means the far end is slow, so hammering it again mostly multiplies
+      // the wait. One more try, then give up and say so.
+      if (timedOut && attempt >= 2) break;
       if (attempt < tries) await new Promise((r) => setTimeout(r, 400 * attempt));
+    } finally {
+      clearTimeout(timer);
     }
   }
-  const cause = lastErr?.cause?.code ?? lastErr?.message ?? 'unknown';
-  throw new Error(`ارتباط با ${label} برقرار نشد (${cause}) — ${base}`);
+  const cause = lastErr?.name === 'AbortError'
+    ? `پاسخی نداد (${timeoutMs / 1000} ثانیه)`
+    : (lastErr?.cause?.code ?? lastErr?.message ?? 'unknown');
+  throw new Error(`ارتباط با ${label} برقرار نشد — ${cause} · ${base}`);
 }
 
 async function post(body) {

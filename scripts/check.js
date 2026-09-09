@@ -601,6 +601,39 @@ await check('a zero ceiling starts nothing at all', async () => {
   return 'nothing begun, nothing spent';
 });
 
+await check('a missing reranker costs precision, not the answer', async () => {
+  const { rerank, resetRerank, rerankAvailable } = await import('../src/rerank.js');
+  const store2 = await import('../src/db.js');
+
+  // Point it at a model the endpoint will refuse, then confirm it disables itself
+  // rather than throwing, and stays disabled instead of asking again every question.
+  const before = store2.getSetting('model.rerank');
+  store2.setSetting('model.rerank', 'definitely/not-a-real-reranker');
+  resetRerank();
+
+  const out = await rerank('سؤال', ['متن یک', 'متن دو']);
+  if (out !== null) throw new Error('a refused reranker returned a result');
+  if (rerankAvailable() === true) throw new Error('a refused reranker marked itself available');
+
+  // And retrieval still returns passages with it switched off.
+  const p = `rr-${Date.now()}`;
+  const dossierId = store2.insertDossier({ principalId: p, topic: 'بدون ریرنکر' });
+  const docId = store2.insertDocument({
+    principalId: p, dossierId, filename: 'r.txt', kind: 'text', extraction: 'local',
+  });
+  store2.insertChunks(p, dossierId, docId, [
+    { seq: 0, text: 'میترائیسم آیینی رازآمیز بود که در امپراتوری روم گسترش یافت.' },
+    { seq: 1, text: 'متنی کاملاً بی‌ربط درباره‌ی کشاورزی و آبیاری.' },
+  ]);
+  const { retrieve } = await import('../src/chunks.js');
+  const rows = await retrieve({ principalId: p, dossierId, query: 'میترائیسم', limit: 2 });
+  if (!rows.length) throw new Error('retrieval returned nothing without a reranker');
+
+  if (before) store2.setSetting('model.rerank', before);
+  resetRerank();
+  return 'disabled itself, retrieval unaffected';
+});
+
 await check('conversation history round trips', () => {
   // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
   const p = `chat-test-${Date.now()}`;

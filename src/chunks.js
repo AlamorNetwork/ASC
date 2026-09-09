@@ -12,6 +12,7 @@
  */
 import { config } from './config.js';
 import { routerFetch } from './llm.js';
+import { rerank } from './rerank.js';
 import * as store from './db.js';
 import { getSetting } from './db.js';
 
@@ -132,7 +133,7 @@ function fuse(lists, k = 60) {
  * Falls back to keyword-only if embedding is unavailable, so retrieval degrades
  * rather than failing.
  */
-export async function retrieve({ principalId, dossierId, query, limit = 6, includeLinked = true }) {
+export async function retrieve({ principalId, dossierId, query, limit = 6, includeLinked = true, rerankPool = 20 }) {
   // Two dossiers can be separate subjects that touch in places, so a linked dossier's
   // passages are searched too — and each result carries which dossier it came from.
   const scope = includeLinked
@@ -150,7 +151,22 @@ export async function retrieve({ principalId, dossierId, query, limit = 6, inclu
   }
 
   const merged = semantic.length ? fuse([keyword, semantic]) : keyword;
-  return merged.slice(0, limit);
+  if (!merged.length) return [];
+
+  // Fusion decides which passages are candidates; the reranker decides which of them
+  // actually answer the question. Widening the candidate pool before it is what makes
+  // the step worth taking — reranking the same six changes little.
+  const pool = merged.slice(0, Math.max(limit, rerankPool));
+  const ranked = await rerank(query, pool.map((r) => r.text), { topN: limit });
+  if (!ranked?.order?.length) return pool.slice(0, limit);
+
+  const picked = ranked.order.map((i) => pool[i]).filter(Boolean);
+  // Anything the reranker dropped still beats nothing if it left us short.
+  for (const row of pool) {
+    if (picked.length >= limit) break;
+    if (!picked.includes(row)) picked.push(row);
+  }
+  return picked.slice(0, limit);
 }
 
 /** Renders retrieved passages for a prompt, with their source labelled. */

@@ -67,6 +67,8 @@ export const config = {
     structure: env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
     // Multilingual embeddings for retrieval. 1024 dims, and good on Persian.
     embed: env.MODEL_EMBED || 'intfloat/multilingual-e5-large',
+    // Cross-encoder for the last step of retrieval. Empty disables reranking.
+    rerank: env.MODEL_RERANK || 'cohere/rerank-v3.5',
   },
 
   // Budget per research episode, in US dollars of provider spend.

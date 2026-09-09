@@ -6,7 +6,7 @@
 import { config } from './config.js';
 import * as store from './db.js';
 
-const ROLES = ['capture', 'research', 'structure'];
+const ROLES = ['capture', 'research', 'structure', 'embed', 'rerank'];
 
 export const modelFor = (role) =>
   store.getSetting(`model.${role}`) ?? config.models[role];
