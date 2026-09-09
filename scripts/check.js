@@ -118,6 +118,19 @@ await check('an exhausted key is set aside and the next one is used', async () =
   if (p.kindOfFailure(402) !== 'credit') throw new Error('402 should mean out of balance');
   if (p.kindOfFailure(400) !== null) throw new Error('400 is a bad request, not a bad key');
 
+  // kiraai answered 502 for three free models while the key was demonstrably valid.
+  // Treating that as a spent key would have rested every key over their outage, and
+  // treating it as a final answer stopped the chain before the paid fallback.
+  for (const status of [500, 502, 503, 504]) {
+    if (p.kindOfFailure(status) !== 'upstream') throw new Error(`${status} was not read as their problem`);
+    if (!p.blamesTheModel(p.kindOfFailure(status))) throw new Error(`${status} should move to the next model`);
+  }
+  if (p.kindOfFailure(404) !== 'missing') throw new Error('404 should mean this provider lacks the model');
+  if (!p.blamesTheModel('missing')) throw new Error('a missing model should move to the next one');
+  for (const kind of ['rate', 'credit', 'auth']) {
+    if (p.blamesTheModel(kind)) throw new Error(`${kind} is about the key, not the model`);
+  }
+
   const status = p.providerStatus(providers).find((s) => s.name === 'kira');
   if (status.ready !== 0 || status.keys !== 2) throw new Error('status does not reflect the cool-off');
 

@@ -81,11 +81,25 @@ export function setAside(providerName, index, kind = 'rate') {
   cooling.set(coolKey(providerName, index), Date.now() + (COOL_OFF[kind] ?? COOL_OFF.rate));
 }
 
+/**
+ * What a failure says about whose problem it is.
+ *
+ * The three that mean "this key is spent" rest the key. The two that mean "this endpoint
+ * cannot serve this model right now" do not — another key would be told exactly the same
+ * thing, and resting a perfectly good key over the provider's own outage would spend the
+ * whole free tier's worth of keys on a single bad afternoon. Everything else is a
+ * malformed request, which is malformed on every key and every model.
+ */
 export const kindOfFailure = (status) =>
   status === 429 ? 'rate'
     : status === 402 ? 'credit'
       : (status === 401 || status === 403) ? 'auth'
-        : null;
+        : status >= 500 ? 'upstream'          // their servers, not our credentials
+          : status === 404 ? 'missing'        // this provider does not carry this model
+            : null;
+
+/** Failures that mean move on to the next model rather than the next key. */
+export const blamesTheModel = (kind) => kind === 'upstream' || kind === 'missing';
 
 /** For reporting: which keys are in play and which are resting. */
 export function providerStatus(providers) {

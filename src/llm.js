@@ -1,6 +1,6 @@
 import { config } from './config.js';
 import * as store from './db.js';
-import { planFor, keysAvailable, setAside, kindOfFailure, bareModel } from './providers.js';
+import { planFor, keysAvailable, setAside, kindOfFailure, blamesTheModel, bareModel } from './providers.js';
 
 const { key, base } = config.router;
 
@@ -44,10 +44,19 @@ async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
       const kind = kindOfFailure(res.status);
       if (!kind) return { res, raw, model, provider };   // a real answer: wrong request
 
+      last = new Error(`${model}@${provider.name}: ${res.status}`);
+
+      if (blamesTheModel(kind)) {
+        // Their gateway is down for this model, or does not carry it. Another key gets
+        // the same answer, so go straight to the next link of the chain — and leave the
+        // key alone, since there is nothing wrong with it.
+        console.warn(`[llm] ${model}@${provider.name} unavailable (${res.status}), next in chain`);
+        break;
+      }
+
       // Out of quota on this key. Rest it and let the next one try.
       setAside(provider.name, index, kind);
       console.warn(`[llm] ${provider.name} key #${index + 1} set aside (${kind}, ${res.status}) on ${model}`);
-      last = new Error(`${model}: ${res.status}`);
     }
   }
 

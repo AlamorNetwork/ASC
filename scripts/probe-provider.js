@@ -80,7 +80,9 @@ for (const model of models) {
       if (!res.ok) {
         const why = res.status === 429 ? 'rate limited'
           : res.status === 402 ? 'out of credit'
-            : (res.status === 401 || res.status === 403) ? 'key rejected' : 'error';
+            : (res.status === 401 || res.status === 403) ? 'key rejected'
+              : res.status >= 500 ? 'their gateway is down for this model'
+                : res.status === 404 ? 'no such model here' : 'error';
         console.log(`  ✖ ${model.padEnd(28)} key ${i + 1}  ${res.status} ${why}`);
         rows.push({ model, key: i + 1, ok: false, status: res.status, why });
         continue;
@@ -115,8 +117,27 @@ if (working.length) {
   console.log('Nothing answered. Check the keys, or the model ids.');
 }
 
-const dead = rows.filter((r) => !r.ok && r.status);
-if (dead.some((r) => r.status === 429)) {
+// Whose fault the failures are. Getting this wrong sends you to re-register accounts
+// when the provider is simply having a bad afternoon.
+const failed = rows.filter((r) => !r.ok && r.status);
+const rejected = failed.filter((r) => r.status === 401 || r.status === 403);
+const upstream = failed.filter((r) => r.status >= 500);
+
+if (rejected.length && rejected.length === rows.length) {
+  console.log('\n✖ Every model rejected this key, which is what an invalid key looks like.');
+  console.log('  Check it is copied whole, and that the account is activated.');
+} else if (rejected.length) {
+  console.log(`\nⓘ ${rejected.length} model(s) returned 401 while others did not, so the key itself`);
+  console.log('  is fine — those models are not open to this account. Leave them out of the chain.');
+}
+
+if (upstream.length) {
+  console.log(`\nⓘ ${upstream.length} model(s) returned 5xx. That is their gateway, not your key —`);
+  console.log('  the client moves to the next model in the chain and leaves the key alone.');
+  console.log('  Worth re-running later; a free model can be down for hours.');
+}
+
+if (failed.some((r) => r.status === 429)) {
   console.log('\nSome keys were already rate limited — that is what more keys are for,');
   console.log('and the client rests a limited key for a minute before reusing it.');
 }
