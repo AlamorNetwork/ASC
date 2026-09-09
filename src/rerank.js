@@ -22,9 +22,10 @@ const model = () => getSetting('model.rerank') ?? config.models.rerank;
 // Discovered once. A provider without a rerank endpoint should be asked exactly once,
 // not on every question.
 let available = null;
+let shape = null;   // the request form this provider accepted
 
 export const rerankAvailable = () => available;
-export const resetRerank = () => { available = null; };
+export const resetRerank = () => { available = null; shape = null; };
 
 /**
  * @param {string} query
@@ -38,29 +39,49 @@ export async function rerank(query, documents, { topN = documents.length } = {})
   const name = model();
   if (!name) { available = false; return null; }
 
-  let res;
-  try {
-    res = await routerFetch('/rerank', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.router.key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: name, query, documents, top_n: topN }),
-    }, { label: `rerank/${name}`, tries: 2, timeoutMs: 30000 });
-  } catch (err) {
-    console.warn('[rerank] unreachable, keeping fused order:', err.message);
-    return null;
+  // Rerank APIs are not standardised the way chat completions are — the path and
+  // whether documents are strings or objects both vary by provider. The working
+  // combination is found once and then reused.
+  const shapes = [
+    { path: '/rerank', docs: (d) => d },
+    { path: '/rerank', docs: (d) => d.map((text) => ({ text })) },
+    { path: '/reranking', docs: (d) => d },
+  ];
+  const candidates = shape ? [shape] : shapes;
+
+  let raw = null;
+  let used = null;
+
+  for (const s of candidates) {
+    let res;
+    try {
+      res = await routerFetch(s.path, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.router.key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: name, query, documents: s.docs(documents), top_n: topN }),
+      }, { label: `rerank/${name}`, tries: 1, timeoutMs: 30000 });
+    } catch (err) {
+      console.warn('[rerank] unreachable, keeping fused order:', err.message);
+      return null;
+    }
+
+    const body = await res.text();
+    if (res.ok && /"(results|data)"/.test(body)) { raw = body; used = s; break; }
+
+    // A shape this provider rejects is worth trying the next form of; a real outage
+    // is not, and shows up as the same failure on every shape.
+    if (res.status !== 404 && res.status !== 400 && res.status !== 422) {
+      console.warn(`[rerank] ${res.status}: ${body.slice(0, 160)}`);
+      return null;
+    }
   }
 
-  const raw = await res.text();
-  if (!res.ok) {
-    // 404 means this provider simply has no reranker; anything else may be transient.
-    if (res.status === 404 || res.status === 400) {
-      available = false;
-      console.warn(`[rerank] disabled — ${name} not accepted here (${res.status})`);
-    } else {
-      console.warn(`[rerank] ${res.status}: ${raw.slice(0, 160)}`);
-    }
+  if (!raw) {
+    available = false;
+    console.warn(`[rerank] disabled — ${name} was not accepted in any known request shape`);
     return null;
   }
+  shape = used;
 
   let json;
   try {
