@@ -19,9 +19,30 @@ import { execFileSync } from 'node:child_process';
 import { config } from '../src/config.js';
 import { chatJson, transcribe, audioPart, textPart } from '../src/llm.js';
 
-const file = process.argv[2];
+/**
+ * With no file given, the last voice note the bot heard is used. On a server that is the
+ * only audio available, and it means the whole procedure is: send the bot a voice note,
+ * then run this.
+ */
+function lastVoiceNote() {
+  const dir = path.join(config.root, 'data', 'voice');
+  if (!fs.existsSync(dir)) return null;
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.ogg'))
+    .map((f) => path.join(dir, f))
+    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+  return files[0] ?? null;
+}
+
+// The first argument is a file if it is one, and a model id otherwise, so both
+// `probe-voice.js note.ogg gemini…` and `probe-voice.js stt:whisper…` read naturally.
+const given = process.argv[2] && fs.existsSync(process.argv[2]) ? process.argv[2] : null;
+const modelArgs = process.argv.slice(given ? 3 : 2);
+const file = given ?? lastVoiceNote();
+
 if (!file || !fs.existsSync(file)) {
-  console.error('\nusage: node scripts/probe-voice.js <audio file> [model | stt:model ...]\n');
+  console.error('\nusage: node scripts/probe-voice.js [audio file] [model | stt:model ...]\n');
+  console.error('With no file, the last voice note sent to the bot is used —');
+  console.error('send it one, then run this again.\n');
   process.exit(1);
 }
 
@@ -32,13 +53,13 @@ const buffer = fs.readFileSync(file);
 const parts = config.models.capture.split('/');
 const ns = parts.length > 2 ? parts.slice(0, -2).join('/') + '/' : '';
 
-const candidates = process.argv.slice(3).length ? process.argv.slice(3) : [
+const candidates = modelArgs.length ? modelArgs : [
   config.models.capture,          // what runs today — the baseline
-  `${ns}google/gemini-3.6-flash`,
   `${ns}google/gemini-3.5-flash-lite`,
-  `${ns}xiaomi/mimo-v2.5`,
   `stt:${ns}openai/whisper-large-v3`,
   `stt:${ns}qwen/qwen3-asr-0.6b`,
+  `stt:${ns}microsoft/mai-transcribe-1.5`,
+  `stt:${ns}nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b`,
 ];
 
 const SYSTEM = `You turn one Persian voice note into a structured capture object.
@@ -116,14 +137,18 @@ for (const spec of candidates) {
 
 const ok = results.filter((r) => !r.failed);
 if (!ok.length) {
-  console.log('\nNothing worked. Check that the endpoint has these models.\n');
-  process.exit(0);
+  console.log('\nNothing worked. The failures above are the endpoint\'s own words —');
+  console.log('most often it does not carry these model ids, or does not do STT at all.\n');
+  process.exitCode = 0;
 }
+
+if (ok.length) report();
 
 /** Word overlap against the baseline, as a rough measure of how far a transcript drifted. */
 const words = (s) => new Set(String(s).toLowerCase()
   .replace(/[.,!?؟،؛:«»"'()\[\]]/g, ' ').split(/\s+/).filter(Boolean));
 
+function report() {
 const base = ok[0];
 const baseWords = words(base.transcript);
 for (const r of ok) {
@@ -177,3 +202,4 @@ for (const r of ok) {
   console.log(r.transcript);
 }
 console.log('');
+}

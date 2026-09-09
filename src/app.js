@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config.js';
 import * as tg from './telegram.js';
 import * as store from './db.js';
@@ -136,6 +138,24 @@ const SECTION = {
   unresolved: ({ unresolved }) =>
     ['❓ <b>حل‌نشده</b>', '', ...unresolved.map((q) => `• ${esc(q)}`)].join('\n'),
 };
+
+/**
+ * Keeps the most recent voice note on disk, one per person, overwritten each time.
+ *
+ * Comparing transcription models needs a real note of your own voice, and the server has
+ * no other way to get one — this makes "send a voice, then run the probe" the whole
+ * procedure. It is the last note only, never a history.
+ */
+function keepLastVoice(principalId, buffer) {
+  try {
+    const dir = path.join(config.root, 'data', 'voice');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${principalId}.ogg`), buffer);
+  } catch (err) {
+    // A debugging convenience must never cost someone their capture.
+    console.warn('[app] could not keep the last voice note:', err.message);
+  }
+}
 
 async function handleCapture(chatId, principalId, capture, usage, replyTo, route) {
   const id = store.insertCapture({
@@ -1144,6 +1164,7 @@ export async function run() {
       if (voice) {
         await tg.typing(chatId);
         const buf = await tg.downloadFile(voice.file_id);
+        keepLastVoice(principalId, buf);
         const { capture, usage, route } = await captureFromAudio(buf);
         await handleCapture(chatId, principalId, { ...capture, source: 'voice' }, usage, msg.message_id, route);
         continue;

@@ -197,22 +197,51 @@ export async function chatStream({ model, system, history = [], content, maxToke
  *
  * @returns {Promise<{text:string, usage:object}>}
  */
+let sttShape = null;   // the request form this endpoint accepted, found once
+
+export const resetTranscribeShape = () => { sttShape = null; };
+
 export async function transcribe({ model, buffer, filename = 'voice.ogg', mimeType = 'audio/ogg', language = 'fa' }) {
-  const form = new FormData();
-  form.append('file', new Blob([buffer], { type: mimeType }), filename);
-  form.append('model', model);
-  // Naming the language matters for Persian: without it these models often decide
-  // mid-sentence that they are hearing Arabic.
-  if (language) form.append('language', language);
+  // Transcription endpoints vary the way rerank ones do: the path differs, and naming the
+  // language helps some providers and is rejected by others. Rather than assume one, the
+  // working form is discovered on the first call and reused after that.
+  // Language matters for Persian — without it these models often decide mid-sentence
+  // that they are hearing Arabic.
+  const shapes = [
+    { path: '/audio/transcriptions', language, format: 'json' },
+    { path: '/audio/transcriptions', language, format: null },
+    { path: '/audio/transcriptions', language: null, format: null },
+    { path: '/audio/speech-to-text', language, format: null },
+  ];
 
-  const res = await routerFetch('/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}` },   // no Content-Type: FormData sets its own boundary
-    body: form,
-  }, { label: `stt/${model}`, timeoutMs: 180000 });
+  let raw = null;
+  let lastError = null;
 
-  const raw = await res.text();
-  if (!res.ok) throw new Error(`transcription ${res.status} (${model}): ${raw.slice(0, 200)}`);
+  for (const s of (sttShape ? [sttShape] : shapes)) {
+    const form = new FormData();
+    form.append('file', new Blob([buffer], { type: mimeType }), filename);
+    form.append('model', model);
+    if (s.language) form.append('language', s.language);
+    if (s.format) form.append('response_format', s.format);
+
+    const res = await routerFetch(s.path, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}` },   // no Content-Type: FormData sets its own boundary
+      body: form,
+    }, { label: `stt/${model}`, tries: 1, timeoutMs: 180000 });
+
+    const body = await res.text();
+    if (res.ok) { raw = body; sttShape = s; break; }
+
+    // The first shape is the standard one, so its rejection is the provider's real
+    // objection. A later shape failing differently is noise on top of that.
+    lastError ??= `${res.status}: ${body.slice(0, 200)}`;
+    // A rejected shape is worth trying the next form of. Anything else is the provider
+    // saying no to the whole idea, and will say the same to every shape.
+    if (![400, 404, 415, 422].includes(res.status)) break;
+  }
+
+  if (raw === null) throw new Error(`transcription failed (${model}) — ${lastError ?? 'no response'}`);
 
   let json;
   try { json = parseRouterBody(raw); }
