@@ -237,6 +237,11 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
   const head = `🕳 <b>کاوش عمیق</b>\n«${esc(question.slice(0, 90))}»`;
   const status = await tg.send(chatId, `${head}\n\nشروع کردم…`);
 
+  // Opened before the work starts, not after. Without this, anything typed during or
+  // after a deep run had no dossier open and fell through to capture — where "summarise
+  // this" was read as a topic to go and research.
+  settings.setActiveDossier(principalId, dossierId);
+
   const lines = [];
   let trailMsg = null;
   const note = async (line) => {
@@ -1276,6 +1281,25 @@ export async function run() {
           await handleChatTurn(chatId, principalId, active, msg.text);
           continue;
         }
+
+        // "Summarise it" with nothing open refers to whatever was last worked on. Sending
+        // it down the capture path turned the word itself into a research topic, which is
+        // both wrong and expensive — so it asks instead.
+        if (chat.isAboutTheConversation(msg.text)) {
+          const recent = store.listDossiers(principalId, 3);
+          if (recent.length) {
+            await tg.send(chatId, [
+              'دربارهٔ کدام پرونده؟ هیچ‌کدام باز نیست.',
+            ].join('\n'), {
+              // The menu already owns opening a dossier; `m:` routes there.
+              buttons: recent.map((d) => [{
+                text: `📁 ${d.topic.slice(0, 40)}`, callback_data: `m:open:${d.id}`,
+              }]),
+            });
+            continue;
+          }
+        }
+
         await tg.typing(chatId);
         const { capture, usage } = await captureFromText(msg.text);
         await handleCapture(chatId, principalId, { ...capture, source: 'text' }, usage, msg.message_id);

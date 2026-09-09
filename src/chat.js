@@ -14,6 +14,22 @@ const SYSTEM = `تو دستیار پژوهشی کاربر هستی و دارید
 - اگر کاربر چیزی می‌پرسد که تحقیق تازه لازم دارد، بگو و پیشنهاد بده دوباره تحقیق کنیم.
 - فارسی جواب بده.`;
 
+/**
+ * Whether the user is asking about the conversation rather than about the subject.
+ *
+ * "Summarise this" is not a topic to go and search for — everything it needs is already
+ * in the dossier context. Running a multi-hop corpus search for the word «جمع‌بندی»
+ * finds nothing, costs several model calls, and delays the answer. Only short messages
+ * qualify: «جمع‌بندی پژوهش‌های کومون درباره‌ی خاستگاه میترا» is a real question about
+ * the subject and still deserves retrieval.
+ */
+const META = /جمع\s*‌?\s*بندی|خلاصه|چکیده|نتیجه\s*گیری|مرور کن|تا اینجا|چی فهمیدی|چه فهمیدی|روی هم رفته|در مجموع|summar(y|ise|ize)|recap|wrap up/i;
+
+export const isAboutTheConversation = (text) => {
+  const t = String(text ?? '').trim();
+  return t.length <= 80 && META.test(t);
+};
+
 /** The dossier, rendered for the model as evidence — never as instructions. */
 function dossierContext(principalId, dossierId) {
   const d = store.getDossier(principalId, dossierId);
@@ -73,7 +89,7 @@ export async function reply({ principalId, dossierId, userText, onDelta, onStep 
   let passages = '';
   let research = null;
   const docs = store.dossierDocuments(principalId, dossierId);
-  if (docs.length) {
+  if (docs.length && !isAboutTheConversation(userText)) {
     research = await investigate({ principalId, dossierId, question: userText, onStep });
     if (research.passages.length) {
       passages = `\n\n<passages>\n${renderPassages(principalId, research.passages, dossierId)}\n</passages>\n` +

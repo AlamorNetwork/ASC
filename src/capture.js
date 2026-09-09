@@ -31,6 +31,9 @@ Reply with a JSON object only — no prose, no code fence.
 
 Rules:
 - kind=research when they ask you to look something up, study, or investigate a topic.
+- A request to summarise, conclude, review, or restate what has already been discussed
+  is NOT research and has no topic of its own. It is kind=question with topic=null.
+  "جمع‌بندی کن" means "sum up what we have", never "go and research summarising".
 - kind=standing_intention ONLY when a durability_marker is actually present.
 - kind=note when they are thinking out loud and asked for nothing.
 - kind=unclear when you cannot tell. Set confidence low and request null.

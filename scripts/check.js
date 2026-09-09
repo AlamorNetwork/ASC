@@ -798,6 +798,42 @@ await check('a repeated query is embedded once, not every time', async () => {
   return afterFirst > before ? 'cached and reused' : 'endpoint unreachable, degraded to keyword';
 });
 
+// «جمع‌بندی کن» once became a research episode on the topic "summarising", because a
+// deep run left no dossier open and the message fell through to capture.
+await check('asking for a summary is about the conversation, not a topic', async () => {
+  const { isAboutTheConversation } = await import('../src/chat.js');
+
+  const meta = ['جمع بندی کن', 'جمع‌بندی کن', 'خلاصه‌اش کن', 'تا اینجا چی فهمیدی؟',
+    'یه مرور کن', 'نتیجه گیری کن', 'summarise this', 'recap'];
+  for (const t of meta) {
+    if (!isAboutTheConversation(t)) throw new Error(`treated as a subject: «${t}»`);
+  }
+
+  // A real question that happens to contain one of those words still needs retrieval —
+  // skipping it there would answer from the dossier summary alone.
+  const subjects = [
+    'جمع‌بندی پژوهش‌های کومون درباره‌ی خاستگاه ایرانی میترا در سده‌ی بیستم چه بود و چه کسانی نقدش کردند؟',
+    'میترائیسم چه بود؟',
+    'درباره‌ی آیین مهر تحقیق کن',
+  ];
+  for (const t of subjects) {
+    if (isAboutTheConversation(t)) throw new Error(`retrieval would be skipped for: «${t}»`);
+  }
+  return `${meta.length} meta, ${subjects.length} subjects`;
+});
+
+await check('a deep investigation leaves its dossier open to talk to', async () => {
+  // The bug was that only startResearch opened the dossier, so after a deep run the
+  // next typed message had nowhere to go. Asserted on the source, since the alternative
+  // is driving Telegram.
+  const src = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('async function runDeep'), src.indexOf('async function runWebResearch'));
+  if (!/setActiveDossier\(principalId, dossierId\)/.test(body)) {
+    throw new Error('runDeep does not open its dossier — typed replies will fall through to capture');
+  }
+  return 'runDeep opens its dossier';
+});
+
 await check('conversation history round trips', () => {
   // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
   const p = `chat-test-${Date.now()}`;
