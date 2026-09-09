@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { buildProviders } from './providers.js';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -50,11 +51,20 @@ function routerCreds() {
 const botToken = env.Bot_Token || env.BOT_TOKEN;
 if (!botToken) throw new Error('Bot_Token missing from .env');
 
+const router = routerCreds();
+
 export const config = {
   root: ROOT,
   dbPath: path.join(ROOT, 'data', 'asc.db'),
   botToken,
-  router: routerCreds(),
+  router,
+
+  /**
+   * Every endpoint this can talk to, keyed by name. ROUTER_* is the default one; any
+   * other is declared as <NAME>_BASE_URL with <NAME>_KEYS, and reached by writing
+   * `model@name`. See providers.js.
+   */
+  providers: buildProviders(env, router),
 
   // Model ids are provider-namespaced differently depending on the endpoint
   // (a gateway may prefix them, a direct provider will not), so they are configurable.

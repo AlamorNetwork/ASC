@@ -1,7 +1,58 @@
 import { config } from './config.js';
 import * as store from './db.js';
+import { planFor, keysAvailable, setAside, kindOfFailure, bareModel } from './providers.js';
 
 const { key, base } = config.router;
+
+/**
+ * Sends one request for a model that may name its provider, and may name several.
+ *
+ * Two things are being worked around, and they compose: a free tier limits each key, so
+ * a provider's other keys are tried before giving up on it; and a free model runs out
+ * entirely, so the next model in the chain is tried before giving up on the request.
+ * Only a failure that a different key or model could fix moves on — a 400 means the
+ * request is wrong and will be just as wrong everywhere.
+ *
+ * @param body must carry `model`, which may be `a@kira,b@kira,c`
+ * @returns {{res, raw, model, provider}} the attempt that answered
+ */
+async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
+  const plan = planFor(body.model, config.providers);
+  if (!plan.length) throw new Error(`مدل «${body.model}» به هیچ ارائه‌دهنده‌ای وصل نیست`);
+
+  let last = null;
+
+  for (const { model, provider } of plan) {
+    const usable = keysAvailable(provider);
+    if (!usable.length) {
+      last ??= new Error(`${provider.name}: همه‌ی کلیدها موقتاً کنار گذاشته شده‌اند`);
+      continue;
+    }
+
+    for (const { key: apiKey, index } of usable) {
+      const res = await routerFetch(path, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, model }),
+      }, { label: `${label}/${model}`, timeoutMs, tries, base: provider.base })
+        .catch((err) => { last = err; return null; });
+
+      if (!res) continue;                       // the network, not the key
+      const raw = await res.text();
+      if (res.ok) return { res, raw, model, provider };
+
+      const kind = kindOfFailure(res.status);
+      if (!kind) return { res, raw, model, provider };   // a real answer: wrong request
+
+      // Out of quota on this key. Rest it and let the next one try.
+      setAside(provider.name, index, kind);
+      console.warn(`[llm] ${provider.name} key #${index + 1} set aside (${kind}, ${res.status}) on ${model}`);
+      last = new Error(`${model}: ${res.status}`);
+    }
+  }
+
+  throw last ?? new Error(`هیچ ارائه‌دهنده‌ای به «${body.model}» جواب نداد`);
+}
 
 // 9router appends a trailing `data: [DONE]` even to non-streaming responses,
 // which makes res.json() throw. Strip it before parsing.
@@ -54,7 +105,7 @@ export const spendSince = (mark) => ({
  * provider is common enough that failing the whole turn on the first one is wrong.
  */
 export async function routerFetch(path, init, {
-  label = 'router', tries = 3, timeoutMs = 120000,
+  label = 'router', tries = 3, timeoutMs = 120000, base: origin = base,
 } = {}) {
   let lastErr;
   for (let attempt = 1; attempt <= tries; attempt++) {
@@ -63,7 +114,7 @@ export async function routerFetch(path, init, {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
-      return await fetch(`${base}${path}`, { ...init, signal: ctrl.signal });
+      return await fetch(`${origin}${path}`, { ...init, signal: ctrl.signal });
     } catch (err) {
       lastErr = err;
       const timedOut = err.name === 'AbortError';
@@ -80,16 +131,26 @@ export async function routerFetch(path, init, {
   const cause = lastErr?.name === 'AbortError'
     ? `پاسخی نداد (${timeoutMs / 1000} ثانیه)`
     : (lastErr?.cause?.code ?? lastErr?.message ?? 'unknown');
-  throw new Error(`ارتباط با ${label} برقرار نشد — ${cause} · ${base}`);
+  throw new Error(`ارتباط با ${label} برقرار نشد — ${cause} · ${origin}`);
 }
 
-async function post(body) {
-  const res = await routerFetch('/chat/completions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, { label: `chat/${body.model}` });
-  return { res, raw: await res.text() };
+const post = (body) => attempt('/chat/completions', body, { label: 'chat' });
+
+/**
+ * Where to send a request for `spec`, for the paths that cannot use `attempt` — streaming,
+ * because it must not read the body; embeddings and reranking, because they are single
+ * shot and their providers are not interchangeable anyway. Takes the first link of the
+ * chain that has a key ready.
+ */
+export function endpointFor(spec) {
+  for (const { model, provider } of planFor(spec, config.providers)) {
+    const usable = keysAvailable(provider);
+    if (usable.length) {
+      return { model, base: provider.base, key: usable[0].key, provider: provider.name };
+    }
+  }
+  // Better to try the default and get the provider's own error than to invent one here.
+  return { model: bareModel(spec), base, key, provider: 'default' };
 }
 
 /**
@@ -107,22 +168,22 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
   // buy nothing there, so they are turned off where the endpoint permits it.
   if (noThinking && reasoningCanBeDisabled) body.reasoning_effort = 'none';
 
-  let { res, raw } = await post(body);
+  let { res, raw, model: served, provider } = await post(body);
 
   if (!res.ok && body.reasoning_effort && /reasoning/i.test(raw)) {
     reasoningCanBeDisabled = false;
     console.warn('[llm] endpoint requires reasoning; retrying with it enabled (costs more)');
     delete body.reasoning_effort;
-    ({ res, raw } = await post(body));
+    ({ res, raw, model: served, provider } = await post(body));
   }
 
   // Naming the model matters: most failures here are "this endpoint does not have that
   // id", and a bare status code sends you looking in the wrong place.
-  if (!res.ok) throw new Error(`router ${res.status} (${model}): ${raw.slice(0, 300)}`);
+  if (!res.ok) throw new Error(`router ${res.status} (${served}@${provider.name}): ${raw.slice(0, 300)}`);
 
   let json = parseRouterBody(raw);
   let usage = json.usage ?? {};
-  recordSpend(usage, { model, kind: 'chat' });
+  recordSpend(usage, { model: served, kind: 'chat' });
 
   // A reasoning model can spend the whole completion budget thinking and leave no room
   // to answer — qwen3.7-flash put 1,705 of 1,805 tokens into reasoning, then on a longer
@@ -136,18 +197,20 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
 
   if (emptyAfterThinking || finish === 'length') {
     const roomier = Math.max(maxTokens * 3, spentThinking * 2 + 1500);
-    console.warn(`[llm] ${model} ran out of room (${finish}, ${spentThinking} thinking tokens); ` +
+    console.warn(`[llm] ${served} ran out of room (${finish}, ${spentThinking} thinking tokens); ` +
       `retrying with ${roomier}`);
     const retry = await post({ ...body, max_tokens: roomier });
     if (retry.res.ok) {
       json = parseRouterBody(retry.raw);
       usage = json.usage ?? {};
-      recordSpend(usage, { model, kind: 'chat' });
+      recordSpend(usage, { model: served, kind: 'chat' });
     }
   }
 
   return {
     text: json.choices?.[0]?.message?.content ?? '',
+    // Which link of the chain answered, so a silent fallback to a paid model is visible.
+    served, provider: provider.name,
     usage: {
       inTokens: usage.prompt_tokens ?? 0,
       outTokens: usage.completion_tokens ?? 0,
@@ -181,30 +244,39 @@ export async function chatJson(opts) {
  * by the caller. Falls back to a normal call if the endpoint refuses to stream, so a
  * provider without SSE degrades to a slower reply rather than an error.
  */
-export async function chatStream({ model, system, history = [], content, maxTokens = 2000, onDelta }) {
+export async function chatStream({ model: spec, system, history = [], content, maxTokens = 2000, onDelta }) {
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   for (const m of history) messages.push({ role: m.role, content: m.text });
   if (content) messages.push({ role: 'user', content });
 
+  // Streaming takes the first ready link only. If it fails for any reason the fallback
+  // below is a plain chat(), which does walk the whole chain — so a rate-limited free
+  // model costs the typing effect, not the answer.
+  const { model, base: origin, key: apiKey } = endpointFor(spec);
+
   let res;
   try {
     res = await routerFetch('/chat/completions', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages, max_tokens: maxTokens, stream: true }),
-    }, { label: `stream/${model}` });
+    }, { label: `stream/${model}`, base: origin });
   } catch (err) {
     // An endpoint that cannot stream should still answer, just without the typing effect.
     console.warn('[llm] streaming unavailable, falling back:', err.message);
-    const out = await chat({ model, system, content: messages.at(-1)?.content, maxTokens });
+    const out = await chat({ model: spec, system, content: messages.at(-1)?.content, maxTokens });
     onDelta?.(out.text);
     return out;
   }
 
   if (!res.ok || !res.body) {
     const raw = await res.text().catch(() => '');
-    if (!res.ok) throw new Error(`router ${res.status} (${model}): ${raw.slice(0, 300)}`);
+    // A rate limit here is exactly what the chain exists for, so hand it to chat().
+    console.warn(`[llm] stream ${res.status} on ${model}, falling back to the chain`);
+    const out = await chat({ model: spec, system, content: messages.at(-1)?.content, maxTokens });
+    onDelta?.(out.text);
+    return out;
   }
 
   const reader = res.body.getReader();
@@ -261,7 +333,8 @@ let sttShape = null;   // the request form this endpoint accepted, found once
 
 export const resetTranscribeShape = () => { sttShape = null; };
 
-export async function transcribe({ model, buffer, filename = 'voice.ogg', mimeType = 'audio/ogg', language = 'fa' }) {
+export async function transcribe({ model: spec, buffer, filename = 'voice.ogg', mimeType = 'audio/ogg', language = 'fa' }) {
+  const { model, base: origin, key: apiKey } = endpointFor(spec);
   // Transcription endpoints vary the way rerank ones do: the path differs, and naming the
   // language helps some providers and is rejected by others. Rather than assume one, the
   // working form is discovered on the first call and reused after that.
@@ -286,9 +359,9 @@ export async function transcribe({ model, buffer, filename = 'voice.ogg', mimeTy
 
     const res = await routerFetch(s.path, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${key}` },   // no Content-Type: FormData sets its own boundary
+      headers: { Authorization: `Bearer ${apiKey}` },  // no Content-Type: FormData sets its own boundary
       body: form,
-    }, { label: `stt/${model}`, tries: 1, timeoutMs: 180000 });
+    }, { label: `stt/${model}`, tries: 1, timeoutMs: 180000, base: origin });
 
     const body = await res.text();
     if (res.ok) { raw = body; sttShape = s; break; }

@@ -11,7 +11,7 @@
  * embeddings alone miss literal quotes.
  */
 import { config } from './config.js';
-import { routerFetch, recordSpend } from './llm.js';
+import { routerFetch, recordSpend, endpointFor } from './llm.js';
 import { rerank } from './rerank.js';
 import * as store from './db.js';
 import { getSetting } from './db.js';
@@ -83,13 +83,12 @@ function cacheSet(text, vec) {
 export const embedCacheStats = () => ({ size: queryCache.size });
 
 export async function embed(texts) {
-  const { key } = config.router;
-  const model = EMBED_MODEL();
+  const { model, base, key } = endpointFor(EMBED_MODEL());
   const res = await routerFetch('/embeddings', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, input: texts }),
-  }, { label: `embeddings/${model}` });
+  }, { label: `embeddings/${model}`, base });
   const raw = await res.text();
   if (!res.ok) throw new Error(`embeddings ${res.status} (${model}): ${raw.slice(0, 200)}`);
   const json = JSON.parse(raw.replace(/\s*data:\s*\[DONE\]\s*$/, '').trim());

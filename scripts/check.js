@@ -65,6 +65,67 @@ await check('every source file loads', async () => {
   return files.join(' ');
 });
 
+await check('a model can name its provider, and a chain of them', async () => {
+  const p = await import('../src/providers.js');
+  const env = {
+    KIRA_BASE_URL: 'https://kiraai.vn/api/v1',
+    KIRA_KEYS: 'k1, k2 ,k3',
+    NOKEY_BASE_URL: 'https://example.invalid/v1',   // declared but unusable
+  };
+  const providers = p.buildProviders(env, { base: 'https://main.test/v1', key: 'main-key' });
+
+  if (!providers.has('kira')) throw new Error('KIRA_BASE_URL did not declare a provider');
+  if (providers.get('kira').keys.length !== 3) throw new Error('the three keys were not split');
+  if (providers.has('nokey')) throw new Error('a provider with no key was accepted');
+
+  // A bare id goes to the default endpoint; `@name` goes where it says.
+  const plan = p.planFor('qwen3.8-flash-free@kira,glm-5.3-free@kira,google/gemini-3.6-flash', providers);
+  if (plan.length !== 3) throw new Error(`chain had ${plan.length} links`);
+  if (plan[0].provider.name !== 'kira' || plan[0].model !== 'qwen3.8-flash-free') {
+    throw new Error(`first link wrong: ${plan[0].model}@${plan[0].provider.name}`);
+  }
+  if (plan[2].provider.name !== 'default') throw new Error('a bare id left the default provider');
+
+  // Model ids contain both / and :, which is why the separator is @ and why the LAST
+  // one is the delimiter.
+  const online = p.planFor('qwen/qwen3.7-flash:online@kira', providers);
+  if (online[0].model !== 'qwen/qwen3.7-flash:online') throw new Error(`mangled: ${online[0].model}`);
+
+  const junk = p.planFor('a@nowhere,google/gemini-3.6-flash', providers);
+  if (junk.length !== 1) throw new Error('an unknown provider took the whole chain down');
+
+  return '3 links, @ parsed from the right';
+});
+
+await check('an exhausted key is set aside and the next one is used', async () => {
+  const p = await import('../src/providers.js');
+  p.clearCooling();
+  const providers = p.buildProviders(
+    { KIRA_BASE_URL: 'https://kiraai.vn/api/v1', KIRA_KEYS: 'k1,k2' },
+    { base: 'https://main.test/v1', key: 'main-key' });
+  const kira = providers.get('kira');
+
+  if (p.keysAvailable(kira).length !== 2) throw new Error('both keys should start ready');
+
+  // 429 on a free tier is routine, not a broken credential — it comes back.
+  p.setAside('kira', 0, p.kindOfFailure(429));
+  const left = p.keysAvailable(kira);
+  if (left.length !== 1 || left[0].index !== 1) throw new Error('the rate-limited key was still offered');
+
+  p.setAside('kira', 1, p.kindOfFailure(401));
+  if (p.keysAvailable(kira).length !== 0) throw new Error('a rejected key was still offered');
+
+  if (p.kindOfFailure(402) !== 'credit') throw new Error('402 should mean out of balance');
+  if (p.kindOfFailure(400) !== null) throw new Error('400 is a bad request, not a bad key');
+
+  const status = p.providerStatus(providers).find((s) => s.name === 'kira');
+  if (status.ready !== 0 || status.keys !== 2) throw new Error('status does not reflect the cool-off');
+
+  p.clearCooling();
+  if (p.keysAvailable(kira).length !== 2) throw new Error('clearing did not restore the keys');
+  return '429 rests a minute, 401 a day, 400 blames neither';
+});
+
 await check('config loads', () => {
   if (!config.botToken) throw new Error('no bot token');
   if (!config.router.base) throw new Error('no router base');

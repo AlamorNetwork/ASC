@@ -14,7 +14,7 @@
  * reranker should cost precision, not the answer.
  */
 import { config } from './config.js';
-import { routerFetch, recordSpend } from './llm.js';
+import { routerFetch, recordSpend, endpointFor } from './llm.js';
 import { getSetting } from './db.js';
 
 const model = () => getSetting('model.rerank') ?? config.models.rerank;
@@ -36,8 +36,9 @@ export const resetRerank = () => { available = null; shape = null; };
 export async function rerank(query, documents, { topN = documents.length } = {}) {
   if (available === false || !documents.length) return null;
 
-  const name = model();
-  if (!name) { available = false; return null; }
+  const spec = model();
+  if (!spec) { available = false; return null; }
+  const { model: name, base, key: apiKey } = endpointFor(spec);
 
   // Rerank APIs are not standardised the way chat completions are — the path and
   // whether documents are strings or objects both vary by provider. The working
@@ -63,9 +64,9 @@ export async function rerank(query, documents, { topN = documents.length } = {})
     try {
       res = await routerFetch(s.path, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${config.router.key}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      }, { label: `rerank/${name}`, tries: 1, timeoutMs: 30000 });
+      }, { label: `rerank/${name}`, tries: 1, timeoutMs: 30000, base });
     } catch (err) {
       // A network failure says nothing about the shape, so the next one still deserves
       // a turn rather than the whole feature being written off.
