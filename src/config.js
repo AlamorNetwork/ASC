@@ -61,6 +61,11 @@ export const config = {
   models: {
     // Must accept audio input: transcription and extraction happen in one call.
     capture: env.MODEL_CAPTURE || 'google/gemini-3.7-flash',
+    // Optional. A dedicated speech-to-text model, billed by audio length rather than
+    // by token, which is far cheaper than paying a multimodal model to listen. When
+    // set, a voice note is transcribed here and structured by `structure` instead —
+    // two cheap calls in place of one expensive one. Empty keeps the one-call path.
+    transcribe: env.MODEL_TRANSCRIBE || '',
     // Should be search-grounded, or research has nothing to cite.
     research: env.MODEL_RESEARCH || 'openai/gpt-6-astra:online',
     // Cheap text work.

@@ -75,7 +75,7 @@ const KIND_LABEL = {
   unclear: 'نامشخص',
 };
 
-function captureCard(id, c, costToman) {
+function captureCard(id, c, costToman, route) {
   const lines = [
     `🎧 <b>${esc(c.title || 'ثبت شد')}</b>`,
     '',
@@ -86,7 +86,10 @@ function captureCard(id, c, costToman) {
   if (c.topic) lines.push(`موضوع: ${esc(c.topic)}`);
   if (c.request) lines.push(`درخواست: ${esc(c.request)}`);
   if (c.durability) lines.push(`نشانگر دوام: «${esc(c.durability)}» — نیت ماندگار در نسخه‌ی بعدی`);
-  lines.push(`هزینه‌ی ثبت: ${toman(costToman)} تومان`);
+  // On the transcription route the endpoint usually prices only the structuring call,
+  // so the figure is marked rather than quietly under-reported.
+  lines.push(`هزینه‌ی ثبت: ${toman(costToman)} تومان` +
+    (route === 'stt' ? ' <i>+ پیاده‌سازی (روی پنل ارائه‌دهنده)</i>' : ''));
 
   const buttons = [[
     { text: '🔎 تحقیق کن', callback_data: `research:${id}` },
@@ -134,7 +137,7 @@ const SECTION = {
     ['❓ <b>حل‌نشده</b>', '', ...unresolved.map((q) => `• ${esc(q)}`)].join('\n'),
 };
 
-async function handleCapture(chatId, principalId, capture, usage, replyTo) {
+async function handleCapture(chatId, principalId, capture, usage, replyTo, route) {
   const id = store.insertCapture({
     principalId,
     source: capture.source,
@@ -149,7 +152,7 @@ async function handleCapture(chatId, principalId, capture, usage, replyTo) {
     raw: capture,
     costToman: usage.costToman,
   });
-  const card = captureCard(id, capture, usage.costToman);
+  const card = captureCard(id, capture, usage.costToman, route);
   await tg.send(chatId, card.text, { buttons: card.buttons, replyTo });
 }
 
@@ -668,11 +671,17 @@ async function handleCommand(chatId, principalId, text, isOwner) {
     const arg = text.slice(6).trim();
     if (!arg) {
       const m = settings.allModels();
+      const stt = m.transcribe && m.transcribe !== 'none' ? m.transcribe : null;
       await tg.send(chatId, ['🧠 <b>مدل‌ها</b>', '',
         `capture   <code>${esc(m.capture)}</code> <i>(باید صوت بپذیرد)</i>`,
+        `transcribe <code>${esc(stt ?? '—')}</code> <i>${stt
+          ? 'ویس با این پیاده می‌شود، ارزان‌تر'
+          : 'خاموش؛ ویس را همان مدل capture می‌شنود'}</i>`,
         `research  <code>${esc(m.research)}</code> <i>(باید جست‌وجوگر باشد)</i>`,
         `structure <code>${esc(m.structure)}</code> <i>(گفتگو و ساختاردهی)</i>`, '',
-        '<code>/model research openai/gpt-…</code>', '<code>/models</code> فهرست کامل'].join('\n'));
+        '<code>/model research openai/gpt-…</code>',
+        '<code>/model transcribe none</code> خاموش کردن',
+        '<code>/models</code> فهرست کامل'].join('\n'));
       return true;
     }
     const [role, ...rest] = arg.split(/\s+/);
@@ -1135,8 +1144,8 @@ export async function run() {
       if (voice) {
         await tg.typing(chatId);
         const buf = await tg.downloadFile(voice.file_id);
-        const { capture, usage } = await captureFromAudio(buf);
-        await handleCapture(chatId, principalId, { ...capture, source: 'voice' }, usage, msg.message_id);
+        const { capture, usage, route } = await captureFromAudio(buf);
+        await handleCapture(chatId, principalId, { ...capture, source: 'voice' }, usage, msg.message_id, route);
         continue;
       }
 

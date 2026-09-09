@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { config } from '../src/config.js';
 import * as store from '../src/db.js';
-import { captureFromText, captureFromAudio } from '../src/capture.js';
+import { captureFromText, captureFromAudio, transcriptionModel } from '../src/capture.js';
 import { verifyClaim, normalise } from '../src/verify.js';
 
 let failures = 0;
@@ -733,16 +733,50 @@ await check('capture does not invent a request', async () => {
   return `kind=${capture.kind} · request=null`;
 });
 
+// capture once read config directly, so changing the model from inside the bot changed
+// everything except the thing voice notes actually go through.
+await check('capture uses the model the settings name', async () => {
+  const s = await import('../src/settings.js');
+  const before = store.getSetting('model.capture');
+  s.setModel('capture', 'test/definitely-not-a-model');
+  try {
+    await captureFromText('سلام');
+    throw new Error('a nonexistent model somehow succeeded — the setting was ignored');
+  } catch (err) {
+    if (!/definitely-not-a-model/.test(err.message)) {
+      throw new Error(`the setting was ignored; error names a different model: ${err.message.slice(0, 120)}`);
+    }
+  } finally {
+    store.setSetting('model.capture', before ?? '');
+    if (!before) store.setSetting('model.capture', config.models.capture);
+  }
+  return 'the runtime setting reaches the voice path';
+});
+
+await check('transcription route can be switched off', async () => {
+  const s = await import('../src/settings.js');
+  const before = store.getSetting('model.transcribe');
+  try {
+    s.setModel('transcribe', 'openai/whisper-large-v3');
+    if (transcriptionModel() !== 'openai/whisper-large-v3') throw new Error('setting did not stick');
+    s.setModel('transcribe', 'none');
+    if (transcriptionModel() !== null) throw new Error('"none" did not disable the route');
+  } finally {
+    store.setSetting('model.transcribe', before ?? config.models.transcribe);
+  }
+  return 'on, then off';
+});
+
 if (process.argv.includes('--audio')) {
   // node scripts/check.js --audio path/to/voice.ogg
   const sample = process.argv[process.argv.indexOf('--audio') + 1] ?? process.env.SAMPLE_AUDIO;
   await check('capture from real voice note', async () => {
     if (!sample) throw new Error('pass a path: --audio path/to/voice.ogg');
     if (!fs.existsSync(sample)) throw new Error(`not found: ${sample}`);
-    const { capture, usage } = await captureFromAudio(fs.readFileSync(sample));
+    const { capture, usage, route } = await captureFromAudio(fs.readFileSync(sample));
     if (!capture.transcript) throw new Error('empty transcript');
     console.log(`        «${capture.transcript.slice(0, 90)}…»`);
-    return `kind=${capture.kind} · ${Math.round(usage.costToman)} toman`;
+    return `${route} · kind=${capture.kind} · ${Math.round(usage.costToman)} toman`;
   });
 }
 

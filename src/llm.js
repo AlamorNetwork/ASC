@@ -81,7 +81,9 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
     ({ res, raw } = await post(body));
   }
 
-  if (!res.ok) throw new Error(`router ${res.status}: ${raw.slice(0, 300)}`);
+  // Naming the model matters: most failures here are "this endpoint does not have that
+  // id", and a bare status code sends you looking in the wrong place.
+  if (!res.ok) throw new Error(`router ${res.status} (${model}): ${raw.slice(0, 300)}`);
 
   const json = parseRouterBody(raw);
   const usage = json.usage ?? {};
@@ -180,6 +182,51 @@ export async function chatStream({ model, system, history = [], content, maxToke
       outTokens: usage.completion_tokens ?? 0,
       costUsd: usage.cost ?? 0,
       costToman: usage.total_cost_toman ?? 0,
+    },
+  };
+}
+
+/**
+ * Speech to text through a dedicated model.
+ *
+ * A multimodal chat model charges for audio as input tokens, which for a two-minute
+ * note is most of the bill. A speech-to-text model is billed by length of audio and is
+ * an order of magnitude cheaper, at the price of a second call to make sense of what it
+ * heard. Endpoints rarely report cost for this route, so a zero here means unknown, not
+ * free — the provider's own dashboard is the truth.
+ *
+ * @returns {Promise<{text:string, usage:object}>}
+ */
+export async function transcribe({ model, buffer, filename = 'voice.ogg', mimeType = 'audio/ogg', language = 'fa' }) {
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: mimeType }), filename);
+  form.append('model', model);
+  // Naming the language matters for Persian: without it these models often decide
+  // mid-sentence that they are hearing Arabic.
+  if (language) form.append('language', language);
+
+  const res = await routerFetch('/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },   // no Content-Type: FormData sets its own boundary
+    body: form,
+  }, { label: `stt/${model}`, timeoutMs: 180000 });
+
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`transcription ${res.status} (${model}): ${raw.slice(0, 200)}`);
+
+  let json;
+  try { json = parseRouterBody(raw); }
+  catch { json = { text: raw }; }   // some endpoints return bare text
+
+  const usage = json.usage ?? {};
+  return {
+    text: String(json.text ?? '').trim(),
+    usage: {
+      inTokens: usage.prompt_tokens ?? 0,
+      outTokens: usage.completion_tokens ?? 0,
+      costUsd: usage.cost ?? 0,
+      costToman: usage.total_cost_toman ?? 0,
+      seconds: json.duration ?? usage.seconds ?? 0,
     },
   };
 }
