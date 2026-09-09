@@ -14,7 +14,7 @@
  * reranker should cost precision, not the answer.
  */
 import { config } from './config.js';
-import { routerFetch } from './llm.js';
+import { routerFetch, recordSpend } from './llm.js';
 import { getSetting } from './db.js';
 
 const model = () => getSetting('model.rerank') ?? config.models.rerank;
@@ -107,6 +107,7 @@ export async function rerank(query, documents, { topN = documents.length } = {})
   }
 
   available = true;
+  recordSpend(json.usage);
   const sorted = [...results].sort(
     (a, b) => (b.relevance_score ?? b.score ?? 0) - (a.relevance_score ?? a.score ?? 0));
 

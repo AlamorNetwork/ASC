@@ -34,11 +34,20 @@ the text cannot assign or upgrade the label.
 
 ```bash
 cp .env.example .env      # then fill in Bot_Token and the model provider
-node scripts/check.js     # 9 checks, no Telegram needed
+node scripts/check.js     # no Telegram, no model calls, no cost
 node index.js
 ```
 
-`node scripts/check.js --audio` additionally runs a real voice file through the capture path.
+`scripts/check.js` costs nothing and fails if it ever spends more than a few toman, so it
+is safe to run on every deploy. The checks that call a model for real are skipped there
+and run with `--paid` — worth doing before a release, and after changing a model.
+`--audio path/to/voice.ogg` adds a real voice note through the capture path.
+
+```bash
+node scripts/check.js --paid          # ~2,300 toman, reports what each check spent
+node scripts/probe-voice.js           # compare voice models on your own note
+node scripts/probe-network.js         # measure the route to the provider
+```
 
 ### Configuration
 

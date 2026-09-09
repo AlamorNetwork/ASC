@@ -1,7 +1,13 @@
 /**
  * Verifies every piece except Telegram, so failures are found before the bot runs.
- *   node scripts/check.js            fast checks only
- *   node scripts/check.js --audio    also runs a real voice note through capture
+ *
+ *   node scripts/check.js            everything that costs nothing — run this on deploy
+ *   node scripts/check.js --paid     also the checks that call a model for real
+ *   node scripts/check.js --audio f  --paid, plus a real voice note through capture
+ *
+ * The split exists because a suite that spends money on every deploy is a suite people
+ * stop running. The default run is bounded by FREE_CEILING_TOMAN and fails if it goes
+ * over, so a model call cannot quietly move into it later.
  */
 import fs from 'node:fs';
 import http from 'node:http';
@@ -9,17 +15,46 @@ import { config } from '../src/config.js';
 import * as store from '../src/db.js';
 import { captureFromText, captureFromAudio, transcriptionModel } from '../src/capture.js';
 import { verifyClaim, normalise } from '../src/verify.js';
+import { spend, spendMark, spendSince } from '../src/llm.js';
+
+const PAID = process.argv.includes('--paid') || process.argv.includes('--audio');
+
+// Embedding a couple of short queries is the only spend the free run should ever see.
+const FREE_CEILING_TOMAN = 50;
 
 let failures = 0;
+let skipped = 0;
+const freeStart = spendMark();
+
 const ok = (name, extra = '') => console.log(`  ok    ${name}${extra ? ' — ' + extra : ''}`);
 const bad = (name, err) => { failures++; console.log(`  FAIL  ${name} — ${err}`); };
 
 async function check(name, fn) {
-  try { const extra = await fn(); ok(name, extra); }
-  catch (err) { bad(name, err.message ?? String(err)); }
+  const mark = spendMark();
+  try {
+    const extra = await fn();
+    // A free check that spent something is named on the spot, so the ceiling below
+    // never has to be traced back by hand.
+    const cost = Math.round(spendSince(mark).toman);
+    ok(name, `${extra}${cost ? `  ⚠ spent ${cost} toman` : ''}`);
+  } catch (err) { bad(name, err.message ?? String(err)); }
 }
 
-console.log('\nASC self-check\n');
+/**
+ * A check that calls a model for real. Skipped unless asked for, and it says what it
+ * spent, so the price of running the suite is never a surprise.
+ */
+async function paid(name, fn) {
+  if (!PAID) { skipped++; return; }
+  const mark = spendMark();
+  try {
+    const extra = await fn();
+    const cost = spendSince(mark);
+    ok(name, `${extra}${cost.toman ? ` · ${Math.round(cost.toman)} toman` : ''}`);
+  } catch (err) { bad(name, err.message ?? String(err)); }
+}
+
+console.log(`\nASC self-check${PAID ? ' — including the checks that spend' : ''}\n`);
 
 // Every module must at least parse and load. Without this, a syntax error in a file
 // the other checks never import only shows up in production.
@@ -533,7 +568,7 @@ await check('every menu screen renders without throwing', async () => {
   return '8 screens + detail, escaped, callback_data within limits';
 });
 
-await check('deep investigation names the source it still needs', async () => {
+await paid('deep investigation names the source it still needs', async () => {
   const { deepInvestigate } = await import('../src/deep.js');
   const p = `deep-${Date.now()}`;
   const dossierId = store.insertDossier({ principalId: p, topic: 'موضوع عمیق' });
@@ -559,29 +594,31 @@ await check('deep investigation names the source it still needs', async () => {
   return `stopped after ${out.rounds} round(s): ${out.stopped}`;
 });
 
+// This one used to run unlimited real research to see whether the guard would stop it,
+// at 58,000 toman a run. Stubs that report no usage test the same guard faithfully and
+// deterministically — a provider that reports nothing is exactly what they simulate.
 await check('deep investigation stops when cost cannot be measured', async () => {
   const { deepInvestigate } = await import('../src/deep.js');
   const p = `blind-${Date.now()}`;
   const dossierId = store.insertDossier({ principalId: p, topic: 'هزینه‌ی نامعلوم' });
-  const docId = store.insertDocument({
-    principalId: p, dossierId, filename: 'b.txt', kind: 'text', extraction: 'local',
-  });
-  // Enough material that rounds keep finding something, so only a guard can stop it.
-  store.insertChunks(p, dossierId, docId, Array.from({ length: 40 }, (_, i) => ({
-    seq: i, text: `بند شماره ${i} درباره‌ی موضوعی که مدام سرنخ تازه می‌دهد و تمام نمی‌شود.`,
-  })));
 
+  let searches = 0;
   const out = await deepInvestigate({
-    principalId: p, dossierId, question: 'بند', ceilingUsd: null, // unlimited
+    principalId: p, dossierId, question: 'بند', ceilingUsd: null,  // unlimited on purpose
+    // Always something fresh, never a reported cost: the loop has no reason of its own
+    // to stop, so only the blind guard can end it.
+    search: async () => ({
+      passages: [{ id: `chunk-${++searches}`, text: 'پاساژ تازه' }],
+      trail: [{ lead: 'سرنخ تازه' }], hops: 1, exhausted: false, costToman: 0, costUsd: 0,
+    }),
+    web: async () => ({ output: { found: [{ text: `ادعای تازه ${searches}` }] }, costToman: 0, costUsd: 0 }),
+    assess: async () => ({ data: { next_leads: ['سرنخ بعدی'] }, usage: {} }),
   });
 
-  // With no ceiling and no usage reported by the provider, the blind guard is the
-  // only thing between this and an unbounded loop.
-  if (!['unmeasured', 'exhausted'].includes(out.stopped)) {
-    throw new Error(`expected the blind guard or exhaustion, got ${out.stopped}`);
-  }
+  if (out.stopped !== 'unmeasured') throw new Error(`expected the blind guard, got ${out.stopped}`);
   if (out.rounds > 6) throw new Error(`ran ${out.rounds} rounds while flying blind`);
-  return `stopped after ${out.rounds} round(s): ${out.stopped}`;
+  if (out.costToman > 0) throw new Error('reported a cost it was never given');
+  return `blind guard stopped it after ${out.rounds} round(s)`;
 });
 
 await check('a zero ceiling starts nothing at all', async () => {
@@ -589,6 +626,7 @@ await check('a zero ceiling starts nothing at all', async () => {
   const p = `deepcap-${Date.now()}`;
   const dossierId = store.insertDossier({ principalId: p, topic: 'سقف صفر' });
   const before = store.recentEpisodes(p, 50).length;
+  const mark = spendMark();
 
   const out = await deepInvestigate({
     principalId: p, dossierId, question: 'هرچیزی', ceilingUsd: 0,
@@ -598,7 +636,11 @@ await check('a zero ceiling starts nothing at all', async () => {
   if (out.stopped !== 'ceiling') throw new Error(`stop reason was ${out.stopped}`);
   if (store.recentEpisodes(p, 50).length !== before) throw new Error('a web round was started anyway');
   if (out.costUsd > 0) throw new Error(`spent $${out.costUsd} under a zero ceiling`);
-  return 'nothing begun, nothing spent';
+  // The figure the caller sees is not enough — this once reported zero while the closing
+  // summary call quietly spent a thousand toman.
+  const actual = Math.round(spendSince(mark).toman);
+  if (actual > 0) throw new Error(`reported nothing but really spent ${actual} toman`);
+  return 'nothing begun, nothing spent — confirmed against the meter';
 });
 
 await check('a missing reranker costs precision, not the answer', async () => {
@@ -720,14 +762,14 @@ await check('verify rejects a paraphrase', async () => {
 
 server.close();
 
-await check('capture from text', async () => {
-  const { capture, usage } = await captureFromText('برو در مورد آیین میترائیسم تحقیق کن و منبع معتبر بده');
+await paid('capture from text', async () => {
+  const { capture } = await captureFromText('برو در مورد آیین میترائیسم تحقیق کن و منبع معتبر بده');
   if (capture.kind !== 'research') throw new Error(`expected research, got ${capture.kind}`);
   if (!capture.transcript) throw new Error('empty transcript');
-  return `kind=${capture.kind} · ${Math.round(usage.costToman)} toman`;
+  return `kind=${capture.kind}`;   // paid() adds the cost
 });
 
-await check('capture does not invent a request', async () => {
+await paid('capture does not invent a request', async () => {
   const { capture } = await captureFromText('امروز هوا خیلی سرد بود و حوصله نداشتم');
   if (capture.request) throw new Error(`invented a request: "${capture.request}"`);
   return `kind=${capture.kind} · request=null`;
@@ -770,14 +812,34 @@ await check('transcription route can be switched off', async () => {
 if (process.argv.includes('--audio')) {
   // node scripts/check.js --audio path/to/voice.ogg
   const sample = process.argv[process.argv.indexOf('--audio') + 1] ?? process.env.SAMPLE_AUDIO;
-  await check('capture from real voice note', async () => {
+  await paid('capture from real voice note', async () => {
     if (!sample) throw new Error('pass a path: --audio path/to/voice.ogg');
     if (!fs.existsSync(sample)) throw new Error(`not found: ${sample}`);
-    const { capture, usage, route } = await captureFromAudio(fs.readFileSync(sample));
+    const { capture, route } = await captureFromAudio(fs.readFileSync(sample));
     if (!capture.transcript) throw new Error('empty transcript');
     console.log(`        «${capture.transcript.slice(0, 90)}…»`);
-    return `${route} · kind=${capture.kind} · ${Math.round(usage.costToman)} toman`;
+    return `${route} · kind=${capture.kind}`;
   });
+}
+
+const total = spendSince(freeStart);
+const toman = Math.round(total.toman);
+
+console.log('');
+if (PAID) {
+  console.log(`  spent ${toman.toLocaleString('en-US')} toman across ${total.calls} model call(s)`);
+} else {
+  console.log(`  ${skipped} check(s) that call a model were skipped — run with --paid before a release`);
+  console.log(`  this run spent ${toman.toLocaleString('en-US')} toman` +
+    (total.calls ? ` (${total.calls} call(s), embeddings only)` : ''));
+
+  // Without this the split rots: someone adds a model call to a free check, deploys
+  // start costing money again, and nothing says so.
+  if (toman > FREE_CEILING_TOMAN) {
+    failures++;
+    console.log(`  FAIL  the free run spent ${toman} toman, over its ${FREE_CEILING_TOMAN} ceiling —`);
+    console.log('        something that calls a model belongs in paid(), not check()');
+  }
 }
 
 console.log(failures ? `\n${failures} check(s) failed\n` : '\nall checks passed\n');

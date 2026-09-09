@@ -14,6 +14,28 @@ function parseRouterBody(raw) {
 let reasoningCanBeDisabled = true;
 
 /**
+ * Every toman this process has spent, counted in one place.
+ *
+ * Cost was previously only visible per call, which made it easy for something routine —
+ * a test suite on every deploy, say — to spend real money without anyone seeing a total.
+ * Anything that reads a provider's usage figures reports it here.
+ */
+export const spend = { toman: 0, usd: 0, calls: 0 };
+
+export function recordSpend(usage = {}) {
+  spend.calls++;
+  spend.toman += usage.total_cost_toman ?? usage.costToman ?? 0;
+  spend.usd += usage.cost ?? usage.costUsd ?? 0;
+}
+
+export const spendMark = () => ({ ...spend });
+export const spendSince = (mark) => ({
+  toman: spend.toman - mark.toman,
+  usd: spend.usd - mark.usd,
+  calls: spend.calls - mark.calls,
+});
+
+/**
  * A network failure says nothing about which call died, so every request carries a
  * label and retries a couple of times before giving up. A dropped connection to the
  * provider is common enough that failing the whole turn on the first one is wrong.
@@ -87,6 +109,7 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
 
   const json = parseRouterBody(raw);
   const usage = json.usage ?? {};
+  recordSpend(usage);
   return {
     text: json.choices?.[0]?.message?.content ?? '',
     usage: {
@@ -175,6 +198,7 @@ export async function chatStream({ model, system, history = [], content, maxToke
     }
   }
 
+  recordSpend(usage);
   return {
     text,
     usage: {
@@ -248,6 +272,7 @@ export async function transcribe({ model, buffer, filename = 'voice.ogg', mimeTy
   catch { json = { text: raw }; }   // some endpoints return bare text
 
   const usage = json.usage ?? {};
+  recordSpend(usage);
   return {
     text: String(json.text ?? '').trim(),
     usage: {

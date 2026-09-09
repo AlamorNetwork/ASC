@@ -55,6 +55,10 @@ const claimKey = (c) => normalise(c.text ?? '').split(' ').slice(0, 10).join(' '
  */
 export async function deepInvestigate({
   principalId, dossierId, question, ceilingUsd = 0.5, onRound, onNote,
+  // The three collaborators that cost money are injectable, the same way investigate's
+  // planner is. Without this the only way to test the guards is to let a run actually
+  // spend — which it did, at sixty thousand toman a suite.
+  search = investigate, web = runResearch, assess = chatJson,
 }) {
   const dossier = store.getDossier(principalId, dossierId);
   if (!dossier) throw new Error('پرونده پیدا نشد');
@@ -86,7 +90,7 @@ export async function deepInvestigate({
 
     // --- the user's own documents, which cost almost nothing to search -----------
     for (const lead of leads.slice(0, 3)) {
-      const found = await investigate({
+      const found = await search({
         principalId, dossierId, question: lead, maxHops: 3,
         onStep: (s) => onNote?.({ round, ...s }),
       });
@@ -103,17 +107,17 @@ export async function deepInvestigate({
     if (!overCeiling()) {
       await onNote?.({ round, kind: 'web', lead: leads[0] });
       try {
-        const web = await runResearch({
+        const online = await web({
           principalId, dossierId, topic: dossier.topic,
           question: [
             leads[0],
             'روی چیزی تمرکز کن که هنوز روشن نشده. آنچه را قبلاً می‌دانیم تکرار نکن.',
           ].join('\n'),
         });
-        costToman += web.costToman ?? 0;
-        costUsd += web.costUsd ?? 0;
+        costToman += online.costToman ?? 0;
+        costUsd += online.costUsd ?? 0;
 
-        for (const c of [...(web.output.verified ?? []), ...(web.output.found ?? [])]) {
+        for (const c of [...(online.output.verified ?? []), ...(online.output.found ?? [])]) {
           const k = claimKey(c);
           if (k && !seenClaims.has(k)) { seenClaims.add(k); newClaims.push(c); freshThisRound++; }
         }
@@ -132,7 +136,7 @@ export async function deepInvestigate({
     // without an assessment there are simply no further leads.
     let gaps;
     try {
-      gaps = await chatJson({
+      gaps = await assess({
         model: modelFor('structure'),
         system: GAPS_SYSTEM,
         content: [
@@ -166,8 +170,12 @@ export async function deepInvestigate({
     await onNote?.({ round, kind: 'nextleads', leads });
   }
 
-  // One last pass to name what is open, even when we stopped for another reason.
-  const final = await chatJson({
+  // One last pass to name what is open, even when we stopped for another reason —
+  // but only if a round actually ran. A ceiling that forbids the work has to forbid
+  // the summary of it too, or "nothing was spent" is a lie told at the caller's expense.
+  if (round === 0 || overCeiling()) return finish({}, stopped);
+
+  const final = await assess({
     model: modelFor('structure'),
     system: GAPS_SYSTEM,
     content: [
@@ -179,6 +187,7 @@ export async function deepInvestigate({
     noThinking: false,
   }).catch(() => ({ data: {}, usage: {} }));
   costToman += final.usage?.costToman ?? 0;
+  costUsd += final.usage?.costUsd ?? 0;   // was dropped, so the ceiling never saw this call
 
   return finish(final.data, stopped);
 

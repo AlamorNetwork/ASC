@@ -11,7 +11,7 @@
  * embeddings alone miss literal quotes.
  */
 import { config } from './config.js';
-import { routerFetch } from './llm.js';
+import { routerFetch, recordSpend } from './llm.js';
 import { rerank } from './rerank.js';
 import * as store from './db.js';
 import { getSetting } from './db.js';
@@ -94,6 +94,7 @@ export async function embed(texts) {
   if (!res.ok) throw new Error(`embeddings ${res.status} (${model}): ${raw.slice(0, 200)}`);
   const json = JSON.parse(raw.replace(/\s*data:\s*\[DONE\]\s*$/, '').trim());
   const vectors = (json.data ?? []).sort((a, b) => a.index - b.index).map((d) => d.embedding);
+  recordSpend(json.usage);
   return { vectors, costToman: json.usage?.total_cost_toman ?? 0 };
 }
 
