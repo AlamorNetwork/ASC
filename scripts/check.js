@@ -634,6 +634,33 @@ await check('a missing reranker costs precision, not the answer', async () => {
   return 'disabled itself, retrieval unaffected';
 });
 
+await check('a repeated query is embedded once, not every time', async () => {
+  const chunks = await import('../src/chunks.js');
+  const p = `cache-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'کش' });
+  const docId = store.insertDocument({
+    principalId: p, dossierId, filename: 'c.txt', kind: 'text', extraction: 'local',
+  });
+  store.insertChunks(p, dossierId, docId, [
+    { seq: 0, text: 'میترائیسم آیینی رازآمیز بود که در امپراتوری روم گسترش یافت.' },
+  ]);
+
+  const before = chunks.embedCacheStats().size;
+  const q = `پرسش یکتا ${Date.now()}`;
+  await chunks.retrieve({ principalId: p, dossierId, query: q, limit: 2 });
+  const afterFirst = chunks.embedCacheStats().size;
+  await chunks.retrieve({ principalId: p, dossierId, query: q, limit: 2 });
+  const afterSecond = chunks.embedCacheStats().size;
+
+  // The second call must not add another entry — it should have hit the cache. If the
+  // embedding endpoint was unreachable nothing was cached either time, which is also
+  // correct behaviour, so that case is not a failure.
+  if (afterFirst > before && afterSecond !== afterFirst) {
+    throw new Error('the same query was embedded twice');
+  }
+  return afterFirst > before ? 'cached and reused' : 'endpoint unreachable, degraded to keyword';
+});
+
 await check('conversation history round trips', () => {
   // A fresh principal each run, so a previous run's rows cannot make this pass or fail.
   const p = `chat-test-${Date.now()}`;

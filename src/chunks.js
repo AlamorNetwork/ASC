@@ -61,6 +61,27 @@ const toBlob = (vec) => Buffer.from(new Float32Array(vec).buffer);
 const fromBlob = (buf) =>
   new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
 
+/**
+ * Query vectors are cached for the life of the process.
+ *
+ * A multi-hop investigation embeds the same handful of phrases over and over — the
+ * planner reuses terms, and hops repeat queries across dossiers. Each call is another
+ * chance to hit a dropped connection on a flaky route, so not making it at all is both
+ * cheaper and more reliable than making it well.
+ */
+const queryCache = new Map();
+const QUERY_CACHE_MAX = 500;
+
+const cacheGet = (text) => queryCache.get(text);
+function cacheSet(text, vec) {
+  if (queryCache.size >= QUERY_CACHE_MAX) {
+    queryCache.delete(queryCache.keys().next().value); // oldest out
+  }
+  queryCache.set(text, vec);
+}
+
+export const embedCacheStats = () => ({ size: queryCache.size });
+
 export async function embed(texts) {
   const { key } = config.router;
   const model = EMBED_MODEL();
@@ -144,9 +165,15 @@ export async function retrieve({ principalId, dossierId, query, limit = 6, inclu
 
   let semantic = [];
   try {
-    const { vectors } = await embed([query]);
-    if (vectors[0]) semantic = vectorSearch(principalId, scope, vectors[0], 20);
+    let vec = cacheGet(query);
+    if (!vec) {
+      const { vectors } = await embed([query]);
+      vec = vectors[0];
+      if (vec) cacheSet(query, vec);
+    }
+    if (vec) semantic = vectorSearch(principalId, scope, vec, 20);
   } catch (err) {
+    // Keyword search alone is a worse answer, not a failed one.
     console.warn('[chunks] semantic search unavailable:', err.message);
   }
 
