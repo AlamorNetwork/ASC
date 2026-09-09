@@ -176,6 +176,21 @@ CREATE TABLE IF NOT EXISTS intention_runs (
   ran_at        TEXT    NOT NULL
 );
 
+-- Every paid call, so "where is the money going" is a query rather than a guess.
+-- Deciding what to move to a local model, or which model to drop, needs the shape of
+-- the spend and not just its total.
+CREATE TABLE IF NOT EXISTS spend (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  model      TEXT    NOT NULL,
+  kind       TEXT    NOT NULL,            -- chat | embed | rerank | stt
+  toman      REAL    NOT NULL DEFAULT 0,
+  usd        REAL    NOT NULL DEFAULT 0,
+  in_tokens  INTEGER NOT NULL DEFAULT 0,
+  out_tokens INTEGER NOT NULL DEFAULT 0,
+  at         TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS spend_at ON spend(at);
+
 -- Undirected: stored once with the lower id first, so a pair cannot be linked twice.
 CREATE TABLE IF NOT EXISTS dossier_links (
   principal_id  TEXT    NOT NULL,
@@ -187,6 +202,28 @@ CREATE TABLE IF NOT EXISTS dossier_links (
   CHECK (a_id < b_id)
 );
 `);
+
+export const recordSpendRow = (r) => db.prepare(`
+  INSERT INTO spend (model, kind, toman, usd, in_tokens, out_tokens, at)
+  VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+`).run(r.model, r.kind, r.toman ?? 0, r.usd ?? 0, r.inTokens ?? 0, r.outTokens ?? 0);
+
+/** Where the money went, by model, over the last `days`. */
+export const spendByModel = (days = 7) => db.prepare(`
+  SELECT model, kind, count(*) AS calls, sum(toman) AS toman, sum(usd) AS usd,
+         sum(in_tokens) AS in_tokens, sum(out_tokens) AS out_tokens
+  FROM spend WHERE at >= datetime('now', ?)
+  GROUP BY model, kind ORDER BY toman DESC
+`).all(`-${Number(days) || 7} days`);
+
+/** Drops the rows for one model. Used by the self-check to remove its own fixtures. */
+export const forgetSpend = (model) =>
+  db.prepare(`DELETE FROM spend WHERE model = ?`).run(model).changes;
+
+export const spendTotal = (days = 7) => db.prepare(`
+  SELECT count(*) AS calls, coalesce(sum(toman), 0) AS toman, coalesce(sum(usd), 0) AS usd
+  FROM spend WHERE at >= datetime('now', ?)
+`).get(`-${Number(days) || 7} days`);
 
 export const getSetting = (key) =>
   db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key)?.value ?? null;

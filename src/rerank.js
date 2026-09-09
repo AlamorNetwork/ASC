@@ -107,7 +107,7 @@ export async function rerank(query, documents, { topN = documents.length } = {})
   }
 
   available = true;
-  recordSpend(json.usage);
+  recordSpend(json.usage, { model: name, kind: 'rerank' });
   const sorted = [...results].sort(
     (a, b) => (b.relevance_score ?? b.score ?? 0) - (a.relevance_score ?? a.score ?? 0));
 

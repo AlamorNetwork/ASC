@@ -716,6 +716,32 @@ async function handleCommand(chatId, principalId, text, isOwner) {
     return true;
   }
 
+  if (text.startsWith('/spend')) {
+    const days = Number(text.slice(6).trim()) || 7;
+    const rows = store.spendByModel(days);
+    const total = store.spendTotal(days);
+    if (!rows.length) {
+      await tg.send(chatId, `💸 در ${days} روز گذشته هزینه‌ای ثبت نشده.`);
+      return true;
+    }
+    const L = [`💸 <b>هزینه‌ی ${days} روز گذشته</b>`, '',
+      `مجموع: <b>${toman(total.toman)}</b> تومان · ${total.calls} صدا زدن`, ''];
+    for (const r of rows) {
+      const share = total.toman ? Math.round(r.toman / total.toman * 100) : 0;
+      L.push(`${share.toString().padStart(3)}٪ · ${toman(r.toman)} — <code>${esc(r.model)}</code>`);
+      L.push(`      <i>${r.kind} · ${r.calls} بار</i>`);
+    }
+    // The point of the breakdown is to show what is worth moving off a paid endpoint.
+    const small = rows.filter((r) => r.kind === 'embed' || r.kind === 'rerank');
+    const smallToman = small.reduce((s, r) => s + r.toman, 0);
+    if (smallToman > 0) {
+      L.push('', `<i>امبدینگ و ریرنک روی هم ${Math.round(smallToman / total.toman * 100)}٪ — ` +
+        'این دو مدل کوچک‌اند و می‌شود لوکال اجراشان کرد.</i>');
+    }
+    await tg.send(chatId, L.join('\n'));
+    return true;
+  }
+
   if (text.startsWith('/budget')) {
     const arg = text.slice(7).trim();
     if (!arg) {

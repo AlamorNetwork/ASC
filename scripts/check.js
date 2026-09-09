@@ -795,6 +795,33 @@ await check('capture uses the model the settings name', async () => {
   return 'the runtime setting reaches the voice path';
 });
 
+await check('spend is recorded per model, not just as a total', async () => {
+  const { recordSpend, spend } = await import('../src/llm.js');
+  const before = store.spendTotal(1).toman;
+  try {
+    recordSpend({ total_cost_toman: 120, prompt_tokens: 30 }, { model: 'check/embed-x', kind: 'embed' });
+    recordSpend({ total_cost_toman: 880, prompt_tokens: 90 }, { model: 'check/chat-x', kind: 'chat' });
+
+    const rows = store.spendByModel(1);
+    const embed = rows.find((r) => r.model === 'check/embed-x');
+    const chat = rows.find((r) => r.model === 'check/chat-x');
+    if (!embed || !chat) throw new Error('a recorded call did not come back');
+    if (embed.kind !== 'embed') throw new Error(`kind was ${embed.kind}`);
+    if (Math.round(store.spendTotal(1).toman - before) !== 1000) throw new Error('the total does not add up');
+    // Sorted by cost, so the biggest line is the one to act on first.
+    if (rows[0].toman < rows.at(-1).toman) throw new Error('rows are not ordered by spend');
+  } finally {
+    // These are bookkeeping fixtures, not calls anyone paid for. They come back out of
+    // both the meter and the table, so the free run's ceiling still measures real money
+    // and /spend never shows a figure nobody was charged.
+    store.forgetSpend('check/embed-x');
+    store.forgetSpend('check/chat-x');
+    spend.toman -= 1000;
+    spend.calls -= 2;
+  }
+  return 'by model and kind, ordered by cost';
+});
+
 await check('transcription route can be switched off', async () => {
   const s = await import('../src/settings.js');
   const before = store.getSetting('model.transcribe');

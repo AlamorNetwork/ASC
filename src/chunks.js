@@ -94,7 +94,7 @@ export async function embed(texts) {
   if (!res.ok) throw new Error(`embeddings ${res.status} (${model}): ${raw.slice(0, 200)}`);
   const json = JSON.parse(raw.replace(/\s*data:\s*\[DONE\]\s*$/, '').trim());
   const vectors = (json.data ?? []).sort((a, b) => a.index - b.index).map((d) => d.embedding);
-  recordSpend(json.usage);
+  recordSpend(json.usage, { model, kind: 'embed' });
   return { vectors, costToman: json.usage?.total_cost_toman ?? 0 };
 }
 

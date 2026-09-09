@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import * as store from './db.js';
 
 const { key, base } = config.router;
 
@@ -22,10 +23,22 @@ let reasoningCanBeDisabled = true;
  */
 export const spend = { toman: 0, usd: 0, calls: 0 };
 
-export function recordSpend(usage = {}) {
+export function recordSpend(usage = {}, { model = 'unknown', kind = 'chat' } = {}) {
+  const toman = usage?.total_cost_toman ?? usage?.costToman ?? 0;
+  const usd = usage?.cost ?? usage?.costUsd ?? 0;
   spend.calls++;
-  spend.toman += usage.total_cost_toman ?? usage.costToman ?? 0;
-  spend.usd += usage.cost ?? usage.costUsd ?? 0;
+  spend.toman += toman;
+  spend.usd += usd;
+
+  // Kept per call, not just as a total, because the decision this feeds — what to move
+  // to a local model — depends entirely on which of them is expensive.
+  try {
+    store.recordSpendRow({
+      model, kind, toman, usd,
+      inTokens: usage?.prompt_tokens ?? 0,
+      outTokens: usage?.completion_tokens ?? 0,
+    });
+  } catch { /* accounting must never break the call it is accounting for */ }
 }
 
 export const spendMark = () => ({ ...spend });
@@ -109,7 +122,7 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
 
   const json = parseRouterBody(raw);
   const usage = json.usage ?? {};
-  recordSpend(usage);
+  recordSpend(usage, { model, kind: 'chat' });
   return {
     text: json.choices?.[0]?.message?.content ?? '',
     usage: {
@@ -198,7 +211,7 @@ export async function chatStream({ model, system, history = [], content, maxToke
     }
   }
 
-  recordSpend(usage);
+  recordSpend(usage, { model, kind: 'chat' });
   return {
     text,
     usage: {
@@ -272,7 +285,7 @@ export async function transcribe({ model, buffer, filename = 'voice.ogg', mimeTy
   catch { json = { text: raw }; }   // some endpoints return bare text
 
   const usage = json.usage ?? {};
-  recordSpend(usage);
+  recordSpend(usage, { model, kind: 'stt' });
   return {
     text: String(json.text ?? '').trim(),
     usage: {
