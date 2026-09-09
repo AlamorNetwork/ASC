@@ -23,7 +23,16 @@ if (!provider) {
   process.exit(1);
 }
 
-console.log(`\n${provider.name} · ${provider.base} · ${provider.keys.length} key(s)\n`);
+console.log(`\n${provider.name} · ${provider.base} · ${provider.keys.length} key(s)`);
+
+// The shape of a key, without the key. Most "invalid key" reports are a value copied
+// from the wrong place or truncated on the way into .env, and the prefix a provider
+// documents is enough to tell — while staying safe to paste into a chat.
+for (const [i, k] of provider.keys.entries()) {
+  const marker = k.match(/^[A-Za-z]+[_-]/)?.[0] ?? k.slice(0, 4);
+  console.log(`  key ${i + 1}: starts "${marker}…", ${k.length} chars`);
+}
+console.log('');
 
 // The provider's own list, when it publishes one. Free models are the point here.
 let listed = [];
@@ -125,7 +134,10 @@ const upstream = failed.filter((r) => r.status >= 500);
 
 if (rejected.length && rejected.length === rows.length) {
   console.log('\n✖ Every model rejected this key, which is what an invalid key looks like.');
-  console.log('  Check it is copied whole, and that the account is activated.');
+  console.log('  Compare the prefix printed above with the one the provider documents —');
+  console.log('  an API key and a browser session token are different things, and a');
+  console.log('  session token copied out of a logged-in page fails exactly like this.');
+  console.log('  Then check it was copied whole and the account is activated.');
 } else if (rejected.length) {
   console.log(`\nⓘ ${rejected.length} model(s) returned 401 while others did not, so the key itself`);
   console.log('  is fine — those models are not open to this account. Leave them out of the chain.');
