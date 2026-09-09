@@ -178,12 +178,26 @@ if (working.length) {
   // link that is down costs one instant 502 and moves on, so the cheap thing is to
   // include everything and let the runtime sort it out, ordered by what we did measure.
   const alsoTried = models.filter((m) => !working.some((w) => w.model === m));
-  const chain = [...working.map((r) => r.model), ...alsoTried]
+
+  // structure is a JSON role — every planner, assessor and gap prompt in this program
+  // demands a JSON object — so the routing test measures it better than the prose one
+  // does. A model that writes a fast paragraph and then cannot produce a short JSON
+  // object belongs behind one that can, however quick it looked.
+  const byJson = [...working].sort((a, b) =>
+    (b.routes === true) - (a.routes === true) || a.ms - b.ms);
+  const chain = [...byJson.map((r) => r.model), ...alsoTried]
     .map((m) => `${m}@${provider.name}`).join(',');
 
   console.log('\nstructure — planning and assessing inside a run, called dozens of times.');
-  console.log('A few seconds here disappear into work that already takes minutes:');
+  console.log('Every prompt in that role wants JSON back, so the ones that produced it');
+  console.log('go first, however fast the others wrote prose:');
   console.log(`  MODEL_STRUCTURE=${chain},${config.models.structure}`);
+
+  const proseOnly = working.filter((r) => r.routes === false || r.routerMs === Infinity);
+  if (proseOnly.length) {
+    console.log(`\n  Demoted: ${proseOnly.map((r) => r.model).join(', ')} — wrote prose but`);
+    console.log('  could not return a short JSON object, which is all this role ever asks for.');
+  }
   if (alsoTried.length) {
     console.log(`\n  The ${alsoTried.length} that failed just now are in the chain on purpose. Which of these`);
     console.log('  models is up changes between runs, a down link costs one instant 502,');
