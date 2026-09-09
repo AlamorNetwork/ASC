@@ -55,34 +55,70 @@ const claimKey = (c) => normalise(c.text ?? '').split(' ').slice(0, 10).join(' '
  */
 export async function deepInvestigate({
   principalId, dossierId, question, ceilingUsd = 0.5, onRound, onNote,
+  // Resume an existing run instead of starting one. A ceiling reached is a pause, not
+  // an ending: the leads it was about to follow are exactly where it should carry on.
+  runId = null,
   // The three collaborators that cost money are injectable, the same way investigate's
   // planner is. Without this the only way to test the guards is to let a run actually
   // spend — which it did, at sixty thousand toman a suite.
   search = investigate, web = runResearch, assess = chatJson,
+  persist = true,
 }) {
   const dossier = store.getDossier(principalId, dossierId);
   if (!dossier) throw new Error('پرونده پیدا نشد');
 
-  const seenChunks = new Set();
+  const prior = runId ? store.getInvestigation(principalId, runId) : null;
+  if (runId && !prior) throw new Error('این کاوش پیدا نشد');
+
+  const id = prior?.id
+    ?? (persist ? store.startInvestigation({ principalId, dossierId, question }) : null);
+  if (id) store.clearStop(id);
+
+  const parse = (s, fallback) => { try { return JSON.parse(s) ?? fallback; } catch { return fallback; } };
+
+  // Passages already counted stay counted, so a resumed run does not report old material
+  // as new. Claims need no such list — they are already in the database.
+  const seenChunks = new Set(prior ? parse(prior.seen_chunks, []) : []);
   const seenClaims = new Set(
     store.dossierClaims(principalId, dossierId).map(claimKey));
 
-  let costUsd = 0;
-  let costToman = 0;
-  let leads = [question];
-  let round = 0;
+  // Spend carried over, so a new ceiling means "this much more", counted from where the
+  // last one stopped rather than starting the budget again.
+  let costUsd = prior?.cost_usd ?? 0;
+  let costToman = prior?.cost_toman ?? 0;
+  let leads = prior ? parse(prior.leads, [question]) : [question];
+  let round = prior?.rounds ?? 0;
+  const roundsBefore = round;
   let stopped = 'exhausted';
   const startedAt = Date.now();
-  const allLeads = [];
+  const allLeads = prior ? parse(prior.all_leads, []) : [];
   const newClaims = [];
 
-  const overCeiling = () => ceilingUsd !== null && costUsd >= ceilingUsd;
+  // On a resume the new ceiling is an additional allowance, not a new total. Spend is
+  // carried over so the report shows what the whole investigation cost, and comparing a
+  // fresh ceiling against a carried-over total would stop the run before it began.
+  const ceiling = ceilingUsd === null ? null : ceilingUsd + (prior?.cost_usd ?? 0);
+  const overCeiling = () => ceiling !== null && costUsd >= ceiling;
   const minutes = () => (Date.now() - startedAt) / 60000;
+  const asked = () => id !== null && store.stopRequested(id);
+
+  const save = (state, why) => {
+    if (id === null) return;
+    store.saveInvestigation(id, {
+      state, stopped: why, rounds: round, leads, seenChunks: [...seenChunks],
+      allLeads, costToman, costUsd,
+    });
+  };
+
+  if (prior) await onNote?.({ round, kind: 'resumed', rounds: roundsBefore, leads });
 
   for (;;) {
     // Checked before the round starts, so one that cannot be afforded is never begun.
     if (overCeiling()) { stopped = 'ceiling'; break; }
-    if (round >= BLIND_ROUNDS && costUsd === 0 && costToman === 0) { stopped = 'unmeasured'; break; }
+    if (asked()) { stopped = 'stopped'; break; }
+    if (round >= roundsBefore + BLIND_ROUNDS && costUsd === 0 && costToman === 0) {
+      stopped = 'unmeasured'; break;
+    }
     if (minutes() > MAX_MINUTES) { stopped = 'time'; break; }
 
     round++;
@@ -90,6 +126,8 @@ export async function deepInvestigate({
 
     // --- the user's own documents, which cost almost nothing to search -----------
     for (const lead of leads.slice(0, 3)) {
+      // Between searches too, so stopping does not mean waiting out the whole round.
+      if (asked()) break;
       const found = await search({
         principalId, dossierId, question: lead, maxHops: 3,
         onStep: (s) => onNote?.({ round, ...s }),
@@ -104,7 +142,8 @@ export async function deepInvestigate({
     }
 
     // --- the web, which does ---------------------------------------------------
-    if (!overCeiling()) {
+    // The costly half of the round, so the stop is checked immediately before it.
+    if (!overCeiling() && !asked()) {
       await onNote?.({ round, kind: 'web', lead: leads[0] });
       try {
         const online = await web({
@@ -126,8 +165,14 @@ export async function deepInvestigate({
       }
     }
 
-    await onRound?.({ round, fresh: freshThisRound, costToman, costUsd, claims: newClaims.length });
+    // Saved every round, so an interruption of any kind — a stop, a crash, a restart —
+    // leaves the frontier on disk rather than only in this function's memory.
+    save('running', null);
+    await onRound?.({
+      runId: id, round, fresh: freshThisRound, costToman, costUsd, claims: newClaims.length,
+    });
 
+    if (asked()) { stopped = 'stopped'; break; }
     if (!freshThisRound) { stopped = 'exhausted'; break; }
     if (overCeiling()) { stopped = 'ceiling'; break; }
 
@@ -173,7 +218,8 @@ export async function deepInvestigate({
   // One last pass to name what is open, even when we stopped for another reason —
   // but only if a round actually ran. A ceiling that forbids the work has to forbid
   // the summary of it too, or "nothing was spent" is a lie told at the caller's expense.
-  if (round === 0 || overCeiling()) return finish({}, stopped);
+  // A stop is the same case: the user asked for the spending to end, now.
+  if (round === roundsBefore || overCeiling() || stopped === 'stopped') return finish({}, stopped);
 
   const final = await assess({
     model: modelFor('structure'),
@@ -192,9 +238,19 @@ export async function deepInvestigate({
   return finish(final.data, stopped);
 
   function finish(data, why) {
+    // Only exhaustion is an ending. A ceiling, a stop, or a guard firing leaves a run
+    // that still has somewhere to go, and it is kept so it can go there later.
+    const canResume = why !== 'exhausted' && leads.length > 0;
+    save(canResume ? 'paused' : 'done', why);
+
     return {
+      runId: id,
       rounds: round,
+      roundsThisTime: round - roundsBefore,
+      resumedFrom: prior ? roundsBefore : 0,
       stopped: why,
+      canResume,
+      nextLeads: canResume ? leads : [],
       newClaims,
       answered: Array.isArray(data.answered) ? data.answered : [],
       open: Array.isArray(data.open) ? data.open : [],

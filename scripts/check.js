@@ -621,6 +621,101 @@ await check('deep investigation stops when cost cannot be measured', async () =>
   return `blind guard stopped it after ${out.rounds} round(s)`;
 });
 
+// A ceiling reached used to mean the next run began at the original question again and
+// re-bought everything already searched.
+await check('a resumed investigation carries on from its leads, not from the start', async () => {
+  const { deepInvestigate } = await import('../src/deep.js');
+  const p = `resume-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'ادامه' });
+
+  const asked = [];
+  const stubs = (leadName) => ({
+    search: async ({ question: q }) => {
+      asked.push(q);
+      return {
+        passages: [{ id: `c-${q}`, text: 'پاساژ' }], trail: [{ lead: q }],
+        hops: 1, exhausted: false, costToman: 300, costUsd: 0.02,
+      };
+    },
+    web: async () => ({ output: { found: [{ text: `یافته ${asked.length}` }] }, costToman: 0, costUsd: 0 }),
+    assess: async () => ({ data: { next_leads: [leadName] }, usage: {} }),
+  });
+
+  // First leg: a tight ceiling, so it stops with a frontier still to follow.
+  const first = await deepInvestigate({
+    principalId: p, dossierId, question: 'سؤال اصلی', ceilingUsd: 0.03, ...stubs('سرنخ تازه'),
+  });
+  if (!first.runId) throw new Error('the run was not recorded');
+  if (first.stopped !== 'ceiling') throw new Error(`stopped as ${first.stopped}`);
+  if (!first.canResume) throw new Error('a run stopped by its ceiling should be resumable');
+  if (!first.nextLeads.includes('سرنخ تازه')) throw new Error('the frontier was not kept');
+
+  const beforeResume = asked.length;
+  const second = await deepInvestigate({
+    principalId: p, dossierId, question: 'سؤال اصلی', ceilingUsd: 0.03,
+    runId: first.runId, ...stubs('سرنخ تازه'),
+  });
+
+  const askedOnResume = asked.slice(beforeResume);
+  if (askedOnResume.includes('سؤال اصلی')) {
+    throw new Error('the resume started from the original question again');
+  }
+  if (!askedOnResume.includes('سرنخ تازه')) throw new Error('the resume ignored the saved leads');
+  if (second.rounds <= first.rounds) throw new Error('rounds did not accumulate across the resume');
+  // The new ceiling is more allowance, not a new total — otherwise carried-over spend
+  // would exhaust it before the first round.
+  if (second.roundsThisTime < 1) throw new Error('the fresh ceiling bought no rounds at all');
+  if (second.costUsd <= first.costUsd) throw new Error('cost did not carry over');
+
+  return `${first.rounds} then +${second.roundsThisTime}, resumed at «${askedOnResume[0]}»`;
+});
+
+await check('a stop is honoured and leaves the run resumable', async () => {
+  const { deepInvestigate } = await import('../src/deep.js');
+  const p = `stop-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'توقف' });
+
+  let runId = null;
+  const out = await deepInvestigate({
+    principalId: p, dossierId, question: 'برو تا ته', ceilingUsd: null,
+    search: async ({ question: q }) => ({
+      passages: [{ id: `s-${Math.random()}`, text: 'تازه' }], trail: [{ lead: q }],
+      hops: 1, exhausted: false, costToman: 100, costUsd: 0.001,
+    }),
+    web: async () => ({ output: { found: [] }, costToman: 0, costUsd: 0 }),
+    assess: async () => ({ data: { next_leads: ['هنوز جا دارد'] }, usage: {} }),
+    // Pressing stop after the first round, the way the button does.
+    onRound: async (r) => { runId = r.runId; store.requestStop(p, r.runId); },
+  });
+
+  if (out.stopped !== 'stopped') throw new Error(`stopped as ${out.stopped}, not by request`);
+  if (out.rounds > 2) throw new Error(`ran ${out.rounds} rounds after being told to stop`);
+  if (!out.canResume) throw new Error('a stopped run must be resumable');
+
+  const saved = store.getInvestigation(p, runId);
+  if (saved.state !== 'paused') throw new Error(`saved as ${saved.state}`);
+  if (!JSON.parse(saved.leads).length) throw new Error('the frontier was not saved');
+  return `stopped after ${out.rounds} round(s), frontier kept`;
+});
+
+await check('a restart does not strand a running investigation', async () => {
+  const p = `orphan-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'ری‌استارت' });
+  const id = store.startInvestigation({ principalId: p, dossierId, question: 'نصفه ماند' });
+  store.saveInvestigation(id, {
+    state: 'running', rounds: 2, leads: ['سرنخ باقی‌مانده'], seenChunks: [], allLeads: [],
+    costToman: 500, costUsd: 0.02,
+  });
+
+  const reopened = store.reopenInterruptedInvestigations();
+  if (!reopened.some((r) => r.id === id)) throw new Error('the interrupted run was not offered');
+  const after = store.getInvestigation(p, id);
+  if (after.state !== 'paused') throw new Error(`left as ${after.state}`);
+  if (after.stopped !== 'interrupted') throw new Error('the reason was not recorded');
+  if (!JSON.parse(after.leads).length) throw new Error('the frontier was lost');
+  return 'reopened as paused, frontier intact';
+});
+
 await check('a zero ceiling starts nothing at all', async () => {
   const { deepInvestigate } = await import('../src/deep.js');
   const p = `deepcap-${Date.now()}`;

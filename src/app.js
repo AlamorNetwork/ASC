@@ -233,8 +233,7 @@ const pendingDeep = new Map();
  * Runs until the leads are exhausted, reporting each round, and ends by naming what
  * is still open and which source would settle it.
  */
-async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
-  const d = store.getDossier(principalId, dossierId);
+async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, resumeId = null) {
   const head = `🕳 <b>کاوش عمیق</b>\n«${esc(question.slice(0, 90))}»`;
   const status = await tg.send(chatId, `${head}\n\nشروع کردم…`);
 
@@ -247,11 +246,24 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
     else await tg.edit(chatId, trailMsg.message_id, body);
   };
 
+  // The stop button needs the run id, which only exists once the run has begun, so the
+  // status message gains its button on the first round rather than up front.
+  let armed = false;
+  const arm = async (runId, text) => {
+    if (armed || !runId) return tg.edit(chatId, status.message_id, text);
+    armed = true;
+    return tg.edit(chatId, status.message_id, text,
+      [[{ text: '⏹ نگه دار', callback_data: `deepstop:${runId}` }]]);
+  };
+
   try {
     const out = await deepInvestigate({
-      principalId, dossierId, question, ceilingUsd,
+      principalId, dossierId, question, ceilingUsd, runId: resumeId,
       onNote: async (n) => {
-        if (n.kind === 'searching') await note(`🔍 ${n.queries.map((q) => `«${esc(q)}»`).join(' ')}`);
+        if (n.kind === 'resumed') {
+          await note(`↩️ از دور ${n.rounds} ادامه می‌دهم — سرنخ‌های همان‌جا: ` +
+            n.leads.slice(0, 3).map((l) => `«${esc(String(l).slice(0, 40))}»`).join('، '));
+        } else if (n.kind === 'searching') await note(`🔍 ${n.queries.map((q) => `«${esc(q)}»`).join(' ')}`);
         else if (n.kind === 'lead' && n.lead) await note(`💡 ${esc(n.lead)}`);
         else if (n.kind === 'web') await note(`🌐 وب — «${esc(String(n.lead).slice(0, 60))}»`);
         else if (n.kind === 'nextleads') await note(`↪️ سرنخ‌های بعدی: ${n.leads.map((l) => esc(l)).join('، ')}`);
@@ -260,7 +272,7 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
         } else if (n.kind === 'error') await note(`⚠️ ${esc(n.message)}`);
       },
       onRound: async (r) => {
-        await tg.edit(chatId, status.message_id,
+        await arm(r.runId,
           `${head}\n\nدور ${r.round} · ${r.fresh ? `${r.fresh} چیز تازه` : 'چیز تازه‌ای نبود'} · ` +
           `${r.claims} یافته · ${toman(r.costToman)} تومان`);
       },
@@ -271,12 +283,19 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
     const why = {
       exhausted: 'سرنخی باقی نماند.',
       ceiling: 'به سقف هزینه‌ای که تعیین کردی رسید.',
+      stopped: '⏹ نگهش داشتم. هرجا بودم همان‌جا ذخیره شد.',
       unmeasured: '⚠️ ایستادم چون هزینه گزارش نمی‌شود — نمی‌توانستم بفهمم چقدر دارد خرج می‌شود.',
       time: `⚠️ ایستادم چون ${45} دقیقه طول کشید و هزینه هنوز به سقف نرسیده بود.`,
     }[out.stopped] ?? '';
 
+    // The cost shown is everything this investigation has cost, across resumes — one
+    // number, not a per-session figure that quietly resets.
+    const spanned = out.resumedFrom
+      ? `${out.roundsThisTime} دور تازه (رویِ ${out.resumedFrom} دورِ قبل)`
+      : `${out.rounds} دور`;
     await tg.edit(chatId, status.message_id,
-      `${head}\n\n${out.rounds} دور · ${out.newClaims.length} یافته‌ی تازه · ${toman(out.costToman)} تومان\n${why}`);
+      `${head}\n\n${spanned} · ${out.newClaims.length} یافته‌ی تازه · ` +
+      `${toman(out.costToman)} تومان روی هم\n${why}`, []);
 
     if (out.newClaims.length) {
       const verified = out.newClaims.filter((c) => c.status === 'verified');
@@ -301,9 +320,16 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd) {
       await tg.send(chatId, '✔️ تا جایی که می‌شد رفت و سؤال بازی نماند.');
     }
 
-    if (['ceiling', 'time'].includes(out.stopped)) {
-      await tg.send(chatId, 'ادامه بدهم؟ سقف تازه‌ای می‌پرسم.', {
-        buttons: [[{ text: '▶️ ادامه بده', callback_data: `deepmore:${dossierId}` }]],
+    // Only offered when there is somewhere to carry on to, and it says where — so
+    // "continue" is a decision about a known next step, not a blank cheque.
+    if (out.canResume && out.runId) {
+      await tg.send(chatId, [
+        '↪️ <b>از همین‌جا ادامه می‌دهم</b>', '',
+        'سرنخ‌هایی که مانده:',
+        ...out.nextLeads.slice(0, 4).map((l) => `• ${esc(String(l))}`), '',
+        `<i>${out.newClaims.length ? 'یافته‌های تا اینجا نگه داشته شد؛ دوباره دنبالشان نمی‌گردم.' : 'آنچه دیده شد نگه داشته شد.'}</i>`,
+      ].join('\n'), {
+        buttons: [[{ text: '▶️ ادامه بده', callback_data: `deepmore:${out.runId}` }]],
       });
     }
   } catch (err) {
@@ -943,6 +969,26 @@ export async function run() {
     ? `[asc] owner: ${ownerChatId}`
     : '[asc] unclaimed — the first chat to message becomes the owner');
 
+  // A restart kills any run in flight. Left as 'running' it could never be resumed and
+  // its frontier would sit on disk unreachable, so it is reopened as paused — which is
+  // what it actually is.
+  const orphaned = store.reopenInterruptedInvestigations();
+  if (orphaned.length) {
+    console.log(`[asc] ${orphaned.length} investigation(s) interrupted by a restart, kept resumable`);
+    if (ownerChatId) {
+      for (const r of orphaned.slice(0, 3)) {
+        await tg.send(ownerChatId, [
+          '↩️ <b>یک کاوش با ری‌استارت نصفه ماند</b>', '',
+          `«${esc(r.question.slice(0, 100))}»`,
+          `${r.rounds} دور رفته بود · ${toman(r.cost_toman)} تومان`, '',
+          '<i>جایی که رسیده بود ذخیره است. از همان‌جا ادامه می‌دهم.</i>',
+        ].join('\n'), {
+          buttons: [[{ text: '▶️ ادامه بده', callback_data: `deepmore:${r.id}` }]],
+        }).catch(() => {});
+      }
+    }
+  }
+
   startScheduler({
     // A watch that found something new. One that found nothing says nothing.
     onReport: async ({ report, dossier, fresh, costToman, intention }) => {
@@ -1054,24 +1100,49 @@ export async function run() {
             runWebResearch(chatId, principalId, id, d.topic, lastUser.text)
               .catch((e) => console.error('[webresearch]', e));
           }
+        } else if (action === 'deepstop') {
+          // `id` here is the run, not the dossier. The run notices between steps and
+          // saves where it got to; it does not die mid-round and lose the frontier.
+          const changed = store.requestStop(principalId, id);
+          await tg.answerCallback(cb.id, changed ? 'باشد، سر همین دور نگه می‌دارم' : 'تمام شده بود');
+          if (changed) {
+            await tg.edit(chatId, cb.message.message_id,
+              `${cb.message.text ?? ''}\n\n⏹ <i>گفتی نگه دارم — همین دور را تمام می‌کنم و می‌ایستم.</i>`, []);
+          }
         } else if (action === 'deep' || action === 'deepmore') {
-          const lastUser = [...store.conversation(principalId, id, 12)]
+          // deep carries a dossier id and starts fresh; deepmore carries a run id and
+          // picks up its leads, so continuing never re-buys what was already searched.
+          const resuming = action === 'deepmore';
+          const run = resuming ? store.getInvestigation(principalId, id) : null;
+          if (resuming && !run) { await tg.answerCallback(cb.id, 'این کاوش پیدا نشد'); continue; }
+
+          const dossierId = resuming ? run.dossier_id : id;
+          const lastUser = [...store.conversation(principalId, dossierId, 12)]
             .reverse().find((m) => m.role === 'user');
-          const q = lastUser?.text ?? store.getDossier(principalId, id)?.topic;
+          const q = resuming
+            ? run.question
+            : (lastUser?.text ?? store.getDossier(principalId, dossierId)?.topic);
           if (!q) {
             await tg.answerCallback(cb.id, 'سؤالی پیدا نشد');
           } else {
-            const token = `${id}`;
-            pendingDeep.set(token, { dossierId: id, question: q });
+            const token = `${action}${id}`;
+            pendingDeep.set(token, { dossierId, question: q, resumeId: resuming ? run.id : null });
             await tg.answerCallback(cb.id);
             await tg.edit(chatId, cb.message.message_id, cb.message.text ?? '', []);
             // Running to exhaustion costs real money, so the ceiling is agreed first.
             await tg.send(chatId, [
-              '🕳 <b>کاوش عمیق</b>', '',
+              resuming ? '↪️ <b>ادامه‌ی کاوش عمیق</b>' : '🕳 <b>کاوش عمیق</b>', '',
               `«${esc(q.slice(0, 120))}»`, '',
-              'تا وقتی سرنخی هست ادامه می‌دهم — اسناد خودت و وب، دور به دور.',
-              'وقتی دیگر سرنخی نبود می‌ایستم و می‌گویم چه چیزی مانده و چه منبعی می‌خواهد.', '',
-              '<i>سقف هزینه را انتخاب کن:</i>',
+              ...(resuming ? [
+                `تا اینجا ${run.rounds} دور رفته و ${toman(run.cost_toman)} تومان خرج شده.`,
+                'از همان سرنخ‌هایی که ماند ادامه می‌دهم — چیزی را که قبلاً گشتم دوباره نمی‌گردم.', '',
+                '<i>این سقف، اجازه‌ی خرجِ تازه است — روی آنچه قبلاً رفته اضافه می‌شود:</i>',
+              ] : [
+                'تا وقتی سرنخی هست ادامه می‌دهم — اسناد خودت و وب، دور به دور.',
+                'وقتی دیگر سرنخی نبود می‌ایستم و می‌گویم چه چیزی مانده و چه منبعی می‌خواهد.',
+                'هر وقت خواستی با دکمه‌ی «نگه دار» متوقفش کن؛ همان‌جا ذخیره می‌شود.', '',
+                '<i>سقف هزینه را انتخاب کن:</i>',
+              ]),
             ].join('\n'), {
               buttons: [
                 [{ text: '۵۰ هزار تومان', callback_data: `deepgo:${token}:0.16` },
@@ -1089,7 +1160,7 @@ export async function run() {
           if (job) {
             pendingDeep.delete(token);
             runDeep(chatId, principalId, job.dossierId, job.question,
-                    ceil === 'none' ? null : Number(ceil))
+                    ceil === 'none' ? null : Number(ceil), job.resumeId)
               .catch((e) => console.error('[deep]', e));
           }
         } else if (action === 'watchq') {

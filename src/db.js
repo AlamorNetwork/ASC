@@ -176,6 +176,32 @@ CREATE TABLE IF NOT EXISTS intention_runs (
   ran_at        TEXT    NOT NULL
 );
 
+-- A deep investigation that outlives the run.
+--
+-- Hitting the ceiling is not the end of an investigation, it is a pause in one. Without
+-- this, granting a new ceiling started the whole search again from the original question
+-- and re-bought everything already paid for. What has to survive is the frontier — the
+-- leads the next round would have followed — and which passages have already been
+-- counted. The findings themselves already survive as claims.
+CREATE TABLE IF NOT EXISTS investigations (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id   TEXT    NOT NULL,
+  dossier_id     INTEGER NOT NULL REFERENCES dossiers(id),
+  question       TEXT    NOT NULL,
+  state          TEXT    NOT NULL,          -- running | paused | done | failed
+  stopped        TEXT,                      -- ceiling | stopped | exhausted | unmeasured | time
+  rounds         INTEGER NOT NULL DEFAULT 0,
+  leads          TEXT,                      -- JSON: where the next round would start
+  seen_chunks    TEXT,                      -- JSON: passage ids already counted as new
+  all_leads      TEXT,                      -- JSON: the trail, for the report
+  cost_toman     REAL    NOT NULL DEFAULT 0,
+  cost_usd       REAL    NOT NULL DEFAULT 0,
+  stop_requested INTEGER NOT NULL DEFAULT 0,
+  started_at     TEXT    NOT NULL,
+  updated_at     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS investigations_dossier ON investigations(principal_id, dossier_id);
+
 -- Every paid call, so "where is the money going" is a query rather than a guess.
 -- Deciding what to move to a local model, or which model to drop, needs the shape of
 -- the spend and not just its total.
@@ -202,6 +228,63 @@ CREATE TABLE IF NOT EXISTS dossier_links (
   CHECK (a_id < b_id)
 );
 `);
+
+// ------------------------------------------------------- deep investigations
+
+export const startInvestigation = ({ principalId, dossierId, question }) => db.prepare(`
+  INSERT INTO investigations (principal_id, dossier_id, question, state, leads,
+                              seen_chunks, all_leads, started_at, updated_at)
+  VALUES (?,?,?,'running',?,'[]','[]',?,?)
+`).run(principalId, dossierId, question, JSON.stringify([question]), now(), now()).lastInsertRowid;
+
+export const getInvestigation = (principalId, id) =>
+  db.prepare(`SELECT * FROM investigations WHERE principal_id = ? AND id = ?`)
+    .get(principalId, Number(id)) ?? null;
+
+/** The most recent paused run for this dossier — what "carry on" should resume. */
+export const resumableInvestigation = (principalId, dossierId) =>
+  db.prepare(`
+    SELECT * FROM investigations
+    WHERE principal_id = ? AND dossier_id = ? AND state = 'paused'
+    ORDER BY id DESC LIMIT 1
+  `).get(principalId, Number(dossierId)) ?? null;
+
+export const saveInvestigation = (id, p) => db.prepare(`
+  UPDATE investigations
+  SET state = ?, stopped = ?, rounds = ?, leads = ?, seen_chunks = ?, all_leads = ?,
+      cost_toman = ?, cost_usd = ?, updated_at = ?
+  WHERE id = ?
+`).run(p.state, p.stopped ?? null, p.rounds, JSON.stringify(p.leads ?? []),
+       JSON.stringify(p.seenChunks ?? []), JSON.stringify(p.allLeads ?? []),
+       p.costToman ?? 0, p.costUsd ?? 0, now(), Number(id));
+
+/** Set from the bot while a run is in flight; the run notices between steps. */
+/**
+ * Nothing is running at startup, whatever the table says. A row still marked 'running'
+ * belonged to a process that died, and leaving it there would strand its frontier where
+ * no button could reach it.
+ */
+export function reopenInterruptedInvestigations() {
+  const rows = db.prepare(`SELECT * FROM investigations WHERE state = 'running'`).all();
+  if (rows.length) {
+    db.prepare(`UPDATE investigations SET state = 'paused', stopped = 'interrupted',
+                stop_requested = 0, updated_at = ? WHERE state = 'running'`).run(now());
+  }
+  // Only the ones with somewhere left to go are worth offering.
+  return rows.filter((r) => { try { return JSON.parse(r.leads ?? '[]').length > 0; } catch { return false; } });
+}
+
+export const requestStop = (principalId, id) =>
+  db.prepare(`UPDATE investigations SET stop_requested = 1, updated_at = ?
+              WHERE principal_id = ? AND id = ? AND state = 'running'`)
+    .run(now(), principalId, Number(id)).changes;
+
+export const stopRequested = (id) =>
+  !!db.prepare(`SELECT stop_requested FROM investigations WHERE id = ?`)
+    .get(Number(id))?.stop_requested;
+
+export const clearStop = (id) =>
+  db.prepare(`UPDATE investigations SET stop_requested = 0 WHERE id = ?`).run(Number(id));
 
 export const recordSpendRow = (r) => db.prepare(`
   INSERT INTO spend (model, kind, toman, usd, in_tokens, out_tokens, at)
