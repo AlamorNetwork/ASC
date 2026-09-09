@@ -726,12 +726,34 @@ await check('persian normalisation', () => {
 const fixture = `<html><body><h1>نمونه</h1>
 <p>میترائیسم رومی پدیده‌ای عمدتاً رومی بود و ادامه‌ی مستقیم آیین ایرانی نیست.</p>
 <p>This domain is served by the ASC self-check.</p></body></html>`;
-const server = http.createServer((_, res) => {
+const server = http.createServer((req, res) => {
+  // /blocked stands in for Britannica and Encyclopaedia Iranica, which refuse this
+  // fetcher outright.
+  if (req.url?.startsWith('/blocked')) { res.writeHead(403); res.end('no'); return; }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(fixture);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const fixtureUrl = `http://127.0.0.1:${server.address().port}/`;
+
+// Scoring these two the same made a model that cited Encyclopaedia Iranica look
+// identical to one that invented a URL.
+await check('a source we cannot open is not the same as a claim that is wrong', async () => {
+  const blocked = await verifyClaim({
+    sourceUrl: `${fixtureUrl}blocked`,
+    quote: 'هر نقل‌قولی، چون صفحه اصلاً باز نمی‌شود',
+  });
+  if (blocked.reason !== 'unreachable') throw new Error(`a 403 was scored as ${blocked.reason}`);
+  if (blocked.status === 'verified') throw new Error('an unreadable page verified a claim');
+
+  const wrong = await verifyClaim({
+    sourceUrl: fixtureUrl,
+    quote: 'این جمله قطعاً در این صفحه نیست و باید رد شود چون واقعاً نیست',
+  });
+  if (wrong.reason !== 'quote_absent') throw new Error(`a missing quote was scored as ${wrong.reason}`);
+
+  return 'unreachable and quote_absent are told apart';
+});
 
 await check('verify rejects an unsupported quote', async () => {
   const r = await verifyClaim({

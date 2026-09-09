@@ -483,6 +483,8 @@ addColumn('documents', 'read_pages', 'INTEGER');
 // A watch can carry its own question, so "keep looking into this" is not limited to
 // the dossier's headline topic.
 addColumn('intentions', 'question', 'TEXT');
+// Why a claim is not verified: the model's fault or ours. See verify.js.
+addColumn('claims', 'verify_reason', 'TEXT');
 db.exec(`CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(principal_id, dossier_id, sha256)`);
 
 const now = () => new Date().toISOString();
@@ -523,11 +525,11 @@ export const markActed = (principalId, episodeId) =>
 
 export const insertClaim = (c) => db.prepare(`
   INSERT INTO claims (principal_id, dossier_id, episode_id, text, source_url, source_title,
-                      quote, status, verify_method, verify_note, created_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                      quote, status, verify_method, verify_note, verify_reason, created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 `).run(c.principalId, c.dossierId, c.episodeId ?? null, c.text, c.sourceUrl ?? null,
        c.sourceTitle ?? null, c.quote ?? null, c.status, c.verifyMethod ?? null,
-       c.verifyNote ?? null, now()).lastInsertRowid;
+       c.verifyNote ?? null, c.verifyReason ?? null, now()).lastInsertRowid;
 
 export const dossierClaims = (principalId, dossierId) =>
   db.prepare(`SELECT * FROM claims WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)

@@ -120,9 +120,32 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
   // id", and a bare status code sends you looking in the wrong place.
   if (!res.ok) throw new Error(`router ${res.status} (${model}): ${raw.slice(0, 300)}`);
 
-  const json = parseRouterBody(raw);
-  const usage = json.usage ?? {};
+  let json = parseRouterBody(raw);
+  let usage = json.usage ?? {};
   recordSpend(usage, { model, kind: 'chat' });
+
+  // A reasoning model can spend the whole completion budget thinking and leave no room
+  // to answer — qwen3.7-flash put 1,705 of 1,805 tokens into reasoning, then on a longer
+  // prompt cut its JSON off mid-object. Both read as "the model failed" when they are
+  // really "we did not leave it room", and the money is spent either way, so one retry
+  // with headroom is strictly better than reporting a broken reply. Once only: a model
+  // that truncates twice is not going to fit on the third try either.
+  const spentThinking = usage.completion_tokens_details?.reasoning_tokens ?? 0;
+  const finish = json.choices?.[0]?.finish_reason;
+  const emptyAfterThinking = !String(json.choices?.[0]?.message?.content ?? '').trim() && spentThinking > 0;
+
+  if (emptyAfterThinking || finish === 'length') {
+    const roomier = Math.max(maxTokens * 3, spentThinking * 2 + 1500);
+    console.warn(`[llm] ${model} ran out of room (${finish}, ${spentThinking} thinking tokens); ` +
+      `retrying with ${roomier}`);
+    const retry = await post({ ...body, max_tokens: roomier });
+    if (retry.res.ok) {
+      json = parseRouterBody(retry.raw);
+      usage = json.usage ?? {};
+      recordSpend(usage, { model, kind: 'chat' });
+    }
+  }
+
   return {
     text: json.choices?.[0]?.message?.content ?? '',
     usage: {

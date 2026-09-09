@@ -42,7 +42,12 @@ Reply with a JSON object only:
  * Runs one research episode for a dossier and returns the four-column result.
  * VERIFIED is assigned here by verify.js, never by the model.
  */
-export async function runResearch({ principalId, dossierId, question, topic, onProgress, onSection }) {
+export async function runResearch({
+  principalId, dossierId, question, topic, onProgress, onSection,
+  // Overridable so one question can be run through several models and compared on what
+  // actually matters here — how much of what they claim survives verification.
+  model = null,
+}) {
   const started = Date.now();
   const episodeId = store.startEpisode({ principalId, dossierId, kind: 'research' });
   store.setDossierState(principalId, dossierId, 'running');
@@ -61,7 +66,7 @@ export async function runResearch({ principalId, dossierId, question, topic, onP
     ].filter(Boolean).join('\n');
 
     const gathered = await chatJson({
-      model: modelFor('research'),
+      model: model ?? modelFor('research'),
       system: GATHER_SYSTEM,
       content: ask,
       maxTokens: 4000,
@@ -89,6 +94,7 @@ export async function runResearch({ principalId, dossierId, question, topic, onP
         status: result.status,
         verifyMethod: result.method,
         verifyNote: result.note,
+        verifyReason: result.reason ?? null,
       };
       store.insertClaim({ principalId, dossierId, episodeId, ...row });
       (result.status === 'verified' ? verified : found).push(row);
