@@ -115,13 +115,89 @@ for (const model of models) {
   }
 }
 
-const working = [...new Set(rows.filter((r) => r.ok).map((r) => r.model))];
+// Ordered by the one thing actually measured. Latency is the difference between these
+// models: they cost the same (nothing), and for the roles they suit, faster is better.
+const working = [...new Map(
+  rows.filter((r) => r.ok)
+    .sort((a, b) => a.ms - b.ms)
+    .map((r) => [r.model, r]),
+).values()];
+
+/**
+ * The timing above is for a paragraph of prose. A routing decision is a dozen tokens of
+ * JSON, so it is a different measurement — and it is the one that decides whether a
+ * model can sit in front of every message. Reasoning models are where these diverge
+ * most: some spend longer thinking about a one-word answer than writing an essay.
+ */
+if (working.length) {
+  console.log('\ntiming a routing-shaped call (short JSON, which is what the router does)');
+  for (const r of working) {
+    const t0 = Date.now();
+    try {
+      const res = await fetch(`${provider.base}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${provider.keys[0]}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: r.model,
+          messages: [
+            { role: 'system', content: 'فقط JSON بده: {"intent":"chat | research | keep"}' },
+            { role: 'user', content: 'برو در مورد آیین میترائیسم تحقیق کن' },
+          ],
+          max_tokens: 120,
+        }),
+        signal: AbortSignal.timeout(60000),
+      });
+      const j = JSON.parse((await res.text()).replace(/\s*data:\s*\[DONE\]\s*$/, '').trim());
+      const said = j.choices?.[0]?.message?.content ?? '';
+      r.routerMs = Date.now() - t0;
+      // Getting the answer right matters as much as speed: a router that cannot follow
+      // a three-way instruction is not cheap, it is wrong on every message.
+      r.routes = /research/i.test(said);
+      console.log(`  ${String(Math.round(r.routerMs / 100) / 10).padStart(5)}s  ${r.model.padEnd(26)}` +
+        (r.routes ? '✅ chose research' : `⚠ said: ${said.replace(/\s+/g, ' ').slice(0, 46)}`));
+    } catch {
+      r.routerMs = Infinity;
+      console.log(`     —   ${r.model.padEnd(26)}✖ failed`);
+    }
+  }
+}
+
 console.log('');
 if (working.length) {
-  console.log('These answered. A chain, best first, falling back to what you already pay for:');
-  console.log(`  MODEL_STRUCTURE=${working.map((m) => `${m}@${provider.name}`).join(',')},${config.models.structure}`);
-  console.log('\nThe last link matters: a free tier will run out mid-investigation, and');
-  console.log('without something behind it the run stops there.');
+  const chain = working.map((r) => `${r.model}@${provider.name}`).join(',');
+  console.log('These answered, fastest first:');
+  for (const r of working) console.log(`  ${String(Math.round(r.ms / 100) / 10).padStart(5)}s  ${r.model}`);
+
+  console.log('\nstructure — planning and assessing inside a run, called dozens of times.');
+  console.log('A few seconds here disappear into work that already takes minutes:');
+  console.log(`  MODEL_STRUCTURE=${chain},${config.models.structure}`);
+
+  // The router runs on every message with the user waiting, so its budget is patience,
+  // not money. A free model that takes ten seconds is a worse router than a cheap one
+  // that takes one, even though it costs less.
+  const quick = working
+    .filter((r) => r.routes && r.routerMs < 4000)
+    .sort((a, b) => a.routerMs - b.routerMs);
+  console.log('\nrouter — one decision per message, with you waiting for it.');
+  if (quick.length) {
+    console.log(`  MODEL_ROUTER=${quick.map((r) => `${r.model}@${provider.name}`).join(',')},${config.models.structure}`);
+    console.log('  (only the ones that both answered correctly and came back under 4s)');
+  } else {
+    console.log(`  Nothing here answered in under 5 seconds, so leave the router where it is:`);
+    console.log(`  MODEL_ROUTER=${config.models.structure}`);
+    console.log('  It is one small call per message — the saving is not worth the wait.');
+  }
+
+  console.log('\nThe last link matters in both: a free tier runs out mid-investigation,');
+  console.log('and with nothing behind it the run stops there.');
+
+  // A model that chooses another model puts both cost and behaviour outside your control.
+  const auto = working.filter((r) => /auto|router/i.test(r.model));
+  if (auto.length) {
+    console.log(`\n⚠ ${auto.map((r) => r.model).join(', ')} picks a model for you. What it picks,`);
+    console.log('  and whether that one is free, is not something this can check — the');
+    console.log("  provider's free list may not cover where it forwards. Prefer a named model.");
+  }
 } else {
   console.log('Nothing answered. Check the keys, or the model ids.');
 }
