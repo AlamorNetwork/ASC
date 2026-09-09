@@ -42,10 +42,13 @@ export async function rerank(query, documents, { topN = documents.length } = {})
   // Rerank APIs are not standardised the way chat completions are — the path and
   // whether documents are strings or objects both vary by provider. The working
   // combination is found once and then reused.
+  // Ordered by what is known to work. Liara accepts plain strings and rejects a
+  // top_n field, so that goes first; the rest are here for other providers.
   const shapes = [
-    { path: '/rerank', docs: (d) => d },
-    { path: '/rerank', docs: (d) => d.map((text) => ({ text })) },
-    { path: '/reranking', docs: (d) => d },
+    { path: '/rerank', docs: (d) => d, topN: false },
+    { path: '/rerank', docs: (d) => d, topN: true },
+    { path: '/rerank', docs: (d) => d.map((text) => ({ text })), topN: true },
+    { path: '/reranking', docs: (d) => d, topN: false },
   ];
   const candidates = shape ? [shape] : shapes;
 
@@ -53,25 +56,30 @@ export async function rerank(query, documents, { topN = documents.length } = {})
   let used = null;
 
   for (const s of candidates) {
+    const body = { model: name, query, documents: s.docs(documents) };
+    if (s.topN) body.top_n = topN;
+
     let res;
     try {
       res = await routerFetch(s.path, {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.router.key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: name, query, documents: s.docs(documents), top_n: topN }),
+        body: JSON.stringify(body),
       }, { label: `rerank/${name}`, tries: 1, timeoutMs: 30000 });
     } catch (err) {
-      console.warn('[rerank] unreachable, keeping fused order:', err.message);
-      return null;
+      // A network failure says nothing about the shape, so the next one still deserves
+      // a turn rather than the whole feature being written off.
+      console.warn(`[rerank] ${s.path} unreachable: ${err.message}`);
+      continue;
     }
 
-    const body = await res.text();
-    if (res.ok && /"(results|data)"/.test(body)) { raw = body; used = s; break; }
+    const replyText = await res.text();
+    if (res.ok && /"(results|data)"/.test(replyText)) { raw = replyText; used = s; break; }
 
     // A shape this provider rejects is worth trying the next form of; a real outage
     // is not, and shows up as the same failure on every shape.
     if (res.status !== 404 && res.status !== 400 && res.status !== 422) {
-      console.warn(`[rerank] ${res.status}: ${body.slice(0, 160)}`);
+      console.warn(`[rerank] ${res.status}: ${replyText.slice(0, 160)}`);
       return null;
     }
   }

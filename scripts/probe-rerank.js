@@ -30,10 +30,10 @@ const base = config.router.base;
 const root = base.replace(/\/v1$/, '');
 
 const shapes = (model) => [
-  ['POST /v1/rerank · strings', `${base}/rerank`, { model, query, documents: docs, top_n: 2 }],
+  ['POST /v1/rerank · strings, no top_n', `${base}/rerank`, { model, query, documents: docs }],
+  ['POST /v1/rerank · strings, top_n   ', `${base}/rerank`, { model, query, documents: docs, top_n: 2 }],
   ['POST /v1/rerank · objects', `${base}/rerank`, { model, query, documents: docs.map((text) => ({ text })), top_n: 2 }],
   ['POST /rerank · strings   ', `${root}/rerank`, { model, query, documents: docs, top_n: 2 }],
-  ['POST /v1/rerank · no top_n', `${base}/rerank`, { model, query, documents: docs }],
   ['POST /v1/reranking       ', `${base}/reranking`, { model, query, documents: docs, top_n: 2 }],
 ];
 
