@@ -36,6 +36,41 @@ let failures = 0;
 let skipped = 0;
 const freeStart = spendMark();
 
+/**
+ * Services that answered, but with something wrong.
+ *
+ * The suite is built to degrade rather than fail — a dead reranker costs precision, not
+ * the answer, and that is deliberate. The cost is that a run can print "all checks
+ * passed" on a machine whose semantic search is entirely gone, because every one of
+ * those checks correctly verified the fallback. The warnings scroll past above the
+ * summary and nobody reads them.
+ *
+ * So they are collected and repeated at the end, where the verdict is.
+ */
+const degraded = new Map();
+
+// Several checks break things on purpose — a reranker that does not exist, a model id
+// that cannot resolve, a planner whose endpoint is down — and each one warns exactly as
+// it should. Those are the suite talking to itself; reporting them as service trouble
+// would bury the real thing under noise from tests that passed. Every fixture below is
+// named in this file.
+const DELIBERATE = /definitely|not-a-real|\btest\/|endpoint down|@nowhere/i;
+
+const realWarn = console.warn;
+console.warn = (...args) => {
+  const line = args.map(String).join(' ');
+  const m = line.match(/^\[(chunks|rerank|llm|deep|router)\]\s*(.*)$/);
+  if (m && !DELIBERATE.test(line)) {
+    // Keyed on the shape of the problem, not its wording, so forty identical embedding
+    // failures are one line rather than forty.
+    const key = `${m[1]}:${m[2].replace(/\d+/g, 'N').slice(0, 60)}`;
+    const seen = degraded.get(key) ?? { n: 0, line: line.slice(0, 220) };
+    seen.n++;
+    degraded.set(key, seen);
+  }
+  realWarn(...args);
+};
+
 const ok = (name, extra = '') => console.log(`  ok    ${name}${extra ? ' — ' + extra : ''}`);
 const bad = (name, err) => { failures++; console.log(`  FAIL  ${name} — ${err}`); };
 
@@ -1369,5 +1404,24 @@ if (PAID) {
   }
 }
 
-console.log(failures ? `\n${failures} check(s) failed\n` : '\nall checks passed\n');
+// Printed last, next to the verdict, because "all checks passed" on a machine whose
+// semantic search is gone is a true sentence that misleads.
+if (degraded.size) {
+  console.log('\n  ⚠ working, but degraded — the code handled these, the service did not:');
+  for (const { n, line } of degraded.values()) {
+    console.log(`      ${line}${n > 1 ? `   (×${n})` : ''}`);
+  }
+  const svc = [...degraded.keys()];
+  if (svc.some((k) => k.startsWith('chunks:'))) {
+    console.log('\n      Semantic search is off. Retrieval is keyword-only, which finds exact');
+    console.log('      terms and misses paraphrase — worst in Persian, where FTS5 stemming is weak.');
+  }
+  if (svc.some((k) => k.startsWith('rerank:'))) {
+    console.log('      Reranking is off. Retrieval still works; the last precision step is missing.');
+  }
+}
+
+console.log(failures ? `\n${failures} check(s) failed\n`
+  : degraded.size ? '\nchecks passed — read the degraded list above\n'
+    : '\nall checks passed\n');
 process.exit(failures ? 1 : 0);
