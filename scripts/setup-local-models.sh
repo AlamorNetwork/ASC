@@ -72,7 +72,13 @@ fi
 mkdir -p "$DIR/bin" "$DIR/models"
 
 say "llama.cpp"
-if [ ! -x "$DIR/bin/llama-server" ]; then
+# Whether it runs, not whether the file is there. The first attempt left a binary
+# without its libraries, and testing for existence then skipped the very step that
+# would have fixed it — the install "succeeded" every time while staying broken.
+export LD_LIBRARY_PATH="$DIR/bin"
+if ! "$DIR/bin/llama-server" --version >/dev/null 2>&1; then
+  [ -e "$DIR/bin/llama-server" ] && echo "  the copy here does not run; replacing it"
+  rm -rf "$DIR/bin"; mkdir -p "$DIR/bin"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq && apt-get install -y -qq curl tar bc libgomp1
   # The plain CPU build. The rocm/sycl/vulkan variants in the same release are for GPUs
@@ -86,19 +92,34 @@ if [ ! -x "$DIR/bin/llama-server" ]; then
   rm -rf /tmp/llama-extract && mkdir -p /tmp/llama-extract
   tar -xzf /tmp/llama.tar.gz -C /tmp/llama-extract
 
-  # Copy the whole directory the binary sits in, not just the binary. It links against
-  # libllama-common.so and friends that ship beside it, and taking the executable alone
-  # produced "cannot open shared object file" at the first run.
-  SRC=$(dirname "$(find /tmp/llama-extract -name llama-server -type f | head -1)")
-  [ -z "$SRC" ] && { echo "  llama-server not found in the archive"; exit 1; }
-  cp -a "$SRC"/. "$DIR/bin/"
+  # Copy the whole directory the binary sits in, not just the binary: it links against
+  # libllama-common.so and others that ship beside it, and taking the executable alone
+  # is what produced "cannot open shared object file".
+  FOUND=$(find /tmp/llama-extract -name llama-server -type f | head -1)
+  # Checked before dirname, because dirname of nothing is "." — which exists, and would
+  # have copied the wrong directory instead of reporting the problem.
+  [ -n "$FOUND" ] || { echo "  llama-server is not in the archive"; exit 1; }
+  cp -a "$(dirname "$FOUND")"/. "$DIR/bin/"
+
+  # And any shared objects the archive keeps somewhere else, in case the layout differs.
+  find /tmp/llama-extract -name 'lib*.so*' -type f -exec cp -n {} "$DIR/bin/" \; 2>/dev/null || true
+
   chmod +x "$DIR/bin/llama-server"
+  echo "  $(find "$DIR/bin" -name 'lib*.so*' | wc -l) shared libraries alongside the binary"
   rm -rf /tmp/llama.tar.gz /tmp/llama-extract
 fi
-# Its own directory is where those libraries are, so it has to be on the search path.
+# Its own directory is where those libraries are, so it has to be on the search path —
+# here, and in the unit files, since systemd does not inherit this shell's environment.
 export LD_LIBRARY_PATH="$DIR/bin"
-"$DIR/bin/llama-server" --version >/dev/null 2>&1 \
-  || { echo "  the binary still will not run:"; "$DIR/bin/llama-server" --version 2>&1 | head -3; exit 1; }
+if ! "$DIR/bin/llama-server" --version >/dev/null 2>&1; then
+  echo "  the binary still will not run:"
+  "$DIR/bin/llama-server" --version 2>&1 | head -3
+  echo ""
+  echo "  What it is missing, if anything:"
+  ldd "$DIR/bin/llama-server" 2>/dev/null | grep 'not found' | sed 's/^/    /' || true
+  exit 1
+fi
+echo "  runs"
 "$DIR/bin/llama-server" --version 2>&1 | head -2 || true
 
 say "models"
@@ -115,8 +136,12 @@ grab() {
 }
 grab multilingual-e5-large-q8_0.gguf \
   "https://huggingface.co/cstr/multilingual-e5-large-GGUF/resolve/main/multilingual-e5-large-q8_0.gguf"
-[ "$WANT_RERANK" = "1" ] && grab bge-reranker-v2-m3-Q8_0.gguf \
-  "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-Q8_0.gguf"
+if [ "$WANT_RERANK" = "1" ]; then
+  grab bge-reranker-v2-m3-Q8_0.gguf \
+    "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-Q8_0.gguf"
+else
+  echo "  skipping the reranker — not enough memory for both"
+fi
 
 say "services"
 # Two processes: one server cannot do both, because embedding and reranking need
@@ -134,8 +159,11 @@ ExecStart=$2
 Restart=always
 RestartSec=5
 Environment=LD_LIBRARY_PATH=$DIR/bin
-# Small models, but two of them: keep one from taking the machine down with it.
-MemoryMax=3G
+# A real ceiling, not one above the machine's own memory. Under cgroups the kernel kills
+# whatever is inside this limit when it is exceeded — which is the point: if this model
+# is going to be killed, it should be this model and not the bot.
+MemoryMax=$3M
+MemorySwapMax=$(( $3 * 2 ))M
 
 [Install]
 WantedBy=multi-user.target
@@ -144,7 +172,7 @@ UNIT
 
 unit local-embed "$DIR/bin/llama-server --host 127.0.0.1 --port $EMBED_PORT \
   -m $DIR/models/multilingual-e5-large-q8_0.gguf --embedding --pooling mean \
-  -c 512 -np 2 --threads $(nproc) --alias intfloat/multilingual-e5-large"
+  -c 512 -np 2 --threads $(nproc) --alias intfloat/multilingual-e5-large" $((EMBED_MB + 200))
 
 SERVICES="local-embed"
 if [ "$WANT_RERANK" = "1" ]; then
@@ -152,7 +180,7 @@ if [ "$WANT_RERANK" = "1" ]; then
   # to spare, and the context is the part that grows with memory.
   unit local-rerank "$DIR/bin/llama-server --host 127.0.0.1 --port $RERANK_PORT \
     -m $DIR/models/bge-reranker-v2-m3-Q8_0.gguf --reranking \
-    -c 1024 --threads $(nproc) --alias bge-reranker-v2-m3"
+    -c 1024 --threads $(nproc) --alias bge-reranker-v2-m3" $((RERANK_MB + 200))
   SERVICES="$SERVICES local-rerank"
 else
   systemctl disable --now local-rerank >/dev/null 2>&1 || true
