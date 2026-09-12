@@ -249,6 +249,62 @@ await check('the suite never writes to the real database', () => {
   return path.basename(config.dbPath);
 });
 
+await check('every role points at a model the endpoint actually has', async () => {
+  // A role whose chain resolves to nothing does not announce itself. It falls back to a
+  // built-in default, that default is not on this endpoint either, and the feature is
+  // dead until someone sends a voice note and gets an error. Moving behind a gateway
+  // renames every model, so this is exactly when it happens.
+  const settings = await import('../src/settings.js');
+  const { planFor } = await import('../src/providers.js');
+
+  const catalogue = new Map();   // provider name -> Set of ids it serves
+  const unreachable = [];
+
+  async function idsFor(provider) {
+    if (catalogue.has(provider.name)) return catalogue.get(provider.name);
+    let set = null;
+    try {
+      const res = await fetch(`${provider.base}/models`, {
+        headers: { Authorization: `Bearer ${provider.keys[0]}` },
+        signal: AbortSignal.timeout(20000),
+      });
+      if (res.ok) set = new Set(((await res.json()).data ?? []).map((m) => m.id));
+    } catch { /* handled below */ }
+    if (!set) unreachable.push(provider.name);
+    catalogue.set(provider.name, set);
+    return set;
+  }
+
+  const broken = [];
+  const roles = settings.allModels();
+  for (const [role, spec] of Object.entries(roles)) {
+    if (!spec || spec === 'none') continue;
+    const plan = planFor(spec, config.providers);
+    if (!plan.length) { broken.push(`${role}: «${spec}» names no known provider`); continue; }
+
+    let anyGood = false;
+    let anyChecked = false;
+    for (const { model, provider } of plan) {
+      const ids = await idsFor(provider);
+      if (!ids) continue;                       // could not ask; not evidence either way
+      anyChecked = true;
+      if (ids.has(model)) { anyGood = true; break; }
+    }
+    if (anyChecked && !anyGood) {
+      broken.push(`${role}: none of ${plan.length} link(s) exist — ${plan.map((p) => p.model).join(', ')}`);
+    }
+  }
+
+  if (broken.length) {
+    // Loud, because silence here reads as working software.
+    throw new Error(`\n        ${broken.join('\n        ')}`);
+  }
+  const checked = [...catalogue.entries()].filter(([, v]) => v).map(([k]) => k);
+  if (!checked.length) return 'no endpoint could be asked — nothing verified';
+  return `${Object.keys(roles).length} roles against ${checked.join(', ')}` +
+    (unreachable.length ? ` (could not ask: ${unreachable.join(', ')})` : '');
+});
+
 await check('config loads', () => {
   if (!config.botToken) throw new Error('no bot token');
   if (!config.router.base) throw new Error('no router base');
@@ -929,9 +985,15 @@ await check('a missing reranker costs precision, not the answer', async () => {
   // Point it at a model the endpoint will refuse, then confirm it disables itself
   // rather than throwing, and stays disabled instead of asking again every question.
   const before = store2.getSetting('model.rerank');
+  const restore = () => {
+    if (before === null) store2.clearSetting('model.rerank');
+    else store2.setSetting('model.rerank', before);
+    resetRerank();
+  };
   store2.setSetting('model.rerank', 'definitely/not-a-real-reranker');
   resetRerank();
 
+  try {
   const out = await rerank('سؤال', ['متن یک', 'متن دو']);
   if (out !== null) throw new Error('a refused reranker returned a result');
   if (rerankAvailable() === true) throw new Error('a refused reranker marked itself available');
@@ -950,9 +1012,12 @@ await check('a missing reranker costs precision, not the answer', async () => {
   const rows = await retrieve({ principalId: p, dossierId, query: 'میترائیسم', limit: 2 });
   if (!rows.length) throw new Error('retrieval returned nothing without a reranker');
 
-  if (before) store2.setSetting('model.rerank', before);
-  resetRerank();
   return 'disabled itself, retrieval unaffected';
+  } finally {
+    // Without this the fake id outlives the run: a later suite reads it out of the
+    // database and reports the reranker as misconfigured, which it now does loudly.
+    restore();
+  }
 });
 
 await check('a repeated query is embedded once, not every time', async () => {

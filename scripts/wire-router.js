@@ -105,12 +105,28 @@ for (const [name, why, wanted] of ROLES) {
 console.log('\n' + '─'.repeat(72));
 console.log('\npaste into .env:\n');
 console.log(`ROUTER_BASE_URL=${base}`);
-if (key) console.log('ROUTER_KEY=<the key you passed to this script>');
+// The actual key, not a description of it. Printing a placeholder inside a block headed
+// "paste into .env" is an invitation to paste the placeholder.
+if (key) console.log(`ROUTER_KEY=${key}`);
 console.log(lines.join('\n'));
 
 if (missing.length) {
-  console.log(`\n⚠ ${missing.join(', ')} found nothing. Add that provider to the gateway,`);
-  console.log('  or leave those roles pointed at a direct provider with @name.');
+  console.log(`\n${'⚠'.repeat(3)} ${missing.join(', ')} matched nothing on this gateway.`);
+  console.log('\n  Leaving them out of .env does NOT leave them alone — each falls back to a');
+  console.log('  built-in default, which this gateway does not carry either, so those');
+  console.log('  features are simply broken:\n');
+  const breaks = {
+    MODEL_CAPTURE: 'voice notes and scanned pages cannot be read',
+    MODEL_RESEARCH: 'web research cannot run',
+    MODEL_EMBED: 'semantic search is off; retrieval is keyword-only',
+    MODEL_RERANK: 'the last precision step of retrieval is off',
+    MODEL_STRUCTURE: 'planning and assessing cannot run — most of the bot stops',
+    MODEL_ROUTER: 'every message falls back to the old routing',
+  };
+  for (const m of missing) console.log(`    ${m.padEnd(16)} ${breaks[m] ?? ''}`);
+  console.log('\n  Either add that provider to the gateway, or point the role straight at');
+  console.log('  one with @name — embeddings and reranking have no equivalent on a');
+  console.log('  chat-only gateway, so those two usually have to go direct anyway.');
 }
 
 // Routing every role through one local process turns several partial outages into one

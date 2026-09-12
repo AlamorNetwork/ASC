@@ -623,6 +623,15 @@ export const setSetting = (key, value) =>
   db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, String(value));
 
+/**
+ * Removes a setting so the file config takes over again.
+ *
+ * Distinct from setting it empty: empty is a value, and for a model role it means
+ * "no model", which is not the same as "whatever .env says".
+ */
+export const clearSetting = (key) =>
+  db.prepare(`DELETE FROM settings WHERE key = ?`).run(key).changes;
+
 /** Adds a column only if it is missing, so an existing database upgrades in place. */
 function addColumn(table, column, type) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
