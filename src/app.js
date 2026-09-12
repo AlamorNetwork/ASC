@@ -908,6 +908,53 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
     return true;
   }
 
+  if (text.startsWith('/status')) {
+    // "Is it doing anything?" had no answer. /stop knew, but stopped it to tell you.
+    const L = ['⏳ <b>الان</b>', ''];
+
+    const now = cancel.statusOf(principalId);
+    if (now) {
+      const mins = Math.floor(now.seconds / 60);
+      L.push(`🔄 <b>${esc(now.label)}</b>`,
+        `   ${mins ? `${mins} دقیقه و ` : ''}${now.seconds % 60} ثانیه است که کار می‌کند`,
+        // The number that tells you whether to keep waiting.
+        now.seconds > 180
+          ? '   <i>بیش از حد معمول طول کشیده. با ⏹ یا /stop نگهش دار.</i>'
+          : '   <i>عادی است.</i>', '');
+    } else {
+      L.push('هیچ کاری در جریان نیست.', '');
+    }
+
+    // These outlive the process, so they are worth showing even when nothing is running.
+    const open = store.openInvestigations(principalId);
+    if (open.length) {
+      L.push('🕳 <b>کاوش‌ها</b>');
+      for (const r of open) {
+        const why = { ceiling: 'سقف هزینه', stopped: 'نگهش داشتی', notworth: 'قضاوت کردم نمی‌ارزد',
+          time: 'زمان', unmeasured: 'هزینه گزارش نشد' }[r.stopped] ?? r.stopped ?? '';
+        L.push(`• #${r.id} «${esc(r.topic ?? '?')}» — ${r.rounds} دور، ${toman(r.cost_toman)} تومان` +
+          (r.state === 'running' ? ' · <b>در جریان</b>' : ` · ایستاده${why ? ` (${esc(why)})` : ''}`));
+      }
+      const paused = open.filter((r) => r.state === 'paused');
+      if (paused.length) {
+        await tg.send(chatId, L.join('\n'), {
+          buttons: paused.slice(0, 3).map((r) => [{
+            text: `▶️ ادامهٔ #${r.id}`, callback_data: `deepmore:${r.id}`,
+          }]),
+        });
+        return true;
+      }
+    }
+
+    const active = settings.activeDossier(principalId);
+    if (active) {
+      const d = store.getDossier(principalId, active);
+      if (d) L.push('', `📁 پروندهٔ باز: <b>${esc(d.topic)}</b> (#${d.id})`);
+    }
+    await tg.send(chatId, L.join('\n'));
+    return true;
+  }
+
   if (text === '/stop' || text.startsWith('/stop')) {
     const label = cancel.request(principalId);
     await tg.send(chatId, label

@@ -1240,6 +1240,41 @@ await check('capture is only offered a model that can hear and see', async () =>
   return `capture → ${capture[0]}, generators excluded`;
 });
 
+await check('you can ask what it is doing without stopping it', async () => {
+  // /stop knew what was running and stopped it to say so. There was no way to just look.
+  const c = await import('../src/cancel.js');
+
+  if (c.statusOf('idle-user') !== null) throw new Error('something was reported while idle');
+
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const job = c.underway('busy-user', 'تحقیق «میترائیسم»', () => held);
+  await new Promise((r) => setTimeout(r, 30));
+
+  const now = c.statusOf('busy-user');
+  if (!now) throw new Error('a running job was not reported');
+  if (now.label !== 'تحقیق «میترائیسم»') throw new Error(`reported as "${now.label}"`);
+  if (typeof now.seconds !== 'number') throw new Error('no elapsed time — the part that says whether to keep waiting');
+
+  // Asking must not have stopped it.
+  if (c.isWanted('busy-user')) throw new Error('looking at it cancelled it');
+
+  release(); await job;
+  if (c.statusOf('busy-user') !== null) throw new Error('a finished job still reports as running');
+
+  // Investigations outlive the process, so they are reported from the database instead.
+  const p = `status-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'موضوع' });
+  const runId = store.startInvestigation({ principalId: p, dossierId, question: 'q' });
+  store.saveInvestigation(runId, { state: 'paused', stopped: 'ceiling', rounds: 2, leads: ['x'], seenChunks: [], allLeads: [], costToman: 500, costUsd: 0.01 });
+
+  const open = store.openInvestigations(p);
+  if (open.length !== 1) throw new Error(`expected one open investigation, got ${open.length}`);
+  if (open[0].topic !== 'موضوع') throw new Error('the dossier topic did not come through');
+  if (open[0].state !== 'paused') throw new Error('a paused run was not listed as paused');
+  return 'running jobs and paused runs both visible, neither disturbed';
+});
+
 await check('a run in progress can be held, and only that run', async () => {
   // Deep investigation could already be stopped. A research round and a multi-hop search
   // could not — once begun they ran to the end, so a search going after the wrong

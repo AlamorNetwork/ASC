@@ -374,6 +374,14 @@ export const resumableInvestigation = (principalId, dossierId) =>
     ORDER BY id DESC LIMIT 1
   `).get(principalId, Number(dossierId)) ?? null;
 
+/** Every investigation of this principal's that is still going or waiting to carry on. */
+export const openInvestigations = (principalId) => db.prepare(`
+  SELECT i.*, d.topic FROM investigations i
+  LEFT JOIN dossiers d ON d.id = i.dossier_id
+  WHERE i.principal_id = ? AND i.state IN ('running','paused')
+  ORDER BY i.updated_at DESC LIMIT 10
+`).all(principalId);
+
 export const saveInvestigation = (id, p) => db.prepare(`
   UPDATE investigations
   SET state = ?, stopped = ?, rounds = ?, leads = ?, seen_chunks = ?, all_leads = ?,

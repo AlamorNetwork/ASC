@@ -57,7 +57,7 @@ export function newInstruction(principalId) {
 export async function underway(principalId, label, fn) {
   const id = String(principalId);
   clear(id);                          // a stop from an earlier job is not this job's
-  running.set(id, label);
+  running.set(id, { label, since: Date.now() });
   try {
     return await fn();
   } finally {
@@ -66,7 +66,20 @@ export async function underway(principalId, label, fn) {
   }
 }
 
-export const whatIsRunning = (principalId) => running.get(String(principalId)) ?? null;
+export const whatIsRunning = (principalId) => running.get(String(principalId))?.label ?? null;
+
+/**
+ * What is running and for how long.
+ *
+ * Elapsed time is the part that matters when you are wondering whether to wait: a
+ * research round that has been going ten seconds is working, and one at four minutes
+ * has probably hit something slow.
+ */
+export function statusOf(principalId) {
+  const job = running.get(String(principalId));
+  if (!job) return null;
+  return { label: job.label, seconds: Math.round((Date.now() - job.since) / 1000) };
+}
 
 /** Thrown when a job notices it was asked to stop, so callers can say so plainly. */
 export class Stopped extends Error {
