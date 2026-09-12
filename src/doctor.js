@@ -66,9 +66,18 @@ async function catalogueFor(provider, timeoutMs) {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) return { ids: null, why: `HTTP ${res.status}`, key: null };
-    const ids = new Set(((await res.json()).data ?? []).map((m) => m.id));
+    const models = (await res.json()).data ?? [];
+    const ids = new Set(models.map((m) => m.id));
+
+    // Which ones can hear. capture has to take a voice note, and a suggestion that
+    // cannot is worse than none — it looks right and fails on the first use. Providers
+    // report this differently, or not at all.
+    const audio = new Set(models.filter((m) =>
+      m.capabilities?.audioInput === true
+      || (m.architecture?.input_modalities ?? []).includes('audio')).map((m) => m.id));
+
     const key = await keyAccepted(provider, timeoutMs);
-    return { ids, why: null, key };
+    return { ids, audio, why: null, key };
   } catch (err) {
     return { ids: null, why: String(err.cause?.code ?? err.name), key: null };
   }
@@ -119,9 +128,10 @@ export async function diagnose({ timeoutMs = 20000 } = {}) {
   // to type. The catalogues are already in hand; not using them made the report a
   // list of absences.
   const catalogues = new Map([...seen.entries()].map(([name, v]) => [name, v.ids]));
+  const audible = new Map([...seen.entries()].map(([name, v]) => [name, v.audio]));
   for (const r of roles) {
     if (r.state !== 'broken') continue;
-    r.suggestion = suggestionFor(r.role, catalogues, (r.links ?? []).map((l) => l.model));
+    r.suggestion = suggestionFor(r.role, catalogues, (r.links ?? []).map((l) => l.model), audible);
     // Changing which model makes the vectors is not a like-for-like swap, and the
     // report should not offer one as though it were.
     r.warnsRebuild = r.role === 'embed'
@@ -151,7 +161,16 @@ export const consequenceOf = (role) => CONSEQUENCE[role] ?? '';
  * A model id that IS on some endpoint and looks like what this role needs, so the
  * report can end with something to type rather than only with what is wrong.
  */
-export function suggestionFor(role, catalogues, tried = []) {
+export function suggestionFor(role, catalogues, tried = [], audible = new Map()) {
+  // capture is handed a voice note. A model that cannot take audio is not a candidate,
+  // however well its name matches — it would look correct and fail on first use. Only
+  // applied where the provider actually says; silence is not taken as "no".
+  const needsEars = role === 'capture' || role === 'transcribe';
+  const deaf = (name, id) => {
+    const known = audible.get(name);
+    return needsEars && known && known.size > 0 && !known.has(id);
+  };
+
   // Almost always the right answer, and always the safest: the very model that was
   // asked for, under the prefix this gateway gives it. `google/gemini-3.6-flash` is
   // absent while `liara/google/gemini-3.6-flash` is right there. It matters most for
@@ -162,9 +181,9 @@ export function suggestionFor(role, catalogues, tried = []) {
     if (!ids) continue;
     for (const want of tried) {
       for (const id of ids) {
-        if (id === want || id.endsWith(`/${want}`)) {
-          sameModel.push(`${id}${name === 'default' ? '' : `@${name}`}`);
-        }
+        if (id !== want && !id.endsWith(`/${want}`)) continue;
+        if (deaf(name, id)) continue;
+        sameModel.push(`${id}${name === 'default' ? '' : `@${name}`}`);
       }
     }
   }
@@ -189,6 +208,7 @@ export function suggestionFor(role, catalogues, tried = []) {
     for (const id of ids) {
       if (!rules.want.test(id)) continue;
       if (rules.avoid?.test(id)) continue;
+      if (deaf(name, id)) continue;
       out.push(`${id}${name === 'default' ? '' : `@${name}`}`);
       if (out.length >= 3) return out;
     }
