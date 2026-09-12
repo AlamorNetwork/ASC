@@ -141,12 +141,26 @@ await check('an exhausted key is set aside and the next one is used', async () =
   // Resting a model must not touch the key it failed on — there is nothing wrong with it.
   if (p.keysAvailable(kira).length !== 0) throw new Error('unrelated: keys changed');
 
+
   const status = p.providerStatus(providers).find((s) => s.name === 'kira');
   if (status.ready !== 0 || status.keys !== 2) throw new Error('status does not reflect the cool-off');
 
   p.clearCooling();
   if (p.keysAvailable(kira).length !== 2) throw new Error('clearing did not restore the keys');
-  return '429 rests a minute, 401 a day, 400 blames neither';
+
+  // 402 is the ambiguous one: an empty account, or one model outside the plan. Liara
+  // refused gemini-3.7-flash on a key whose embeddings were working that same minute,
+  // so the first refusal must blame the model — resting the key would have taken
+  // embeddings, reranking and research down with it.
+  if (p.refusalCount('liara', 0) !== 0) throw new Error('refusals did not start empty');
+  if (p.noteRefusal('liara', 0, 'google/gemini-3.7-flash') !== 1) throw new Error('first refusal not counted');
+  if (p.noteRefusal('liara', 0, 'google/gemini-3.7-flash') !== 1) throw new Error('the same model counted twice');
+  if (p.noteRefusal('liara', 0, 'openai/gpt-5.4-mini') !== 2) throw new Error('a second model was not distinct');
+  if (p.refusalCount('liara', 1) !== 0) throw new Error('refusals leaked to another key');
+  p.clearCooling();
+  if (p.refusalCount('liara', 0) !== 0) throw new Error('clearing did not reset refusals');
+
+  return '429 rests a minute, 401 a day, 400 blames neither, 402 blames the model first';
 });
 
 await check('config loads', () => {

@@ -2,7 +2,7 @@ import { config } from './config.js';
 import * as store from './db.js';
 import {
   planFor, keysAvailable, setAside, kindOfFailure, blamesTheModel, bareModel,
-  restModel, modelResting,
+  restModel, modelResting, noteRefusal,
 } from './providers.js';
 
 const { key, base } = config.router;
@@ -63,6 +63,19 @@ async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
         restModel(provider.name, model);
         console.warn(`[llm] ${model}@${provider.name} unavailable (${res.status}), next in chain`);
         break;
+      }
+
+      if (kind === 'credit') {
+        // Ambiguous: an empty account, or a model outside the plan. Assume the model
+        // until a second one refuses too, because getting this wrong the other way takes
+        // down every role on a working key.
+        restModel(provider.name, model);
+        const distinct = noteRefusal(provider.name, index, model);
+        if (distinct < 2) {
+          console.warn(`[llm] ${model}@${provider.name} refused (402) — treating it as this model, not the key`);
+          break;
+        }
+        console.warn(`[llm] ${provider.name} key #${index + 1}: ${distinct} models refused with 402, resting the key`);
       }
 
       // Out of quota on this key. Rest it and let the next one try.

@@ -101,6 +101,31 @@ export const kindOfFailure = (status) =>
 /** Failures that mean move on to the next model rather than the next key. */
 export const blamesTheModel = (kind) => kind === 'upstream' || kind === 'missing';
 
+/**
+ * 402 is the ambiguous one, and the ambiguity matters.
+ *
+ * A gateway returns it both for "your balance is empty" and for "this model is not
+ * included in your plan". Liara answered 402 for gemini-3.7-flash on a key whose
+ * embeddings were working fine that minute, so it plainly meant the second — and
+ * resting the key for half an hour over one model would have taken embeddings,
+ * reranking and research down with it.
+ *
+ * So a 402 rests the model first. Only when a second, different model on the same key
+ * also refuses is the account itself the likely problem, and then the key rests too.
+ */
+const refusedModels = new Map();   // provider#index -> Set of models that answered 402
+
+export function noteRefusal(providerName, index, model) {
+  const at = coolKey(providerName, index);
+  const seen = refusedModels.get(at) ?? new Set();
+  seen.add(model);
+  refusedModels.set(at, seen);
+  return seen.size;
+}
+
+export const refusalCount = (providerName, index) =>
+  (refusedModels.get(coolKey(providerName, index))?.size ?? 0);
+
 /** For reporting: which keys are in play and which are resting. */
 export function providerStatus(providers) {
   const now = Date.now();
@@ -135,7 +160,9 @@ export const modelResting = (providerName, model) =>
   (restingModels.get(`${providerName}@${model}`) ?? 0) > Date.now();
 
 /** Test seam and a way to clear a cool-off after fixing a key. */
-export const clearCooling = () => { cooling.clear(); restingModels.clear(); };
+export const clearCooling = () => {
+  cooling.clear(); restingModels.clear(); refusedModels.clear();
+};
 
 /**
  * Turns `a@kira,b@kira,c` into the ordered list of attempts to make.
