@@ -10,6 +10,9 @@
 # touches an existing .env or data/asc.db, because those are the two things that are not
 # in git and cannot be recreated.
 #
+# Installs 9router alongside, bound to localhost, as a gateway to pool provider keys.
+# ASC_SKIP_9ROUTER=1 leaves it out.
+#
 # It does not change the SSH port. That is what locked the last server, and a change
 # worth making is worth making deliberately, with the console open.
 
@@ -36,6 +39,55 @@ if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split("."
   apt-get install -y -qq nodejs
 fi
 node -v
+
+if [ "${ASC_SKIP_9ROUTER:-0}" != "1" ]; then
+  say "9router"
+  # A local gateway to pool every provider key behind one endpoint, so a model running
+  # out mid-investigation falls through to the next instead of ending the run.
+  npm install -g 9router --silent
+
+  # Bound to 127.0.0.1 on purpose. Its default is 0.0.0.0, which on a public IP is an
+  # open gateway to every key it holds — no auth, no rate limit, just a port. ASC runs
+  # on this same machine, so it does not need to be reachable from anywhere else.
+  cat > /etc/systemd/system/9router.service <<UNIT
+[Unit]
+Description=9router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# --skip-update with no TTY puts it in background mode instead of the interactive menu.
+ExecStart=$(command -v 9router) --host 127.0.0.1 --port 20128 --no-browser --skip-update
+Restart=always
+RestartSec=5
+Environment=HOME=/root
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now 9router >/dev/null
+  sleep 3
+  if curl -fsS -m 5 http://127.0.0.1:20128/api/health >/dev/null 2>&1 \
+     || curl -fsS -m 5 http://127.0.0.1:20128/ >/dev/null 2>&1; then
+    echo "9router is up on 127.0.0.1:20128"
+  else
+    echo "9router did not answer yet — check: journalctl -u 9router -n 30"
+  fi
+
+  cat <<'TEXT'
+
+  Its dashboard is not exposed. Reach it from your own machine with a tunnel:
+      ssh -L 20128:127.0.0.1:20128 root@THIS_SERVER
+      # then open http://localhost:20128
+
+  Add providers there, then point ASC at it in .env:
+      ROUTER_BASE_URL=http://127.0.0.1:20128/v1
+  Keep a direct provider as the last link of each chain, so the bot survives
+  9router being down rather than gaining a single point of failure.
+TEXT
+fi
 
 say "code"
 if [ -d "$DIR/.git" ]; then
