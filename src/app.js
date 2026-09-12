@@ -14,6 +14,7 @@ import { startScheduler } from './scheduler.js';
 import * as menu from './menu.js';
 import { deepInvestigate } from './deep.js';
 import { route } from './router.js';
+import { calibration } from './metacognition.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
@@ -273,6 +274,7 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
         else if (n.kind === 'lead' && n.lead) await note(`💡 ${esc(n.lead)}`);
         else if (n.kind === 'web') await note(`🌐 وب — «${esc(String(n.lead).slice(0, 60))}»`);
         else if (n.kind === 'nextleads') await note(`↪️ سرنخ‌های بعدی: ${n.leads.map((l) => esc(l)).join('، ')}`);
+        else if (n.kind === 'notworth') await note(`🧮 ایستادم: ${esc(n.why)}`);
         else if (n.kind === 'elsewhere') {
           for (const e of n.elsewhere) await note(`📁 #${e.dossier.id} ${esc(e.dossier.topic)}`);
         } else if (n.kind === 'error') await note(`⚠️ ${esc(n.message)}`);
@@ -290,9 +292,19 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
       exhausted: 'سرنخی باقی نماند.',
       ceiling: 'به سقف هزینه‌ای که تعیین کردی رسید.',
       stopped: '⏹ نگهش داشتم. هرجا بودم همان‌جا ذخیره شد.',
+      // Not a limit — a judgement, so it is stated as one and shows its reasoning.
+      notworth: out.verdict ? `🧮 ${esc(out.verdict.why)}\n<i>سقف نخورده؛ خودم قضاوت کردم. اگر نظرت فرق دارد ادامه بده.</i>` : '',
       unmeasured: '⚠️ ایستادم چون هزینه گزارش نمی‌شود — نمی‌توانستم بفهمم چقدر دارد خرج می‌شود.',
       time: `⚠️ ایستادم چون ${45} دقیقه طول کشید و هزینه هنوز به سقف نرسیده بود.`,
     }[out.stopped] ?? '';
+
+    // What the run is standing behind, separate from how it ended.
+    const ev = out.evidence;
+    const standing = ev && ev.total
+      ? `\n\n📊 ${ev.verified} تأییدشده از ${ev.checkable} قابل‌بررسی` +
+        (ev.fabricated ? ` · ⚠️ ${ev.fabricated} منبع ساختگی` : '') +
+        (ev.unreachable ? ` · ${ev.unreachable} منبع باز نشد` : '')
+      : '';
 
     // The cost shown is everything this investigation has cost, across resumes — one
     // number, not a per-session figure that quietly resets.
@@ -301,7 +313,7 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
       : `${out.rounds} دور`;
     await tg.edit(chatId, status.message_id,
       `${head}\n\n${spanned} · ${out.newClaims.length} یافته‌ی تازه · ` +
-      `${toman(out.costToman)} تومان روی هم\n${why}`, []);
+      `${toman(out.costToman)} تومان روی هم\n${why}${standing}`, []);
 
     if (out.newClaims.length) {
       const verified = out.newClaims.filter((c) => c.status === 'verified');
@@ -843,6 +855,30 @@ async function handleCommand(chatId, principalId, text, isOwner) {
     } catch (err) {
       await tg.send(chatId, `❌ ${esc(err.message)}`);
     }
+    return true;
+  }
+
+  if (text.startsWith('/calibration')) {
+    // Whether the forecasts before each round were worth anything. If they were not,
+    // the honest thing is for this screen to say so rather than to show a tidy number.
+    const c = calibration(principalId);
+    if (!c.n) {
+      await tg.send(chatId, ['🎯 <b>کالیبراسیون</b>', '',
+        'هنوز پیش‌بینی‌ای سنجیده نشده.', '',
+        '<i>قبل از هر دور تحقیق حدس می‌زنم که آن دور چیز تازه‌ای پیدا می‌کند یا نه، ' +
+        'و بعد نتیجه را کنارش می‌نویسم. بعد از چند دور اینجا می‌گویم آن حدس‌ها چقدر ارزش داشتند.</i>'].join('\n'));
+      return true;
+    }
+    const L = ['🎯 <b>کالیبراسیون</b>', '', `${c.n} پیش‌بینی سنجیده شده`, ''];
+    for (const b of c.bands) {
+      if (!b.n) continue;
+      L.push(`وقتی گفتم ${b.band} → واقعاً ${Math.round(b.happened * 100)}٪ اتفاق افتاد <i>(${b.n} بار)</i>`);
+    }
+    L.push('', `Brier: ${c.brier.toFixed(3)} <i>— هرچه کمتر بهتر؛ ۰٫۲۵ یعنی مثل سکه انداختن</i>`);
+    if (c.brier > 0.25) {
+      L.push('', '⚠️ <b>این حدس‌ها از سکه انداختن بهتر نیستند.</b> فعلاً رویشان حساب نکن.');
+    }
+    await tg.send(chatId, L.join('\n'));
     return true;
   }
 

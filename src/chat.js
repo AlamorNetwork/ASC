@@ -30,8 +30,12 @@ export const isAboutTheConversation = (text) => {
   return t.length <= 80 && META.test(t);
 };
 
-/** The dossier, rendered for the model as evidence — never as instructions. */
-function dossierContext(principalId, dossierId) {
+/**
+ * The dossier, rendered for the model as evidence — never as instructions.
+ * Exported so what reaches the model can be asserted on directly, since what it is
+ * *not* given matters as much as what it is.
+ */
+export function dossierContextFor(principalId, dossierId) {
   const d = store.getDossier(principalId, dossierId);
   if (!d) return null;
 
@@ -53,10 +57,20 @@ function dossierContext(principalId, dossierId) {
     for (const c of disputed) L.push(`- ${c.text}${c.verify_note ? ` :: ${c.verify_note}` : ''}`);
   }
 
-  const found = by('found');
+  // A claim whose source does not exist is not weak evidence, it is a fabrication —
+  // and handing it back as "unverified, use with care" is how one invented citation
+  // becomes the context every later answer is built on. It is recorded in the dossier
+  // so the failure is visible, and kept out of the model's evidence entirely.
+  const found = by('found').filter((c) => c.verify_reason !== 'fabricated_url');
+  const invented = by('found').filter((c) => c.verify_reason === 'fabricated_url');
+
   if (found.length) {
     L.push('', 'پیدا شده ولی تأیید نشده (با احتیاط استفاده کن):');
     for (const c of found) L.push(`- ${c.text}${c.verify_note ? ` (${c.verify_note})` : ''}`);
+  }
+  if (invented.length) {
+    L.push('', `هشدار: ${invented.length} ادعا با منبع ساختگی کنار گذاشته شد. ` +
+      'درباره‌ی این پرونده محتاط باش و چیزی را که در بالا نیست نگو.');
   }
 
   const last = store.recentEpisodes(principalId, 1).find((e) => e.dossier_id === dossierId);
@@ -78,7 +92,7 @@ function dossierContext(principalId, dossierId) {
  * both sides so the next turn has the history.
  */
 export async function reply({ principalId, dossierId, userText, onDelta, onStep }) {
-  const context = dossierContext(principalId, dossierId);
+  const context = dossierContextFor(principalId, dossierId);
   if (!context) throw new Error('پرونده پیدا نشد');
 
   const history = store.conversation(principalId, dossierId, 16);

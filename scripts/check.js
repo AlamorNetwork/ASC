@@ -11,11 +11,21 @@
  */
 import fs from 'node:fs';
 import http from 'node:http';
-import { config } from '../src/config.js';
-import * as store from '../src/db.js';
-import { captureFromText, captureFromAudio, transcriptionModel } from '../src/capture.js';
-import { verifyClaim, normalise } from '../src/verify.js';
-import { spend, spendMark, spendSince } from '../src/llm.js';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The suite creates dossiers, documents, users and claims. Those belong nowhere near
+// the file holding the user's real work — principal scoping kept them invisible, but a
+// thousand rows had still accumulated in it. Set before anything opens a database, which
+// is why the imports below are dynamic: a static import would have run first.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+process.env.ASC_DB ??= path.join(ROOT, 'data', 'check.db');
+
+const { config } = await import('../src/config.js');
+const store = await import('../src/db.js');
+const { captureFromText, captureFromAudio, transcriptionModel } = await import('../src/capture.js');
+const { verifyClaim, normalise } = await import('../src/verify.js');
+const { spendMark, spendSince } = await import('../src/llm.js');
 
 const PAID = process.argv.includes('--paid') || process.argv.includes('--audio');
 
@@ -161,6 +171,16 @@ await check('an exhausted key is set aside and the next one is used', async () =
   if (p.refusalCount('liara', 0) !== 0) throw new Error('clearing did not reset refusals');
 
   return '429 rests a minute, 401 a day, 400 blames neither, 402 blames the model first';
+});
+
+await check('the suite never writes to the real database', () => {
+  // The guard that makes the separation stick. Without it, one static import creeping
+  // back to the top of this file would silently point the whole suite at real data.
+  const real = path.join(config.root, 'data', 'asc.db');
+  if (path.resolve(config.dbPath) === path.resolve(real)) {
+    throw new Error('the checks are pointed at the production database');
+  }
+  return path.basename(config.dbPath);
 });
 
 await check('config loads', () => {
@@ -1000,6 +1020,116 @@ await check('a deep investigation leaves its dossier open to talk to', async () 
     throw new Error('runDeep does not open its dossier — typed replies will fall through to capture');
   }
   return 'runDeep opens its dossier';
+});
+
+await check('an invented source never becomes evidence for the next answer', async () => {
+  const chat = await import('../src/chat.js');
+  const p = `fab-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'میترائیسم' });
+
+  store.insertClaim({
+    principalId: p, dossierId, text: 'ادعای درست', status: 'verified',
+    sourceUrl: 'https://fa.wikipedia.org/x', verifyReason: 'matched',
+  });
+  store.insertClaim({
+    principalId: p, dossierId, text: 'ادعای با منبع ساختگی', status: 'found',
+    sourceUrl: 'https://www.encyclopedi iranica.com/x', verifyReason: 'fabricated_url',
+  });
+  store.insertClaim({
+    principalId: p, dossierId, text: 'ادعای با نقل‌قول اشتباه', status: 'found',
+    sourceUrl: 'https://real.example/x', verifyReason: 'quote_absent',
+  });
+
+  const ctx = chat.dossierContextFor(p, dossierId);
+  if (ctx.includes('ادعای با منبع ساختگی')) {
+    throw new Error('a fabricated citation was handed back to the model as evidence');
+  }
+  // The honest failure is dropping it while saying so — not hiding that it happened.
+  if (!ctx.includes('ساختگی')) throw new Error('the model was not told anything was dropped');
+  if (!ctx.includes('ادعای با نقل‌قول اشتباه')) {
+    throw new Error('a real source with a bad quote is weak evidence, not nothing');
+  }
+  if (!ctx.includes('ادعای درست')) throw new Error('verified claims went missing');
+  return 'fabricated dropped, weak kept, both accounted for';
+});
+
+await check('evidence is summarised without inventing a confidence number', async () => {
+  const m = await import('../src/metacognition.js');
+  const claim = (status, reason) => ({ status, verify_reason: reason });
+
+  const mixed = m.assessEvidence([
+    claim('verified', 'matched'), claim('verified', 'matched'),
+    claim('found', 'quote_absent'),
+    claim('found', 'unreachable'),      // ours, not the model's — out of the denominator
+  ]);
+  if (mixed.checkable !== 3) throw new Error(`unreachable counted against the model: ${mixed.checkable}`);
+  if (Math.abs(mixed.supportRate - 2 / 3) > 1e-9) throw new Error(`support rate wrong: ${mixed.supportRate}`);
+
+  // One invented source is disqualifying however good the rest looks.
+  const fabricating = m.assessEvidence([
+    claim('verified', 'matched'), claim('verified', 'matched'), claim('verified', 'matched'),
+    claim('found', 'fabricated_url'),
+  ]);
+  if (fabricating.trustworthy) throw new Error('a fabricated source did not disqualify the run');
+
+  const nothing = m.assessEvidence([]);
+  if (nothing.supportRate !== null) throw new Error('a rate was invented from no claims');
+  return `${mixed.verified}/${mixed.checkable} supported, fabrication disqualifies`;
+});
+
+await check('a forecast is made before the round and judged after', async () => {
+  const m = await import('../src/metacognition.js');
+  const p = `cal-${Date.now()}`;
+
+  // With no history it must decline to guess rather than produce a number.
+  const cold = m.predictYield([{ round: 1, fresh: 3 }]);
+  if (cold.p !== 0.5) throw new Error('it guessed from one round');
+
+  const productive = m.predictYield([{ fresh: 3 }, { fresh: 2 }, { fresh: 4 }, { fresh: 1 }]);
+  const drying = m.predictYield([{ fresh: 3 }, { fresh: 1 }, { fresh: 0 }, { fresh: 0 }]);
+  if (!(productive.p > drying.p)) throw new Error('a drying run was not predicted to yield less');
+
+  // Recorded before, settled after, and settled only once.
+  const id = m.predict(p, null, 'round_yields', 0.8, 'test');
+  m.observe(id, true);
+  if (store.settlePrediction(id, 0) !== 0) throw new Error('a settled prediction was rescored');
+
+  for (let i = 0; i < 4; i++) m.observe(m.predict(p, null, 'round_yields', 0.8, 't'), true);
+  for (let i = 0; i < 4; i++) m.observe(m.predict(p, null, 'round_yields', 0.2, 't'), false);
+
+  const c = m.calibration(p);
+  if (c.n !== 9) throw new Error(`expected 9 settled, got ${c.n}`);
+  if (c.brier > 0.1) throw new Error(`well-calibrated predictions scored badly: ${c.brier}`);
+
+  // And a liar must score badly, or the score means nothing.
+  const liar = `liar-${Date.now()}`;
+  for (let i = 0; i < 6; i++) m.observe(m.predict(liar, null, 'round_yields', 0.95, 't'), false);
+  if (m.calibration(liar).brier < 0.25) throw new Error('confident and always wrong still scored well');
+  return `brier ${c.brier.toFixed(3)} honest, ${m.calibration(liar).brier.toFixed(2)} for a liar`;
+});
+
+await check('spending stops on judgement, not only on the ceiling', async () => {
+  const m = await import('../src/metacognition.js');
+  const thin = m.assessEvidence([{ status: 'found', verify_reason: 'quote_absent' }]);
+  const solid = m.assessEvidence(Array.from({ length: 6 }, () => ({ status: 'verified', verify_reason: 'matched' })));
+
+  // Nothing supported yet and rounds still producing: worth carrying on.
+  const early = m.worthSpending({ yieldP: 0.8, evidence: thin, spentUsd: 0.01, ceilingUsd: 0.5, roundCostUsd: 0.02 });
+  if (!early.spend) throw new Error('it refused to spend while everything was still unsupported');
+
+  // Leads drying up and the answer already well supported: stop before the ceiling.
+  const late = m.worthSpending({ yieldP: 0.1, evidence: solid, spentUsd: 0.02, ceilingUsd: 0.5, roundCostUsd: 0.02 });
+  if (late.spend) throw new Error('it kept paying for rounds unlikely to add anything');
+
+  // The ceiling still wins outright — a judgement may not spend past what was agreed.
+  const over = m.worthSpending({ yieldP: 0.99, evidence: thin, spentUsd: 0.5, ceilingUsd: 0.5, roundCostUsd: 0.01 });
+  if (over.spend) throw new Error('a judgement overrode the agreed ceiling');
+
+  // Higher stakes should make it readier to keep going on the same evidence.
+  const low = m.worthSpending({ yieldP: 0.4, evidence: thin, spentUsd: 0, ceilingUsd: 0.5, roundCostUsd: 0.1, stakes: 0.1 });
+  const high = m.worthSpending({ yieldP: 0.4, evidence: thin, spentUsd: 0, ceilingUsd: 0.5, roundCostUsd: 0.1, stakes: 0.9 });
+  if (!(high.gain > low.gain)) throw new Error('stakes did not affect the decision');
+  return 'continues while thin, stops when dry, never past the ceiling';
 });
 
 await check('conversation history round trips', () => {

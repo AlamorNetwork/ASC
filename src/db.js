@@ -202,6 +202,25 @@ CREATE TABLE IF NOT EXISTS investigations (
 );
 CREATE INDEX IF NOT EXISTS investigations_dossier ON investigations(principal_id, dossier_id);
 
+-- Predictions the system made before it knew the answer, and what happened.
+--
+-- The point is that a confidence figure computed from what has already been measured
+-- predicts nothing and can never be wrong. A number is only worth reporting if it was
+-- committed to in advance and then checked, so each one is written down here before the
+-- work runs and settled afterwards.
+CREATE TABLE IF NOT EXISTS predictions (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id TEXT    NOT NULL,
+  dossier_id   INTEGER,
+  kind         TEXT    NOT NULL,      -- what was predicted, e.g. 'round_yields'
+  predicted    REAL    NOT NULL,      -- 0..1, said beforehand
+  actual       INTEGER,               -- 1 or 0, once known; NULL while open
+  basis        TEXT,                  -- why it said that, in words
+  created_at   TEXT    NOT NULL,
+  settled_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS predictions_principal ON predictions(principal_id, kind);
+
 -- Every paid call, so "where is the money going" is a query rather than a guess.
 -- Deciding what to move to a local model, or which model to drop, needs the shape of
 -- the spend and not just its total.
@@ -228,6 +247,46 @@ CREATE TABLE IF NOT EXISTS dossier_links (
   CHECK (a_id < b_id)
 );
 `);
+
+/**
+ * Deletes matching rows across several tables, all or nothing.
+ *
+ * Used only by scripts/tidy.js. The `where` clause is written by that script, never by
+ * anything a user or a model supplies — this is the one place in the program that
+ * deletes, and it is not going to take a clause from outside it.
+ */
+export function deleteWhere(tables, where) {
+  let removed = 0;
+  const run = db.transaction(() => {
+    for (const t of tables) {
+      if (!/^[a-z_]+$/.test(t)) throw new Error(`refusing an odd table name: ${t}`);
+      try { removed += db.prepare(`DELETE FROM ${t} WHERE ${where}`).run().changes; }
+      catch (err) {
+        if (!/no such table|no such column/i.test(err.message)) throw err;
+      }
+    }
+  });
+  run();
+  return removed;
+}
+
+// ------------------------------------------------------------- predictions
+
+export const recordPrediction = (p) => db.prepare(`
+  INSERT INTO predictions (principal_id, dossier_id, kind, predicted, basis, created_at)
+  VALUES (?,?,?,?,?,?)
+`).run(p.principalId, p.dossierId ?? null, p.kind, p.predicted, p.basis ?? null, now()).lastInsertRowid;
+
+/** Settled once, so a prediction cannot be quietly rescored after the fact. */
+export const settlePrediction = (id, actual) => db.prepare(`
+  UPDATE predictions SET actual = ?, settled_at = ? WHERE id = ? AND actual IS NULL
+`).run(actual, now(), Number(id)).changes;
+
+export const settledPredictions = (principalId, kind = null) => db.prepare(`
+  SELECT * FROM predictions
+  WHERE principal_id = ? AND actual IS NOT NULL ${kind ? 'AND kind = ?' : ''}
+  ORDER BY id
+`).all(...(kind ? [principalId, kind] : [principalId]));
 
 // ------------------------------------------------------- deep investigations
 

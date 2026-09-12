@@ -17,6 +17,7 @@ import { modelFor } from './settings.js';
 import { investigate } from './investigate.js';
 import { runResearch } from './research.js';
 import { normalise } from './verify.js';
+import { assessEvidence, predictYield, worthSpending, predict, observe } from './metacognition.js';
 import * as store from './db.js';
 
 /**
@@ -55,6 +56,8 @@ const claimKey = (c) => normalise(c.text ?? '').split(' ').slice(0, 10).join(' '
  */
 export async function deepInvestigate({
   principalId, dossierId, question, ceilingUsd = 0.5, onRound, onNote,
+  // How much a thin or wrong answer costs the user. Raises the bar for stopping early.
+  stakes = 0.5,
   // Resume an existing run instead of starting one. A ceiling reached is a pause, not
   // an ending: the leads it was about to follow are exactly where it should carry on.
   runId = null,
@@ -93,6 +96,8 @@ export async function deepInvestigate({
   const startedAt = Date.now();
   const allLeads = prior ? parse(prior.all_leads, []) : [];
   const newClaims = [];
+  const roundLog = [];          // what each round actually produced, for the forecast
+  let lastVerdict = null;
 
   // On a resume the new ceiling is an additional allowance, not a new total. Spend is
   // carried over so the report shows what the whole investigation cost, and comparing a
@@ -120,6 +125,30 @@ export async function deepInvestigate({
       stopped = 'unmeasured'; break;
     }
     if (minutes() > MAX_MINUTES) { stopped = 'time'; break; }
+
+    // Said before the round runs, so it is a real prediction and can be wrong. The
+    // outcome is written next to it below, and /calibration reports whether these
+    // estimates have been worth anything.
+    const forecast = predictYield(roundLog);
+    const verdict = worthSpending({
+      yieldP: forecast.p,
+      evidence: assessEvidence(store.dossierClaims(principalId, dossierId)),
+      spentUsd: costUsd,
+      ceilingUsd,
+      roundCostUsd: roundLog.length ? costUsd / roundLog.length : 0,
+      stakes,
+    });
+    const forecastId = predict(principalId, dossierId, 'round_yields', forecast.p, forecast.basis);
+
+    if (!verdict.spend && roundLog.length >= 2) {
+      // Not a safety net firing — a judgement that the next round is not worth its
+      // price. It is reported as such, with the reasoning, so it can be argued with.
+      await onNote?.({ round, kind: 'notworth', ...verdict, forecast });
+      store.settlePrediction(forecastId, 0);
+      stopped = 'notworth';
+      lastVerdict = verdict;
+      break;
+    }
 
     round++;
     let freshThisRound = 0;
@@ -167,9 +196,15 @@ export async function deepInvestigate({
 
     // Saved every round, so an interruption of any kind — a stop, a crash, a restart —
     // leaves the frontier on disk rather than only in this function's memory.
+    // What the forecast said would happen, against what did. This is the only thing
+    // that makes the number above worth printing.
+    roundLog.push({ round, fresh: freshThisRound });
+    observe(forecastId, freshThisRound > 0);
+
     save('running', null);
     await onRound?.({
       runId: id, round, fresh: freshThisRound, costToman, costUsd, claims: newClaims.length,
+      forecast: forecast.p,
     });
 
     if (asked()) { stopped = 'stopped'; break; }
@@ -245,6 +280,9 @@ export async function deepInvestigate({
 
     return {
       runId: id,
+      // What the evidence amounts to, and why it stopped if it judged rather than hit a limit.
+      evidence: assessEvidence(store.dossierClaims(principalId, dossierId)),
+      verdict: lastVerdict,
       rounds: round,
       roundsThisTime: round - roundsBefore,
       resumedFrom: prior ? roundsBefore : 0,
