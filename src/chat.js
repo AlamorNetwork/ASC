@@ -87,6 +87,52 @@ export function dossierContextFor(principalId, dossierId) {
   return L.join('\n');
 }
 
+const PLAIN_SYSTEM = `تو دستیار پژوهشی کاربر هستی و دارید عادی حرف می‌زنید.
+
+این گفتگوی معمولی است، نه گزارش تحقیق. کوتاه و طبیعی جواب بده.
+
+کارهایی که می‌توانی انجام بدهی، اگر پرسید:
+- تحقیق در وب: منابع را باز می‌کنم، نقل‌قول‌ها را در خود صفحه می‌سنجم، و فقط چیزی را «تأییدشده» می‌گویم که واقعاً در منبع پیدا کرده باشم.
+- خواندن سند: PDF، عکس، متن. بعدش می‌شود درباره‌اش سؤال پرسید.
+- کاوش عمیق: دور به دور دنبال سرنخ می‌روم تا سرنخی نماند، با سقف هزینه‌ای که تو تعیین می‌کنی.
+- نیت ماندگار: چیزی را زیر نظر بگیرم و وقتی تازه شد خبر بدهم.
+
+قواعد:
+- اگر می‌خواهد تحقیقی شروع شود، خودت شروع نکن — بگو و بگذار خودش تأیید کند، چون پول خرج می‌شود.
+- چیزی از خودت نساز. اگر واقعیتی را نمی‌دانی، بگو نمی‌دانم و پیشنهاد بده تحقیق کنیم.
+- فارسی، کوتاه، بدون تعارف اضافه.`;
+
+/**
+ * Ordinary conversation, with no dossier open.
+ *
+ * Without this there was no way to simply talk to the bot: every message with nothing
+ * open became either "which dossier?" or a capture card, and anything the classifier
+ * read as a request became a research topic — "سلام خودتو معرفی کن" opened an
+ * investigation into the user's own biography.
+ *
+ * Talking is the default state of an assistant. Research is a thing you ask it for.
+ */
+export async function replyPlain({ principalId, userText, recent = [], onDelta }) {
+  const history = store.conversation(principalId, null, 10);
+  store.addMessage({ principalId, dossierId: null, role: 'user', text: userText });
+
+  const context = recent.length
+    ? `\n\nپرونده‌های اخیر کاربر:\n${recent.map((d) => `- #${d.id} ${d.topic}`).join('\n')}`
+    : '\n\nهنوز پرونده‌ای ندارد.';
+
+  const { text, usage } = await chatStream({
+    model: modelFor('structure'),
+    system: PLAIN_SYSTEM + context,
+    history,
+    content: userText,
+    maxTokens: 800,
+    onDelta,
+  });
+
+  store.addMessage({ principalId, dossierId: null, role: 'assistant', text, costToman: usage.costToman });
+  return { text, usage };
+}
+
 /**
  * One conversational turn about a dossier. Streams into `onDelta` and persists
  * both sides so the next turn has the history.

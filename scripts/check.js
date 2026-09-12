@@ -1194,6 +1194,57 @@ await check('spending is proposed, never started by the router alone', async () 
   return 'research and deep both go through a button';
 });
 
+await check('you can just talk to it, with nothing open', async () => {
+  // "سلام خودتو معرفی کن" opened a research dossier into the user's own biography and
+  // spent money on it, because with no dossier there was no conversation to have —
+  // every message became "which dossier?" or a capture, and anything that read like a
+  // request became a topic.
+  const src = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  const body = src.slice(src.indexOf('async function handleTypedMessage'), src.indexOf('async function offerADossier'));
+  if (!/handlePlainChat/.test(body)) {
+    throw new Error('chat with no dossier does not reach a conversation');
+  }
+
+  // Plain talk is kept apart from a dossier's thread, so neither pollutes the other.
+  const p = `plain-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'یک پرونده' });
+  store.addMessage({ principalId: p, dossierId: null, role: 'user', text: 'سلام' });
+  store.addMessage({ principalId: p, dossierId: null, role: 'assistant', text: 'سلام، چه کمکی؟' });
+  store.addMessage({ principalId: p, dossierId, role: 'user', text: 'درباره‌ی این پرونده' });
+
+  const plain = store.conversation(p, null, 10);
+  const inDossier = store.conversation(p, dossierId, 10);
+  if (plain.length !== 2) throw new Error(`plain thread has ${plain.length} messages`);
+  if (inDossier.length !== 1) throw new Error(`dossier thread has ${inDossier.length}`);
+  if (plain.some((m) => m.text.includes('این پرونده'))) throw new Error('a dossier message leaked into plain talk');
+  if (plain[0].text !== 'سلام') throw new Error('plain history came back out of order');
+  return 'plain and per-dossier threads stay separate';
+});
+
+await check('a greeting is not a research topic', async () => {
+  const { route } = await import('../src/router.js');
+
+  // The router is asked, so the model's answer is stubbed — what is under test is what
+  // the code does with it, including when the model gets it wrong.
+  const saying = (intent, topic) => async () => ({ data: { intent, topic }, usage: {} });
+
+  // A research verdict with no topic cannot be acted on and must not invent one from
+  // the message: that is exactly how "سلام خودتو معرفی کن" became a dossier.
+  const noTopic = await route({ text: 'سلام خودتو معرفی کن', hasDossier: false, ask: saying('research', null) });
+  if (noTopic.intent === 'research') throw new Error('research with no topic was accepted');
+
+  // And the deterministic paths still hold.
+  const meta = await route({ text: 'جمع‌بندی کن', hasDossier: true, ask: saying('research', 'x') });
+  if (meta.intent !== 'summarise') throw new Error('a meta request reached the model');
+  if (meta.decidedBy !== 'rule') throw new Error('a meta request cost a model call');
+
+  const real = await route({ text: 'برو در مورد آیین میترائیسم تحقیق کن', hasDossier: false, ask: saying('research', 'آیین میترائیسم') });
+  if (real.intent !== 'research' || real.topic !== 'آیین میترائیسم') {
+    throw new Error(`a real research request was not routed: ${real.intent}`);
+  }
+  return 'topicless research refused, meta free, a real request still routed';
+});
+
 await check('asking for a summary is about the conversation, not a topic', async () => {
   const { isAboutTheConversation } = await import('../src/chat.js');
 

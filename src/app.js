@@ -382,7 +382,8 @@ async function handleTypedMessage(chatId, principalId, msg) {
       // All three are the same procedure; chat.js already drops retrieval for a
       // summary and runs it for a question.
       if (dossier) return handleChatTurn(chatId, principalId, active, text);
-      return offerADossier(chatId, principalId, text, msg);
+      // With nothing open, talk. An assistant you cannot simply speak to is not one.
+      return handlePlainChat(chatId, principalId, text);
 
     case 'open': {
       const recent = store.listDossiers(principalId, 5);
@@ -655,6 +656,37 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
 }
 
 /** One chat turn about the active dossier, streamed into a single edited message. */
+/**
+ * Ordinary conversation, with nothing open.
+ *
+ * The bot had no such state: every message with no dossier became "which dossier?" or a
+ * capture card, and anything the classifier read as a request became a research topic.
+ * "سلام خودتو معرفی کن" opened an investigation into the user's own biography and spent
+ * money on it.
+ */
+async function handlePlainChat(chatId, principalId, userText) {
+  const placeholder = await tg.send(chatId, '…');
+  let lastEdit = 0;
+  let lastShown = '';
+
+  try {
+    const { text, usage } = await chat.replyPlain({
+      principalId, userText,
+      recent: store.listDossiers(principalId, 5),
+      onDelta: async (sofar) => {
+        const now = Date.now();
+        if (now - lastEdit < 900 || sofar === lastShown) return;
+        lastEdit = now; lastShown = sofar;
+        await tg.edit(chatId, placeholder.message_id, esc(sofar)).catch(() => {});
+      },
+    });
+    await tg.edit(chatId, placeholder.message_id,
+      esc(text) + (usage.costToman ? `\n\n<i>${toman(usage.costToman)} تومان</i>` : ''));
+  } catch (err) {
+    await tg.edit(chatId, placeholder.message_id, `⚠️ ${esc(String(err.message ?? err))}`);
+  }
+}
+
 async function handleChatTurn(chatId, principalId, dossierId, userText) {
   const d = store.getDossier(principalId, dossierId);
   if (!d) {
