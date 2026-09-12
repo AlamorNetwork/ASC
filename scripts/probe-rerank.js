@@ -10,7 +10,23 @@
  */
 import { config } from '../src/config.js';
 
-const models = process.argv.slice(2).length ? process.argv.slice(2) : [
+// A provider can be named, so a reranker added at runtime can be checked where it lives
+// rather than against whatever ROUTER_BASE_URL happens to be:
+//   node scripts/probe-rerank.js --provider jina jina-reranker-v2-base-multilingual
+const args = process.argv.slice(2);
+const at = args.indexOf('--provider');
+const providerName = at === -1 ? null : args[at + 1];
+if (at !== -1) args.splice(at, 2);
+
+const provider = providerName ? config.providers.get(providerName) : null;
+if (providerName && !provider) {
+  console.error(`
+No provider called "${providerName}". Declared: ${[...config.providers.keys()].join(', ')}
+`);
+  process.exit(1);
+}
+
+const models = args.length ? args : [
   config.models.rerank,
   'cohere/rerank-v3.5',
   'cohere/rerank-4-fast',
@@ -26,7 +42,8 @@ const docs = [
   'متنی کاملاً بی‌ربط درباره‌ی کشاورزی و آبیاری زمین.',
 ];
 
-const base = config.router.base;
+const base = provider ? provider.base : config.router.base;
+const apiKey = provider ? provider.keys[0] : config.router.key;
 const root = base.replace(/\/v1$/, '');
 
 const shapes = (model) => [
@@ -46,7 +63,7 @@ for (const model of models) {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${config.router.key}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(25000),
       });
