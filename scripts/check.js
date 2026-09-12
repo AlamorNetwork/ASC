@@ -323,59 +323,23 @@ await check('a provider can be added without touching a file', async () => {
 });
 
 await check('every role points at a model the endpoint actually has', async () => {
-  // A role whose chain resolves to nothing does not announce itself. It falls back to a
-  // built-in default, that default is not on this endpoint either, and the feature is
-  // dead until someone sends a voice note and gets an error. Moving behind a gateway
-  // renames every model, so this is exactly when it happens.
-  const settings = await import('../src/settings.js');
-  const { planFor } = await import('../src/providers.js');
+  // The same code as /doctor, deliberately: the person who needs this answer is not
+  // always the person with a shell, and two copies would drift.
+  const { diagnose } = await import('../src/doctor.js');
+  const d = await diagnose();
 
-  const catalogue = new Map();   // provider name -> Set of ids it serves
-  const unreachable = [];
-
-  async function idsFor(provider) {
-    if (catalogue.has(provider.name)) return catalogue.get(provider.name);
-    let set = null;
-    try {
-      const res = await fetch(`${provider.base}/models`, {
-        headers: { Authorization: `Bearer ${provider.keys[0]}` },
-        signal: AbortSignal.timeout(20000),
-      });
-      if (res.ok) set = new Set(((await res.json()).data ?? []).map((m) => m.id));
-    } catch { /* handled below */ }
-    if (!set) unreachable.push(provider.name);
-    catalogue.set(provider.name, set);
-    return set;
-  }
-
-  const broken = [];
-  const roles = settings.allModels();
-  for (const [role, spec] of Object.entries(roles)) {
-    if (!spec || spec === 'none') continue;
-    const plan = planFor(spec, config.providers);
-    if (!plan.length) { broken.push(`${role}: «${spec}» names no known provider`); continue; }
-
-    let anyGood = false;
-    let anyChecked = false;
-    for (const { model, provider } of plan) {
-      const ids = await idsFor(provider);
-      if (!ids) continue;                       // could not ask; not evidence either way
-      anyChecked = true;
-      if (ids.has(model)) { anyGood = true; break; }
-    }
-    if (anyChecked && !anyGood) {
-      broken.push(`${role}: none of ${plan.length} link(s) exist — ${plan.map((p) => p.model).join(', ')}`);
-    }
-  }
-
-  if (broken.length) {
+  if (d.broken.length) {
     // Loud, because silence here reads as working software.
-    throw new Error(`\n        ${broken.join('\n        ')}`);
+    const lines = d.broken.map((r) =>
+      `${r.role}: ${r.detail} — ${(r.links ?? []).map((l) => l.model).join(', ') || r.spec}`);
+    throw new Error(`\n        ${lines.join('\n        ')}`);
   }
-  const checked = [...catalogue.entries()].filter(([, v]) => v).map(([k]) => k);
-  if (!checked.length) return 'no endpoint could be asked — nothing verified';
-  return `${Object.keys(roles).length} roles against ${checked.join(', ')}` +
-    (unreachable.length ? ` (could not ask: ${unreachable.join(', ')})` : '');
+
+  const answered = d.endpoints.filter((e) => e.models !== null);
+  if (!answered.length) return 'no endpoint could be asked — nothing verified';
+  const silent = d.endpoints.filter((e) => e.models === null).map((e) => e.name);
+  return `${d.roles.length} roles against ${answered.map((e) => e.name).join(', ')}` +
+    (silent.length ? ` (could not ask: ${silent.join(', ')})` : '');
 });
 
 await check('config loads', () => {

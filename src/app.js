@@ -858,6 +858,49 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
     return true;
   }
 
+  if (text.startsWith('/doctor')) {
+    const status = await tg.send(chatId, '🩺 دارم هر نقش را روی اندپوینتش امتحان می‌کنم…');
+    try {
+      const { diagnose, consequenceOf } = await import('./doctor.js');
+      const d = await diagnose();
+
+      const L = ['🩺 <b>وضعیت</b>', ''];
+      for (const e of d.endpoints) {
+        L.push(e.models !== null
+          ? `✅ <b>${esc(e.name)}</b> — ${e.models} مدل`
+          : `❌ <b>${esc(e.name)}</b> — جواب نداد (${esc(e.why ?? '?')})`);
+      }
+      L.push('');
+
+      for (const r of d.roles) {
+        if (r.state === 'off') { L.push(`➖ <b>${r.role}</b> خاموش`); continue; }
+        if (r.state === 'ok') {
+          const via = r.working.provider === 'default' ? '' : `@${r.working.provider}`;
+          L.push(`✅ <b>${r.role}</b> → <code>${esc(r.working.model + via)}</code>`);
+          continue;
+        }
+        if (r.state === 'unknown') { L.push(`❔ <b>${r.role}</b> — اندپوینتش جواب نداد`); continue; }
+        L.push(`❌ <b>${r.role}</b> — ${esc(consequenceOf(r.role))}`);
+        for (const l of (r.links ?? [])) {
+          L.push(`   <code>${esc(l.model)}</code> ${l.state === 'absent' ? 'نیست' : '?'}` +
+            (l.provider === 'default' ? '' : ` <i>(${esc(l.provider)})</i>`));
+        }
+      }
+
+      if (d.broken.length) {
+        L.push('', '<i>برای هرکدام یا مدلی بده که روی اندپوینت هست، یا ارائه‌دهنده‌اش را اضافه کن:</i>',
+          '<code>/provider add NAME https://…/v1 KEY</code>',
+          `<code>/model ${d.broken[0].role} SOME_MODEL@NAME</code>`);
+      } else {
+        L.push('', '<i>همه‌ی نقش‌ها به مدلی می‌رسند که واقعاً وجود دارد.</i>');
+      }
+      await tg.edit(chatId, status.message_id, L.join('\n'));
+    } catch (err) {
+      await tg.edit(chatId, status.message_id, `❌ ${esc(String(err.message ?? err))}`);
+    }
+    return true;
+  }
+
   if (text.startsWith('/provider')) {
     // Credentials. A member adding one could route every call through an endpoint they
     // control and read everyone's questions on the way past.
