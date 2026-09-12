@@ -46,6 +46,23 @@ if [ "${ASC_SKIP_9ROUTER:-0}" != "1" ]; then
   # out mid-investigation falls through to the next instead of ending the run.
   npm install -g 9router --silent
 
+  # 9router refuses a remote login while its password is still the built-in 123456 —
+  # its own login route checks `!storedHash && !INITIAL_PASSWORD && !isLocal` and turns
+  # you away. On a server that means locked out until you tunnel in, so a real password
+  # is generated here instead. Once you set one in the dashboard a hash is stored and
+  # this value stops being consulted, which is why it is called initial.
+  #
+  # In its own file at 600, not in the unit: /etc/systemd/system is world-readable, and
+  # a password sitting in it would be readable by every account on the machine.
+  if [ ! -f /etc/9router.env ]; then
+    PASS="${NINEROUTER_PASSWORD:-$(head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20)}"
+    printf 'INITIAL_PASSWORD=%s\n' "$PASS" > /etc/9router.env
+    chmod 600 /etc/9router.env
+    NEW_PASS="$PASS"
+  else
+    echo "  keeping the existing /etc/9router.env"
+  fi
+
   # Bound to 127.0.0.1 on purpose. Its default is 0.0.0.0, which on a public IP is an
   # open gateway to every key it holds — no auth, no rate limit, just a port. ASC runs
   # on this same machine, so it does not need to be reachable from anywhere else.
@@ -62,6 +79,7 @@ ExecStart=$(command -v 9router) --host 127.0.0.1 --port 20128 --no-browser --ski
 Restart=always
 RestartSec=5
 Environment=HOME=/root
+EnvironmentFile=/etc/9router.env
 
 [Install]
 WantedBy=multi-user.target
@@ -76,8 +94,20 @@ UNIT
     echo "9router did not answer yet — check: journalctl -u 9router -n 30"
   fi
 
-  cat <<'TEXT'
+  if [ -n "${NEW_PASS:-}" ]; then
+    cat <<TEXT
 
+  ┌──────────────────────────────────────────────────────────┐
+     Dashboard password:  $NEW_PASS
+
+     Shown once. It is in /etc/9router.env (root only) if you
+     lose it. Change it in the dashboard when you first log in —
+     after that a hash is stored and this value is ignored.
+  └──────────────────────────────────────────────────────────┘
+TEXT
+  fi
+
+  cat <<'TEXT'
   Its dashboard is not exposed. Reach it from your own machine with a tunnel:
       ssh -L 20128:127.0.0.1:20128 root@THIS_SERVER
       # then open http://localhost:20128
