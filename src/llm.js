@@ -339,6 +339,23 @@ export async function chatStream({ model: spec, system, history = [], content, m
     }
   }
 
+  // A provider that ignores `stream: true` answers 200 with an ordinary completion body
+  // and no `data:` frames at all. Every line is then skipped, and this returned an empty
+  // string as though the model had said nothing — a silent blank reply, which is worse
+  // than an error because it looks like the model's fault.
+  if (!text && buffer.trim()) {
+    try {
+      const whole = parseRouterBody(buffer);
+      const said = whole.choices?.[0]?.message?.content ?? '';
+      if (said) {
+        console.warn(`[llm] ${model} ignored stream:true and sent one body; showing it whole`);
+        text = said;
+        usage = whole.usage ?? usage;
+        onDelta?.(text);
+      }
+    } catch { /* not a completion either; the empty result stands */ }
+  }
+
   recordSpend(usage, { model, kind: 'chat' });
   return {
     text,

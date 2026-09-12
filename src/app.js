@@ -750,7 +750,10 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
         if (now - lastEdit < 1200 || soFar === lastShown) return;
         lastEdit = now;
         lastShown = soFar;
-        tg.edit(chatId, placeholder.message_id, esc(soFar) + ' ▍');
+        // Not awaited, so it cannot slow the stream — but it must be caught. Telegram
+        // rejects an edit whose text is unchanged, and an unhandled rejection there
+        // would take down the turn over a cosmetic update.
+        tg.edit(chatId, placeholder.message_id, esc(soFar) + ' ▍').catch(() => {});
       },
     }));
 

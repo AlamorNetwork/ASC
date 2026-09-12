@@ -1240,6 +1240,87 @@ await check('capture is only offered a model that can hear and see', async () =>
   return `capture → ${capture[0]}, generators excluded`;
 });
 
+await check('a streamed reply arrives in pieces, not all at once', async () => {
+  // Streaming had never been tested. It is the difference between watching an answer
+  // appear and staring at "…" for thirty seconds, and it fails silently: chatStream
+  // falls back to a plain call whenever the endpoint will not stream, which produces
+  // exactly one onDelta with the whole text and looks like nothing is happening.
+  const { chatStream } = await import('../src/llm.js');
+
+  const WORDS = ['میترائیسم', ' آیینی', ' رازآمیز', ' در', ' امپراتوری', ' روم', ' بود.'];
+  const sse = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    let i = 0;
+    const tick = setInterval(() => {
+      if (i < WORDS.length) {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: WORDS[i++] } }] })}\n\n`);
+        return;
+      }
+      clearInterval(tick);
+      res.write(`data: ${JSON.stringify({ usage: { total_cost_toman: 12 } })}\n\n`);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }, 10);
+  });
+  await new Promise((r) => sse.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${sse.address().port}/v1`;
+
+  // A provider pointed at the fake stream, added the way any other would be.
+  config.providers.set('streamtest', { name: 'streamtest', base, keys: ['x'] });
+  try {
+    const seen = [];
+    const out = await chatStream({
+      model: 'anything@streamtest',
+      content: 'سلام',
+      onDelta: (soFar) => seen.push(soFar),
+    });
+
+    if (seen.length < WORDS.length) {
+      throw new Error(`${seen.length} onDelta call(s) for ${WORDS.length} chunks — it is not streaming`);
+    }
+    // Each call carries everything so far, which is what the message edit relies on.
+    if (!seen.every((s, i) => i === 0 || s.length > seen[i - 1].length)) {
+      throw new Error('the text did not grow monotonically');
+    }
+    if (out.text !== WORDS.join('')) throw new Error(`assembled wrongly: ${JSON.stringify(out.text)}`);
+    if (out.usage.costToman !== 12) throw new Error('the usage frame after the last chunk was dropped');
+    return `${seen.length} pieces, assembled in order, cost kept`;
+  } finally {
+    config.providers.delete('streamtest');
+    sse.close();
+  }
+});
+
+await check('a provider that ignores stream:true still gets an answer through', async () => {
+  // Some endpoints answer 200 with an ordinary completion body and no data: frames.
+  // Every line was then skipped and an empty string came back, which reads as the model
+  // having said nothing — the worst kind of failure, because it blames the model.
+  const { chatStream } = await import('../src/llm.js');
+
+  const plain = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      choices: [{ message: { content: 'جوابی که استریم نشد' } }],
+      usage: { total_cost_toman: 7 },
+    }));
+  });
+  await new Promise((r) => plain.listen(0, '127.0.0.1', r));
+  config.providers.set('nostream', { name: 'nostream', base: `http://127.0.0.1:${plain.address().port}/v1`, keys: ['x'] });
+
+  try {
+    const seen = [];
+    const out = await chatStream({ model: 'x@nostream', content: 'سلام', onDelta: (s) => seen.push(s) });
+    if (!out.text) throw new Error('a complete answer came back empty');
+    if (out.text !== 'جوابی که استریم نشد') throw new Error(`got ${JSON.stringify(out.text)}`);
+    if (!seen.length) throw new Error('the caller was never shown the text');
+    if (out.usage.costToman !== 7) throw new Error('its cost was not counted');
+    return 'shown whole rather than lost';
+  } finally {
+    config.providers.delete('nostream');
+    plain.close();
+  }
+});
+
 await check('you can ask what it is doing without stopping it', async () => {
   // /stop knew what was running and stopped it to say so. There was no way to just look.
   const c = await import('../src/cancel.js');
