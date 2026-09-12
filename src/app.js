@@ -741,7 +741,7 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
   }
 }
 
-async function handleCommand(chatId, principalId, text, isOwner) {
+async function handleCommand(chatId, principalId, text, isOwner, messageId = null) {
   if (text.startsWith('/menu') || text.startsWith('/start')) {
     const view = menu.screen('root', principalId, undefined, { isOwner });
     await tg.send(chatId, view.text, { buttons: view.buttons });
@@ -861,7 +861,7 @@ async function handleCommand(chatId, principalId, text, isOwner) {
   if (text.startsWith('/provider')) {
     // Credentials. A member adding one could route every call through an endpoint they
     // control and read everyone's questions on the way past.
-    if (admit(chatId, msg.from) !== 'owner') {
+    if (!isOwner) {
       await tg.send(chatId, 'فقط مالک بات می‌تواند ارائه‌دهنده‌ها را ببیند یا عوض کند.');
       return true;
     }
@@ -917,7 +917,7 @@ async function handleCommand(chatId, principalId, text, isOwner) {
       await tg.send(chatId, [`🔌 <b>${esc(name)}</b> ثبت شد · ${list.length} کلید`, reach, '',
         `<i>بدون ری‌استارت. حالا مثلاً <code>/model structure something@${esc(name)}</code></i>`].join('\n'));
       // Delete the message: it has the keys in it, and Telegram keeps history.
-      await tg.deleteMessage(chatId, msg.message_id).catch(() => {});
+      if (messageId) await tg.deleteMessage(chatId, messageId).catch(() => {});
       return true;
     }
 
@@ -938,7 +938,7 @@ async function handleCommand(chatId, principalId, text, isOwner) {
   if (text.startsWith('/backup')) {
     // The file holds every principal's captures, documents and conversations, so this
     // is the owner's alone — a member downloading it would be reading everyone's work.
-    if (admit(chatId, msg.from) !== 'owner') {
+    if (!isOwner) {
       await tg.send(chatId, 'فقط مالک بات می‌تواند نسخهٔ پشتیبان بگیرد.');
       return true;
     }
@@ -1484,7 +1484,7 @@ export async function run() {
       if (!msg) continue;
 
       if (msg.text && msg.text.startsWith('/')) {
-        if (await handleCommand(chatId, principalId, msg.text, isOwner)) continue;
+        if (await handleCommand(chatId, principalId, msg.text, isOwner, msg.message_id)) continue;
       }
 
       // Photos arrive as an array of sizes; the last one is the largest.

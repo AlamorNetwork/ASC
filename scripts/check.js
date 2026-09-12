@@ -249,6 +249,44 @@ await check('the suite never writes to the real database', () => {
   return path.basename(config.dbPath);
 });
 
+await check('no command reaches for a variable it does not have', () => {
+  // /provider threw "msg is not defined" the first time it ran — it used msg.from and
+  // msg.message_id, which handleCommand never receives. Loading the file cannot catch
+  // that: the reference only exists inside one branch of one command, so it stays
+  // invisible until someone types that command. Checking the source can.
+  const src = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  const start = src.indexOf('async function handleCommand(');
+  if (start === -1) throw new Error('handleCommand has been renamed; update this check');
+
+  const sig = src.slice(start, src.indexOf(')', start));
+  const params = sig.slice(sig.indexOf('(') + 1).split(',').map((p) => p.split('=')[0].trim());
+
+  // Its body ends at the brace that closes it. Looking for "the next function" instead
+  // ran past the end and blamed this function for the main loop's variables.
+  const open = src.indexOf('{', start);
+  let depth = 0;
+  let end = open;
+  for (; end < src.length; end++) {
+    const c = src[end];
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) break;
+  }
+  const body = src.slice(open, end);
+
+  // Names that belong to a Telegram update, which this function is not given.
+  const offenders = [];
+  for (const name of ['msg', 'update', 'cb', 'callback']) {
+    if (params.includes(name)) continue;
+    const hit = new RegExp(`\\b${name}\\.`).exec(body);
+    if (hit) {
+      const line = src.slice(0, start + hit.index).split('\n').length;
+      offenders.push(`${name}. at line ${line} — handleCommand takes (${params.join(', ')})`);
+    }
+  }
+  if (offenders.length) throw new Error(offenders.join('; '));
+  return `handleCommand uses only (${params.join(', ')})`;
+});
+
 await check('a provider can be added without touching a file', async () => {
   const { planFor } = await import('../src/providers.js');
 
