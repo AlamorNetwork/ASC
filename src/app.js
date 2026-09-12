@@ -902,10 +902,20 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
         }
       }
 
-      if (d.broken.length && !d.broken.some((r) => r.suggestion?.length)) {
-        L.push('', '<i>هیچ مدل مناسبی روی اندپوینت‌های فعلی نیست. ارائه‌دهنده‌اش را اضافه کن:</i>',
-          '<code>/provider add NAME https://…/v1 KEY</code>');
-      } else if (!d.broken.length) {
+      // A role with no candidate anywhere is a different problem from one pointed at
+      // the wrong name, and needs a different action: no chat gateway carries embedding
+      // or reranking models, so no amount of renaming will find one.
+      const homeless = d.broken.filter((r) => !r.suggestion?.length);
+      if (homeless.length) {
+        L.push('', `<b>${homeless.map((r) => r.role).join('، ')}</b>: روی هیچ‌کدام از ارائه‌دهنده‌های فعلی ` +
+          'مدلی برای این کار وجود ندارد — نه اینکه اسمش عوض شده باشد.');
+        if (homeless.some((r) => r.role === 'embed' || r.role === 'rerank')) {
+          L.push('<i>گیت‌وی‌های چت (OpenRouter، kira) امبدینگ و ریرنکر ندارند. یا ارائه‌دهنده‌ای ' +
+            'که دارد اضافه کن، یا مدل لوکال را بالا بیاور.</i>');
+        }
+        L.push('<code>/provider add NAME https://…/v1 KEY</code>');
+      }
+      if (!d.broken.length) {
         L.push('', '<i>همه‌ی نقش‌ها به مدلی می‌رسند که واقعاً وجود دارد.</i>');
       }
       await tg.edit(chatId, status.message_id, L.join('\n'));
