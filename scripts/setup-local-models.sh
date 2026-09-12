@@ -38,6 +38,17 @@ echo "  RAM ${TOTAL_MB}MB total, ${AVAIL_MB}MB available now · swap ${SWAP_MB}M
 EMBED_MB=750
 RERANK_MB=800
 
+# The ceiling each service gets. A cgroup limit below what the model needs to load does
+# not protect anything, it just kills it during startup — which looks from outside like
+# a crash with no explanation. So it is the larger of the budget and what the weights
+# plus working space actually require, and never more than leaves the bot room.
+RESERVE_MB=350          # bot, 9router, web server, kernel
+# Weights plus working space. Not shrunk to fit the RAM available: a limit below what
+# loading needs does not protect anything, it kills the service during startup, and from
+# outside that is a crash with no message. If it does not fit, swap is the answer and
+# the script says so rather than quietly setting a ceiling that cannot work.
+ceiling() { echo $(( $1 + 450 )); }
+
 WANT_EMBED=1
 WANT_RERANK=1
 HEADROOM=$((AVAIL_MB - EMBED_MB - RERANK_MB))
@@ -66,7 +77,23 @@ if [ "$HEADROOM" -lt 250 ]; then
   echo "  Only the embedding model fits. Running both would leave ${HEADROOM}MB, which is"
   echo "  an out-of-memory kill waiting for the first busy minute."
   echo "  Reranking stays remote — it costs precision, not answers."
-  echo "  Add swap (see below) and re-run if you want both."
+fi
+
+# Even one model can be tight once the bot, 9router and a web server have their share.
+if [ $((AVAIL_MB - RESERVE_MB)) -lt 1050 ] && [ "$SWAP_MB" -eq 0 ]; then
+  echo ""
+  echo "  ⚠ ${AVAIL_MB}MB available, no swap. The embedding model needs about 1GB while"
+  echo "    it loads, and there is roughly $((AVAIL_MB - RESERVE_MB))MB once the bot and"
+  echo "    9router have theirs. It may be killed part-way through loading, which shows"
+  echo "    up as ECONNREFUSED with nothing obviously wrong."
+  echo ""
+  echo "    Two gigabytes of swap fixes it. These models are idle between requests, so"
+  echo "    paging them costs a slower first answer, not a slower machine:"
+  echo ""
+  echo "      fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile"
+  echo "      swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab"
+  echo ""
+  echo "    Carrying on — it may well work. If it does not, that is why."
 fi
 
 mkdir -p "$DIR/bin" "$DIR/models"
@@ -172,7 +199,7 @@ UNIT
 
 unit local-embed "$DIR/bin/llama-server --host 127.0.0.1 --port $EMBED_PORT \
   -m $DIR/models/multilingual-e5-large-q8_0.gguf --embedding --pooling mean \
-  -c 512 -np 2 --threads $(nproc) --alias intfloat/multilingual-e5-large" $((EMBED_MB + 200))
+  -c 512 -np 2 --threads $(nproc) --alias intfloat/multilingual-e5-large" \n  "$(ceiling "$(du -m "$DIR/models/multilingual-e5-large-q8_0.gguf" | cut -f1)")"
 
 SERVICES="local-embed"
 if [ "$WANT_RERANK" = "1" ]; then
@@ -180,7 +207,7 @@ if [ "$WANT_RERANK" = "1" ]; then
   # to spare, and the context is the part that grows with memory.
   unit local-rerank "$DIR/bin/llama-server --host 127.0.0.1 --port $RERANK_PORT \
     -m $DIR/models/bge-reranker-v2-m3-Q8_0.gguf --reranking \
-    -c 1024 --threads $(nproc) --alias bge-reranker-v2-m3" $((RERANK_MB + 200))
+    -c 1024 --threads $(nproc) --alias bge-reranker-v2-m3" \n    "$(ceiling "$(du -m "$DIR/models/bge-reranker-v2-m3-Q8_0.gguf" | cut -f1)")"
   SERVICES="$SERVICES local-rerank"
 else
   systemctl disable --now local-rerank >/dev/null 2>&1 || true

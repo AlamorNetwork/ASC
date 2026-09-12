@@ -891,13 +891,21 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
           L.push(`   <code>${esc(l.model)}</code> ${l.state === 'absent' ? 'نیست' : '?'}` +
             (l.provider === 'default' ? '' : ` <i>(${esc(l.provider)})</i>`));
         }
+        // Something to type, rather than a list of what is absent.
+        if (r.suggestion?.length) {
+          L.push(`   <b>هست:</b> <code>/model ${r.role} ${esc(r.suggestion[0])}</code>`);
+          for (const alt of r.suggestion.slice(1)) L.push(`   <i>یا</i> <code>${esc(alt)}</code>`);
+          if (r.warnsRebuild) {
+            L.push('   ⚠️ <i>این مدلِ دیگری است. بردارها فقط با بردارهای همان مدل معنا دارند،',
+              'پس بعدش باید همه را از نو ساخت: <code>node scripts/reembed.js --run</code></i>');
+          }
+        }
       }
 
-      if (d.broken.length) {
-        L.push('', '<i>برای هرکدام یا مدلی بده که روی اندپوینت هست، یا ارائه‌دهنده‌اش را اضافه کن:</i>',
-          '<code>/provider add NAME https://…/v1 KEY</code>',
-          `<code>/model ${d.broken[0].role} SOME_MODEL@NAME</code>`);
-      } else {
+      if (d.broken.length && !d.broken.some((r) => r.suggestion?.length)) {
+        L.push('', '<i>هیچ مدل مناسبی روی اندپوینت‌های فعلی نیست. ارائه‌دهنده‌اش را اضافه کن:</i>',
+          '<code>/provider add NAME https://…/v1 KEY</code>');
+      } else if (!d.broken.length) {
         L.push('', '<i>همه‌ی نقش‌ها به مدلی می‌رسند که واقعاً وجود دارد.</i>');
       }
       await tg.edit(chatId, status.message_id, L.join('\n'));

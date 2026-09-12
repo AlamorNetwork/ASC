@@ -115,8 +115,23 @@ export async function diagnose({ timeoutMs = 20000 } = {}) {
     });
   }
 
+  // Naming a model that is actually there turns "none of these exist" into something
+  // to type. The catalogues are already in hand; not using them made the report a
+  // list of absences.
+  const catalogues = new Map([...seen.entries()].map(([name, v]) => [name, v.ids]));
+  for (const r of roles) {
+    if (r.state !== 'broken') continue;
+    r.suggestion = suggestionFor(r.role, catalogues, (r.links ?? []).map((l) => l.model));
+    // Changing which model makes the vectors is not a like-for-like swap, and the
+    // report should not offer one as though it were.
+    r.warnsRebuild = r.role === 'embed'
+      && r.suggestion?.length
+      && !(r.links ?? []).some((l) => r.suggestion[0].endsWith(`/${l.model}`) || r.suggestion[0].startsWith(l.model));
+  }
+
   return {
     roles,
+    catalogues,
     endpoints: [...seen.entries()].map(([name, v]) => ({
       name,
       base: config.providers.get(name)?.base ?? '',
@@ -136,22 +151,47 @@ export const consequenceOf = (role) => CONSEQUENCE[role] ?? '';
  * A model id that IS on some endpoint and looks like what this role needs, so the
  * report can end with something to type rather than only with what is wrong.
  */
-export function suggestionFor(role, endpoints, catalogues) {
-  const wants = {
-    embed: /embed|e5|bge/i,
-    rerank: /rerank/i,
-    capture: /flash|gpt|gemini|omni/i,
-    research: /:online|sonar|perplexity/i,
-    structure: /flash|mini|free/i,
-    router: /flash|mini|free/i,
-    transcribe: /whisper|asr|transcribe|stt/i,
-  }[role];
-  if (!wants) return null;
-
+export function suggestionFor(role, catalogues, tried = []) {
+  // Almost always the right answer, and always the safest: the very model that was
+  // asked for, under the prefix this gateway gives it. `google/gemini-3.6-flash` is
+  // absent while `liara/google/gemini-3.6-flash` is right there. It matters most for
+  // embeddings, where a different model is not a substitution at all — vectors only
+  // mean anything against others from the same one.
+  const sameModel = [];
   for (const [name, ids] of catalogues) {
     if (!ids) continue;
-    const hit = [...ids].find((id) => wants.test(id));
-    if (hit) return `${hit}${name === 'default' ? '' : `@${name}`}`;
+    for (const want of tried) {
+      for (const id of ids) {
+        if (id === want || id.endsWith(`/${want}`)) {
+          sameModel.push(`${id}${name === 'default' ? '' : `@${name}`}`);
+        }
+      }
+    }
   }
-  return null;
+  if (sameModel.length) return sameModel.slice(0, 3);
+
+  // What a role needs, and what it must not be given: a reranker where an embedding
+  // model belongs answers, and every comparison it makes is nonsense.
+  const rules = {
+    embed: { want: /embedding|-e5-|bge-m3/i, avoid: /rerank|tts|asr/i },
+    rerank: { want: /rerank/i, avoid: null },
+    capture: { want: /flash|gemini|gpt-[45]|omni/i, avoid: /rerank|embed|tts|asr|:online|image/i },
+    research: { want: /:online|sonar/i, avoid: /rerank|embed|tts/i },
+    structure: { want: /flash|mini|free/i, avoid: /rerank|embed|tts|asr|image/i },
+    router: { want: /flash|mini|free/i, avoid: /rerank|embed|tts|asr|image/i },
+    transcribe: { want: /whisper|asr|stt|transcribe/i, avoid: /tts/i },
+  }[role];
+  if (!rules) return null;
+
+  const out = [];
+  for (const [name, ids] of catalogues) {
+    if (!ids) continue;
+    for (const id of ids) {
+      if (!rules.want.test(id)) continue;
+      if (rules.avoid?.test(id)) continue;
+      out.push(`${id}${name === 'default' ? '' : `@${name}`}`);
+      if (out.length >= 3) return out;
+    }
+  }
+  return out.length ? out : null;
 }
