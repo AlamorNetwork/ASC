@@ -35,6 +35,33 @@ UPSTREAM="127.0.0.1:20128"
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
+# 9router ships with the dashboard password "123456" — it is a constant in its own CLI
+# source. Publishing a login page that still accepts it hands over every provider key
+# the gateway holds to anyone who finds the name.
+#
+# This cannot be checked from here: /api/auth/status reports hasPassword true either way,
+# and trying the default would spend one of the five attempts before it locks you out of
+# your own dashboard. So it is an explicit acknowledgement instead.
+if [ "${PASSWORD_CHANGED:-0}" != "1" ]; then
+  cat <<TEXT
+
+  Change the dashboard password first.
+
+  9router's default is 123456. Reach it privately, from your own machine:
+
+      ssh -L 20128:127.0.0.1:20128 root@$(hostname -I 2>/dev/null | awk '{print $1}')
+      # then open http://localhost:20128 and change the password
+
+  Then run this again, saying so:
+
+      PASSWORD_CHANGED=1 bash scripts/setup-domain.sh $DOMAIN ${EMAIL:-you@example.com}
+
+  Nothing has been changed. The dashboard is not published yet.
+
+TEXT
+  exit 1
+fi
+
 say "checking that $DOMAIN points here"
 WANT=$(curl -fsS -m 10 https://api.ipify.org 2>/dev/null || echo '')
 GOT=$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || echo '')
@@ -151,8 +178,8 @@ cat <<TEXT
 
 Now, in order:
   1. Cloudflare → set the record back to proxied (orange), SSL/TLS mode Full (strict).
-  2. Open https://$DOMAIN and set a strong dashboard password. That login page is on
-     the open internet; the password is the whole of what protects it.
+  2. Check that https://$DOMAIN does NOT accept 123456. If it does, the password was
+     not actually changed and every provider key in the gateway is one guess away.
   3. Leave ASC pointing at localhost — it is on this machine, so it does not need the
      domain and should not depend on it:
        ROUTER_BASE_URL=http://127.0.0.1:20128/v1
