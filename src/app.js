@@ -1345,16 +1345,56 @@ export async function run() {
     },
   });
 
-  for await (const update of tg.updates()) {
-    try {
+  // One slow handler used to silence the whole bot. Updates were awaited strictly in
+  // turn, so a model call that hung — and with a misconfigured role every message walks
+  // a chain of failing providers — held every other conversation behind it, looking
+  // exactly like the bot being down.
+  //
+  // Now each chat has its own queue: messages from one person still arrive in order,
+  // which matters because a reply depends on the message before it, while a different
+  // chat is not made to wait. And a handler that never returns loses its own chat
+  // rather than all of them.
+  const queues = new Map();
+
+  const dispatch = (update) => {
+    const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
+    if (!chatId) return;
+    const prior = queues.get(chatId) ?? Promise.resolve();
+    const next = prior.then(() => withDeadline(handleUpdate(update), chatId));
+    // Kept from growing without bound: the chain is dropped once it is idle again.
+    queues.set(chatId, next);
+    next.finally(() => { if (queues.get(chatId) === next) queues.delete(chatId); });
+  };
+
+  for await (const update of tg.updates()) dispatch(update);
+}
+
+/** Five minutes is longer than any legitimate turn; a deep run reports through onRound. */
+async function withDeadline(work, chatId, ms = 300000) {
+  let timer;
+  try {
+    await Promise.race([
+      work,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('طول کشید و رهایش کردم')), ms); }),
+    ]);
+  } catch (err) {
+    console.error('[asc] update failed:', err);
+    await tg.send(chatId, `⚠️ خطا: ${esc(String(err.message ?? err))}`).catch(() => {});
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleUpdate(update) {
+    {
       const msg = update.message;
       const cb = update.callback_query;
       const chatId = msg?.chat?.id ?? cb?.message?.chat?.id;
-      if (!chatId) continue;
+      if (!chatId) return;
 
       const from = msg?.from ?? cb?.from;
       const access = await admit(chatId, from);
-      if (access === 'pending' || access === 'blocked') continue;
+      if (access === 'pending' || access === 'blocked') return;
 
       const principalId = String(chatId);
       const isOwner = access === 'owner';
@@ -1364,7 +1404,7 @@ export async function run() {
         if (String(cb.data).startsWith('m:')) {
           const [, name, arg] = String(cb.data).split(':');
           await handleMenu(chatId, principalId, { name, arg, isOwner, cb });
-          continue;
+          return;
         }
 
         const [action, idStr] = String(cb.data).split(':');
@@ -1421,7 +1461,7 @@ export async function run() {
           // picks up its leads, so continuing never re-buys what was already searched.
           const resuming = action === 'deepmore';
           const run = resuming ? store.getInvestigation(principalId, id) : null;
-          if (resuming && !run) { await tg.answerCallback(cb.id, 'این کاوش پیدا نشد'); continue; }
+          if (resuming && !run) { await tg.answerCallback(cb.id, 'این کاوش پیدا نشد'); return; }
 
           const dossierId = resuming ? run.dossier_id : id;
           const lastUser = [...store.conversation(principalId, dossierId, 12)]
@@ -1535,13 +1575,13 @@ export async function run() {
             await tg.send(chatId, `⬆️ سقف: $${next} ≈ ${toman(next * 310000)} تومان`);
           }
         }
-        continue;
+        return;
       }
 
-      if (!msg) continue;
+      if (!msg) return;
 
       if (msg.text && msg.text.startsWith('/')) {
-        if (await handleCommand(chatId, principalId, msg.text, isOwner, msg.message_id)) continue;
+        if (await handleCommand(chatId, principalId, msg.text, isOwner, msg.message_id)) return;
       }
 
       // Photos arrive as an array of sizes; the last one is the largest.
@@ -1552,7 +1592,7 @@ export async function run() {
           filename: msg.caption?.slice(0, 60) || 'تصویر.jpg',
           mime: 'image/jpeg',
         });
-        continue;
+        return;
       }
 
       if (msg.document) {
@@ -1561,7 +1601,7 @@ export async function run() {
           filename: msg.document.file_name || 'سند',
           mime: msg.document.mime_type || '',
         });
-        continue;
+        return;
       }
 
       const voice = msg.voice ?? msg.audio ?? msg.video_note;
@@ -1573,7 +1613,7 @@ export async function run() {
         // was taken, not which procedure the user asked for.
         const { capture, usage, route: heardVia } = await captureFromAudio(buf);
         await handleCapture(chatId, principalId, { ...capture, source: 'voice' }, usage, msg.message_id, heardVia);
-        continue;
+        return;
       }
 
       if (msg.text) {
@@ -1582,15 +1622,9 @@ export async function run() {
         // procedure and never performs it.
         await tg.typing(chatId);
         await handleTypedMessage(chatId, principalId, msg);
-        continue;
+        return;
       }
 
       await tg.send(chatId, 'فعلاً فقط ویس و متن. بقیه بعداً.');
-    } catch (err) {
-      // A memory layer must never take the conversation down with it.
-      console.error('[asc] update failed:', err);
-      const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
-      if (chatId) await tg.send(chatId, `⚠️ خطا: ${esc(String(err.message ?? err))}`).catch(() => {});
     }
-  }
 }

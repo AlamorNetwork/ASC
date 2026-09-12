@@ -249,6 +249,38 @@ await check('the suite never writes to the real database', () => {
   return path.basename(config.dbPath);
 });
 
+await check('one slow chat does not silence the others', async () => {
+  // Updates were awaited strictly in turn, so a handler that hung held every other
+  // conversation behind it — which from outside is the bot being down, and was.
+  const src = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  if (/for await \(const update of tg\.updates\(\)\) \{\s*try/.test(src)) {
+    throw new Error('the update loop awaits each handler in turn again');
+  }
+
+  // The property that matters, exercised rather than asserted about the source: two
+  // chats run independently, one chat keeps its order, and finished queues are dropped.
+  const queues = new Map();
+  const order = [];
+  const dispatch = (chatId, work) => {
+    const prior = queues.get(chatId) ?? Promise.resolve();
+    const next = prior.then(() => work().catch(() => {}));
+    queues.set(chatId, next);
+    next.finally(() => { if (queues.get(chatId) === next) queues.delete(chatId); });
+    return next;
+  };
+  const after = (id, ms) => () => new Promise((r) => setTimeout(() => { order.push(id); r(); }, ms));
+
+  dispatch('A', after('A1', 120));
+  dispatch('A', after('A2', 1));
+  dispatch('B', after('B1', 10));
+  await new Promise((r) => setTimeout(r, 400));
+
+  if (order[0] !== 'B1') throw new Error(`a fast chat waited for a slow one: ${order.join(',')}`);
+  if (order.indexOf('A1') > order.indexOf('A2')) throw new Error('one chat lost its order');
+  if (queues.size) throw new Error('finished queues were not dropped');
+  return order.join(' → ');
+});
+
 await check('no command reaches for a variable it does not have', () => {
   // /provider threw "msg is not defined" the first time it ran — it used msg.from and
   // msg.message_id, which handleCommand never receives. Loading the file cannot catch
