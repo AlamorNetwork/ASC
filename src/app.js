@@ -858,6 +858,83 @@ async function handleCommand(chatId, principalId, text, isOwner) {
     return true;
   }
 
+  if (text.startsWith('/provider')) {
+    // Credentials. A member adding one could route every call through an endpoint they
+    // control and read everyone's questions on the way past.
+    if (admit(chatId, msg.from) !== 'owner') {
+      await tg.send(chatId, 'فقط مالک بات می‌تواند ارائه‌دهنده‌ها را ببیند یا عوض کند.');
+      return true;
+    }
+    const parts = text.slice(9).trim().split(/\s+/).filter(Boolean);
+    const [verb, name, base, keys] = parts;
+
+    if (!verb) {
+      const stored = store.listProviders();
+      const L = ['🔌 <b>ارائه‌دهنده‌ها</b>', ''];
+      if (!stored.length) L.push('<i>هیچ‌کدام در دیتابیس نیست — فعلاً فقط آنچه در .env است کار می‌کند.</i>', '');
+      for (const p of stored) {
+        // Enough of the key to recognise it, never enough to use it.
+        const shown = p.keys.map((k) => `${k.slice(0, 6)}…${k.length}`).join('، ');
+        L.push(`<b>${esc(p.name)}</b>`, `  <code>${esc(p.base)}</code>`, `  ${p.keys.length} کلید: ${esc(shown)}`, '');
+      }
+      const envOnly = [...config.providers.keys()].filter((n) => !stored.some((s) => s.name === n));
+      if (envOnly.length) L.push(`<i>از .env: ${esc(envOnly.join('، '))}</i>`, '');
+      L.push('<code>/provider add kira https://kiraai.vn/api/v1 kira_xxx,kira_yyy</code>',
+        '<code>/provider rm kira</code>', '',
+        '<i>بعدش در مدل‌ها با <code>model@نام</code> صدایش بزن.</i>');
+      await tg.send(chatId, L.join('\n'));
+      return true;
+    }
+
+    if (verb === 'add') {
+      if (!name || !base || !keys) {
+        await tg.send(chatId, '<code>/provider add &lt;نام&gt; &lt;آدرس&gt; &lt;کلید[,کلید]&gt;</code>');
+        return true;
+      }
+      if (!/^[a-z][a-z0-9_-]*$/i.test(name)) {
+        await tg.send(chatId, 'نام فقط حروف و عدد. این نام بعد از <code>@</code> در شناسه‌ی مدل می‌آید.');
+        return true;
+      }
+      if (!/^https?:\/\//i.test(base)) {
+        await tg.send(chatId, 'آدرس باید با http:// یا https:// شروع شود و به <code>/v1</code> ختم شود.');
+        return true;
+      }
+      const list = keys.split(',').map((k) => k.trim()).filter(Boolean);
+      store.upsertProvider({ name, base, keys: list });
+      store.loadProvidersIntoConfig();
+
+      // Say whether it works now, rather than at the next failed investigation.
+      let reach = '';
+      try {
+        const res = await fetch(`${base.replace(/\/+$/, '')}/models`, {
+          headers: { Authorization: `Bearer ${list[0]}` }, signal: AbortSignal.timeout(20000),
+        });
+        const n = res.ok ? ((await res.json()).data ?? []).length : 0;
+        reach = res.ok ? `✅ جواب داد — ${n} مدل` : `⚠️ ${res.status}`;
+      } catch (err) {
+        reach = `⚠️ نشد وصل شد: ${esc(String(err.cause?.code ?? err.message).slice(0, 40))}`;
+      }
+      await tg.send(chatId, [`🔌 <b>${esc(name)}</b> ثبت شد · ${list.length} کلید`, reach, '',
+        `<i>بدون ری‌استارت. حالا مثلاً <code>/model structure something@${esc(name)}</code></i>`].join('\n'));
+      // Delete the message: it has the keys in it, and Telegram keeps history.
+      await tg.deleteMessage(chatId, msg.message_id).catch(() => {});
+      return true;
+    }
+
+    if (verb === 'rm' || verb === 'remove') {
+      if (!name) return (await tg.send(chatId, 'کدام؟'), true);
+      const gone = store.removeProvider(name);
+      config.providers.delete(name);
+      await tg.send(chatId, gone
+        ? `🔌 ${esc(name)} حذف شد.\n<i>اگر مدلی هنوز <code>@${esc(name)}</code> دارد، آن حلقه رد می‌شود.</i>`
+        : `چیزی به اسم ${esc(name)} نبود.`);
+      return true;
+    }
+
+    await tg.send(chatId, 'فقط <code>add</code> یا <code>rm</code>.');
+    return true;
+  }
+
   if (text.startsWith('/backup')) {
     // The file holds every principal's captures, documents and conversations, so this
     // is the owner's alone — a member downloading it would be reading everyone's work.
@@ -880,7 +957,10 @@ async function handleCommand(chatId, principalId, text, isOwner) {
       await tg.sendDocument(chatId, fs.readFileSync(target), `asc-${stamp}.db`,
         `💾 <b>پشتیبان</b> · ${mb.toFixed(1)} مگابایت\n` +
         `<i>همه‌چیز: ثبت‌ها، پرونده‌ها، اسناد، بردارها، ادعاها. ` +
-        `روی سرور تازه، این را در <code>data/asc.db</code> بگذار.</i>`);
+        `روی سرور تازه، این را در <code>data/asc.db</code> بگذار.</i>` +
+        (store.listProviders().length
+          ? '\n\n⚠️ <b>کلیدهای API هم داخلش هستند.</b> این فایل را جایی نفرست.'
+          : ''));
       await tg.edit(chatId, status.message_id, `💾 پشتیبان فرستاده شد · ${mb.toFixed(1)} مگابایت`);
     } catch (err) {
       await tg.edit(chatId, status.message_id, `❌ ${esc(String(err.message ?? err))}`);

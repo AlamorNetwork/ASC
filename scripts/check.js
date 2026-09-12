@@ -249,6 +249,41 @@ await check('the suite never writes to the real database', () => {
   return path.basename(config.dbPath);
 });
 
+await check('a provider can be added without touching a file', async () => {
+  const { planFor } = await import('../src/providers.js');
+
+  store.upsertProvider({ name: 'checkprov', base: 'https://example.invalid/v1/', keys: ['k1', 'k2'] });
+  store.loadProvidersIntoConfig();
+
+  // Usable immediately, because the point is not restarting to add one.
+  const plan = planFor('some-model@checkprov', config.providers);
+  if (plan.length !== 1) throw new Error('a stored provider was not reachable by name');
+  if (plan[0].provider.keys.length !== 2) throw new Error('both keys did not survive');
+  if (plan[0].provider.base.endsWith('/')) throw new Error('a trailing slash was kept, which doubles the one in the path');
+
+  // Keys are credentials to present, not passwords to compare, so they are stored as
+  // they are. What that costs is that /sql must not be able to read this table.
+  for (const sql of ['SELECT * FROM providers', 'select api_keys from Providers limit 1']) {
+    try {
+      store.readOnlyQuery(sql);
+      throw new Error(`/sql read the credentials table: ${sql}`);
+    } catch (err) {
+      if (!/providers/.test(err.message)) throw err;
+    }
+  }
+  // And that the rest of /sql still works.
+  if (!Array.isArray(store.readOnlyQuery('SELECT count(*) c FROM dossiers'))) {
+    throw new Error('blocking one table broke the rest');
+  }
+
+  store.removeProvider('checkprov');
+  config.providers.delete('checkprov');
+  if (planFor('some-model@checkprov', config.providers).length) {
+    throw new Error('a removed provider was still resolvable');
+  }
+  return 'added, resolvable at once, unreadable from /sql, removed';
+});
+
 await check('every role points at a model the endpoint actually has', async () => {
   // A role whose chain resolves to nothing does not announce itself. It falls back to a
   // built-in default, that default is not on this endpoint either, and the feature is

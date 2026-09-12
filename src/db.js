@@ -202,6 +202,20 @@ CREATE TABLE IF NOT EXISTS investigations (
 );
 CREATE INDEX IF NOT EXISTS investigations_dossier ON investigations(principal_id, dossier_id);
 
+-- Model providers, so adding one does not mean editing a file and restarting.
+--
+-- The keys live here in plain text, and they have to: they are credentials to present,
+-- not passwords to compare, so there is nothing to hash. What that costs is handled
+-- where it leaks — /sql refuses this table, and /backup says the file now carries keys.
+CREATE TABLE IF NOT EXISTS providers (
+  name       TEXT PRIMARY KEY,     -- how a model id refers to it: model@name
+  base_url   TEXT NOT NULL,
+  api_keys   TEXT NOT NULL,        -- JSON array; several keys means several quotas
+  note       TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Predictions the system made before it knew the answer, and what happened.
 --
 -- The point is that a confidence figure computed from what has already been measured
@@ -281,6 +295,45 @@ export function deleteWhere(tables, where) {
   });
   run();
   return removed;
+}
+
+// -------------------------------------------------------------- providers
+
+export const listProviders = () =>
+  db.prepare(`SELECT * FROM providers ORDER BY name`).all().map((r) => ({
+    name: r.name,
+    base: r.base_url,
+    keys: (() => { try { return JSON.parse(r.api_keys); } catch { return []; } })(),
+    note: r.note,
+    updatedAt: r.updated_at,
+  }));
+
+export const upsertProvider = ({ name, base, keys, note = null }) => db.prepare(`
+  INSERT INTO providers (name, base_url, api_keys, note, created_at, updated_at)
+  VALUES (?,?,?,?,?,?)
+  ON CONFLICT(name) DO UPDATE SET
+    base_url = excluded.base_url, api_keys = excluded.api_keys,
+    note = excluded.note, updated_at = excluded.updated_at
+`).run(name, base.replace(/\/+$/, ''), JSON.stringify(keys), note, now(), now()).changes;
+
+export const removeProvider = (name) =>
+  db.prepare(`DELETE FROM providers WHERE name = ?`).run(name).changes;
+
+/**
+ * Folds the stored providers into the ones the environment declared, database winning.
+ *
+ * Called at startup and again after any change, so a provider added from the bot is
+ * usable on the next message rather than the next restart. config.providers is a Map
+ * that everything already reads, so updating it in place needs no other call site to
+ * change — and keeps config.js free of a dependency on this file, which would be a
+ * cycle.
+ */
+export function loadProvidersIntoConfig() {
+  for (const p of listProviders()) {
+    if (!p.base || !p.keys.length) continue;    // half a provider is worse than none
+    config.providers.set(p.name, { name: p.name, base: p.base, keys: p.keys });
+  }
+  return config.providers.size;
 }
 
 // ------------------------------------------------------------- predictions
@@ -745,6 +798,15 @@ export function readOnlyQuery(sql, limit = 20) {
   if (/\b(attach|pragma|insert|update|delete|drop|alter|create|replace)\b/i.test(trimmed)) {
     throw new Error('این دستور خواندنی نیست');
   }
+  // The providers table holds credentials in plain text, and this prints its results
+  // into a chat. Read-only is not the same as safe to read.
+  if (/\bproviders\b/i.test(trimmed)) {
+    throw new Error('جدول providers کلید دارد و از اینجا خوانده نمی‌شود. از /provider استفاده کن.');
+  }
   const capped = /\blimit\b/i.test(trimmed) ? trimmed : `${trimmed} LIMIT ${limit}`;
   return db.prepare(capped).all();
 }
+
+// Stored providers take effect at import, before anything asks for a model — so a
+// provider added from the bot works on the next message, not the next restart.
+loadProvidersIntoConfig();

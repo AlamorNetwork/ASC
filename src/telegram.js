@@ -43,6 +43,16 @@ export async function downloadFile(fileId) {
 }
 
 /**
+ * Removes a message.
+ *
+ * For the ones that carried a credential: an API key typed into a chat stays in that
+ * chat's history, on Telegram's servers and on every device signed in to it, long after
+ * it has been stored where it belongs.
+ */
+export const deleteMessage = (chatId, messageId) =>
+  call('deleteMessage', { chat_id: chatId, message_id: messageId });
+
+/**
  * Sends a file out of the machine.
  *
  * There was no way to do this, and it turned out to matter: when sshd stopped on the
