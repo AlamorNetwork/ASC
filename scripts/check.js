@@ -328,10 +328,16 @@ await check('every role points at a model the endpoint actually has', async () =
   const { diagnose } = await import('../src/doctor.js');
   const d = await diagnose();
 
-  if (d.broken.length) {
+  const lines = d.broken.map((r) =>
+    `${r.role}: ${r.detail} — ${(r.links ?? []).map((l) => l.model).join(', ') || r.spec}`);
+
+  // A refused key is worse than a broken role: every role looks fine and nothing runs.
+  for (const name of d.rejected) {
+    lines.unshift(`${name}: the key is refused — its model list is public, so that told us nothing`);
+  }
+
+  if (lines.length) {
     // Loud, because silence here reads as working software.
-    const lines = d.broken.map((r) =>
-      `${r.role}: ${r.detail} — ${(r.links ?? []).map((l) => l.model).join(', ') || r.spec}`);
     throw new Error(`\n        ${lines.join('\n        ')}`);
   }
 

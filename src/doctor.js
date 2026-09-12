@@ -25,16 +25,52 @@ const CONSEQUENCE = {
   rerank: 'آخرین مرحله‌ی دقتِ بازیابی خاموش است',
 };
 
+/**
+ * Whether the key is actually accepted, which a model list does not tell you.
+ *
+ * 9router serves /v1/models to anyone — no key, a wrong key, the literal placeholder
+ * text out of a setup script — and only refuses at /v1/chat/completions. So a report
+ * built on the model list alone says "374 models, all good" about an endpoint that will
+ * reject every real request.
+ *
+ * Asking for a model that cannot exist settles it without generating anything: a 401 is
+ * the key being refused, and any other refusal means the key got through and only the
+ * model was wrong. Nothing is billed either way.
+ */
+async function keyAccepted(provider, timeoutMs) {
+  try {
+    const res = await fetch(`${provider.base}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${provider.keys[0]}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: '__asc_auth_probe_not_a_model__',
+        messages: [{ role: 'user', content: '.' }],
+        max_tokens: 1,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, why: `HTTP ${res.status}` };
+    return { ok: true, why: null };
+  } catch {
+    return { ok: null, why: 'unreachable' };     // says nothing either way
+  }
+}
+
 async function catalogueFor(provider, timeoutMs) {
   try {
     const res = await fetch(`${provider.base}/models`, {
       headers: { Authorization: `Bearer ${provider.keys[0]}` },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return { ids: null, why: `HTTP ${res.status}` };
-    return { ids: new Set(((await res.json()).data ?? []).map((m) => m.id)), why: null };
+    if (!res.ok) return { ids: null, why: `HTTP ${res.status}`, key: null };
+    const ids = new Set(((await res.json()).data ?? []).map((m) => m.id));
+    const key = await keyAccepted(provider, timeoutMs);
+    return { ids, why: null, key };
   } catch (err) {
-    return { ids: null, why: String(err.cause?.code ?? err.name) };
+    return { ids: null, why: String(err.cause?.code ?? err.name), key: null };
   }
 }
 
@@ -86,8 +122,11 @@ export async function diagnose({ timeoutMs = 20000 } = {}) {
       base: config.providers.get(name)?.base ?? '',
       models: v.ids ? v.ids.size : null,
       why: v.why,
+      // false means the key was refused: the catalogue reads fine and nothing will run.
+      keyOk: v.key?.ok ?? null,
     })),
     broken: roles.filter((r) => r.state === 'broken'),
+    rejected: [...seen.entries()].filter(([, v]) => v.key?.ok === false).map(([name]) => name),
   };
 }
 

@@ -866,9 +866,15 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
 
       const L = ['🩺 <b>وضعیت</b>', ''];
       for (const e of d.endpoints) {
-        L.push(e.models !== null
-          ? `✅ <b>${esc(e.name)}</b> — ${e.models} مدل`
-          : `❌ <b>${esc(e.name)}</b> — جواب نداد (${esc(e.why ?? '?')})`);
+        if (e.models === null) {
+          L.push(`❌ <b>${esc(e.name)}</b> — جواب نداد (${esc(e.why ?? '?')})`);
+        } else if (e.keyOk === false) {
+          // The catalogue reading fine says nothing: some endpoints serve it to anyone.
+          L.push(`🔑 <b>${esc(e.name)}</b> — ${e.models} مدل، ولی <b>کلید رد شد</b>`,
+            '   <i>فهرست مدل‌ها بدون کلید هم خوانده می‌شود؛ هیچ درخواست واقعی کار نمی‌کند.</i>');
+        } else {
+          L.push(`✅ <b>${esc(e.name)}</b> — ${e.models} مدل${e.keyOk ? ' · کلید پذیرفته شد' : ''}`);
+        }
       }
       L.push('');
 
