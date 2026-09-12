@@ -69,15 +69,20 @@ async function catalogueFor(provider, timeoutMs) {
     const models = (await res.json()).data ?? [];
     const ids = new Set(models.map((m) => m.id));
 
-    // Which ones can hear. capture has to take a voice note, and a suggestion that
-    // cannot is worse than none — it looks right and fails on the first use. Providers
-    // report this differently, or not at all.
-    const audio = new Set(models.filter((m) =>
-      m.capabilities?.audioInput === true
-      || (m.architecture?.input_modalities ?? []).includes('audio')).map((m) => m.id));
+    // What each one can be given. capture has to take a voice note and a scanned page,
+    // and a suggestion that can do neither is worse than none — it looks right and fails
+    // on first use. Three providers, three ways of saying it, and kiraai's `input_types`
+    // is the one this missed: it made every kira suggestion a guess.
+    const takes = (m, kind) =>
+      m.capabilities?.[kind === 'audio' ? 'audioInput' : 'vision'] === true
+      || (m.architecture?.input_modalities ?? []).includes(kind)
+      || (m.input_types ?? []).includes(kind);
+
+    const audio = new Set(models.filter((m) => takes(m, 'audio')).map((m) => m.id));
+    const image = new Set(models.filter((m) => takes(m, 'image')).map((m) => m.id));
 
     const key = await keyAccepted(provider, timeoutMs);
-    return { ids, audio, why: null, key };
+    return { ids, audio, image, why: null, key };
   } catch (err) {
     return { ids: null, why: String(err.cause?.code ?? err.name), key: null };
   }
@@ -128,10 +133,10 @@ export async function diagnose({ timeoutMs = 20000 } = {}) {
   // to type. The catalogues are already in hand; not using them made the report a
   // list of absences.
   const catalogues = new Map([...seen.entries()].map(([name, v]) => [name, v.ids]));
-  const audible = new Map([...seen.entries()].map(([name, v]) => [name, v.audio]));
+  const modality = new Map([...seen.entries()].map(([name, v]) => [name, { audio: v.audio, image: v.image }]));
   for (const r of roles) {
     if (r.state !== 'broken') continue;
-    r.suggestion = suggestionFor(r.role, catalogues, (r.links ?? []).map((l) => l.model), audible);
+    r.suggestion = suggestionFor(r.role, catalogues, (r.links ?? []).map((l) => l.model), modality);
     // Changing which model makes the vectors is not a like-for-like swap, and the
     // report should not offer one as though it were.
     r.warnsRebuild = r.role === 'embed'
@@ -161,14 +166,21 @@ export const consequenceOf = (role) => CONSEQUENCE[role] ?? '';
  * A model id that IS on some endpoint and looks like what this role needs, so the
  * report can end with something to type rather than only with what is wrong.
  */
-export function suggestionFor(role, catalogues, tried = [], audible = new Map()) {
-  // capture is handed a voice note. A model that cannot take audio is not a candidate,
-  // however well its name matches — it would look correct and fail on first use. Only
-  // applied where the provider actually says; silence is not taken as "no".
-  const needsEars = role === 'capture' || role === 'transcribe';
-  const deaf = (name, id) => {
-    const known = audible.get(name);
-    return needsEars && known && known.size > 0 && !known.has(id);
+export function suggestionFor(role, catalogues, tried = [], modality = new Map()) {
+  // capture is handed both a voice note and a scanned page, so it needs ears and eyes.
+  // A model with neither is not a weaker candidate, it is a wrong one. Only applied
+  // where the provider actually says: silence is not taken as "no".
+  const needs = role === 'capture' ? ['audio', 'image']
+    : role === 'transcribe' ? ['audio']
+      : [];
+
+  const unfit = (name, id) => {
+    const known = modality.get(name);
+    if (!known) return false;
+    return needs.some((kind) => {
+      const set = known[kind];
+      return set && set.size > 0 && !set.has(id);
+    });
   };
 
   // Almost always the right answer, and always the safest: the very model that was
@@ -182,7 +194,7 @@ export function suggestionFor(role, catalogues, tried = [], audible = new Map())
     for (const want of tried) {
       for (const id of ids) {
         if (id !== want && !id.endsWith(`/${want}`)) continue;
-        if (deaf(name, id)) continue;
+        if (unfit(name, id)) continue;
         sameModel.push(`${id}${name === 'default' ? '' : `@${name}`}`);
       }
     }
@@ -202,13 +214,19 @@ export function suggestionFor(role, catalogues, tried = [], audible = new Map())
   }[role];
   if (!rules) return null;
 
+  // Where the provider says what a model accepts, that is the requirement and the name
+  // is only a tiebreaker. Matching on the name alone ruled out ox-alpha — which takes
+  // text, image, pdf, audio and video — because it is not called "flash" or "gemini".
+  const knowsModality = needs.length
+    && [...modality.values()].some((m) => needs.every((k) => m?.[k]?.size > 0));
+
   const out = [];
   for (const [name, ids] of catalogues) {
     if (!ids) continue;
     for (const id of ids) {
-      if (!rules.want.test(id)) continue;
+      if (!knowsModality && !rules.want.test(id)) continue;
       if (rules.avoid?.test(id)) continue;
-      if (deaf(name, id)) continue;
+      if (unfit(name, id)) continue;
       out.push(`${id}${name === 'default' ? '' : `@${name}`}`);
       if (out.length >= 3) return out;
     }

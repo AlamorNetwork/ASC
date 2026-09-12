@@ -1194,6 +1194,38 @@ await check('spending is proposed, never started by the router alone', async () 
   return 'research and deep both go through a button';
 });
 
+await check('capture is only offered a model that can hear and see', async () => {
+  const { suggestionFor } = await import('../src/doctor.js');
+
+  // kiraai's real catalogue, and the shape that caught this out: a model that generates
+  // images, one that generates speech, a free one that reads images but has no ears, and
+  // one that takes everything. Only the last can serve capture, which is handed both a
+  // voice note and a scanned page.
+  const ids = new Set(['qwen3.8-flash-free', 'ox-alpha', 'glm-5.3-free', 'kira-2.0-image', 'kira-2.0-flash-tts']);
+  const catalogues = new Map([['kira', ids]]);
+  const modality = new Map([['kira', {
+    audio: new Set(['ox-alpha']),
+    image: new Set(['qwen3.8-flash-free', 'ox-alpha', 'kira-2.0-image']),
+  }]]);
+
+  const capture = suggestionFor('capture', catalogues, ['gemini-x'], modality);
+  if (!capture?.includes('ox-alpha@kira')) throw new Error(`capture got ${capture}`);
+  if (capture.some((s) => s.includes('qwen3.8-flash-free'))) {
+    throw new Error('a model with no ears was offered for capture');
+  }
+  // Generating images is the opposite of reading them, and tts the opposite of hearing.
+  if (capture.some((s) => /-image|tts/.test(s))) throw new Error('a generator was offered as a reader');
+
+  // The name heuristic must not be what decides it: ox-alpha is not called flash or
+  // gemini, and matching on the name alone ruled it out.
+  if (!/ox-alpha/.test(capture[0])) throw new Error('the name pattern still overrides what the provider reports');
+
+  // A text-only role is unaffected by any of this.
+  const structure = suggestionFor('structure', catalogues, ['x'], modality);
+  if (!structure?.length) throw new Error('a text role got nothing');
+  return `capture → ${capture[0]}, generators excluded`;
+});
+
 await check('a run in progress can be held, and only that run', async () => {
   // Deep investigation could already be stopped. A research round and a multi-hop search
   // could not — once begun they ran to the end, so a search going after the wrong
