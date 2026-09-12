@@ -154,15 +154,35 @@ say "models"
 # elsewhere to stay comparable with — embeddings are only meaningful against others from
 # the same model at the same precision. Starting from an empty index there is nothing to
 # match, so the smaller file wins, and on a 2GB machine that is the whole difference.
+# The architecture tag is the first thing llama.cpp reads and the one that decides
+# whether it will load the file at all. A multilingual-e5-large GGUF converted as 'xlmr'
+# downloaded and installed perfectly and then failed every start with "unknown model
+# architecture", 344 restarts deep, looking for all the world like a memory problem.
+# GGUF keeps that field in the first few hundred bytes, so it costs nothing to look.
+arch_ok() {
+  local file="$1"
+  head -c 4096 "$file" | grep -aq 'bert' && return 0
+  echo "  ✖ $(basename "$file") is not an architecture this llama.cpp build reads:"
+  head -c 4096 "$file" | grep -ao 'general\.architecture.\{0,20\}' | head -1 | sed 's/^/      /'
+  return 1
+}
+
 grab() {
   local file="$1" url="$2"
+  if [ -f "$DIR/models/$file" ]; then
+    arch_ok "$DIR/models/$file" || { echo "  removing it"; rm -f "$DIR/models/$file"; }
+  fi
   if [ -f "$DIR/models/$file" ]; then echo "  have $file"; return; fi
   echo "  downloading $file"
   curl -fL --progress-bar "$url" -o "$DIR/models/$file.part"
+  arch_ok "$DIR/models/$file.part" || { rm -f "$DIR/models/$file.part"; exit 1; }
   mv "$DIR/models/$file.part" "$DIR/models/$file"
 }
-grab multilingual-e5-large-q8_0.gguf \
-  "https://huggingface.co/cstr/multilingual-e5-large-GGUF/resolve/main/multilingual-e5-large-q8_0.gguf"
+
+# bge-m3, converted by the llama.cpp project itself. Same 1024 dimensions as e5-large,
+# multilingual, and it loads — which the e5 conversions available as GGUF do not.
+grab bge-m3-q8_0.gguf \
+  "https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF/resolve/main/bge-m3-q8_0.gguf"
 if [ "$WANT_RERANK" = "1" ]; then
   grab bge-reranker-v2-m3-Q8_0.gguf \
     "https://huggingface.co/gpustack/bge-reranker-v2-m3-GGUF/resolve/main/bge-reranker-v2-m3-Q8_0.gguf"
@@ -198,8 +218,9 @@ UNIT
 }
 
 unit local-embed "$DIR/bin/llama-server --host 127.0.0.1 --port $EMBED_PORT \
-  -m $DIR/models/multilingual-e5-large-q8_0.gguf --embedding --pooling mean \
-  -c 512 -np 2 --threads $(nproc) --alias intfloat/multilingual-e5-large" \n  "$(ceiling "$(du -m "$DIR/models/multilingual-e5-large-q8_0.gguf" | cut -f1)")"
+  -m $DIR/models/bge-m3-q8_0.gguf --embedding --pooling mean \
+  -c 512 -np 2 --threads $(nproc) --alias bge-m3" \
+  "$(ceiling "$(du -m "$DIR/models/bge-m3-q8_0.gguf" | cut -f1)")"
 
 SERVICES="local-embed"
 if [ "$WANT_RERANK" = "1" ]; then
@@ -207,7 +228,8 @@ if [ "$WANT_RERANK" = "1" ]; then
   # to spare, and the context is the part that grows with memory.
   unit local-rerank "$DIR/bin/llama-server --host 127.0.0.1 --port $RERANK_PORT \
     -m $DIR/models/bge-reranker-v2-m3-Q8_0.gguf --reranking \
-    -c 1024 --threads $(nproc) --alias bge-reranker-v2-m3" \n    "$(ceiling "$(du -m "$DIR/models/bge-reranker-v2-m3-Q8_0.gguf" | cut -f1)")"
+    -c 1024 --threads $(nproc) --alias bge-reranker-v2-m3" \
+    "$(ceiling "$(du -m "$DIR/models/bge-reranker-v2-m3-Q8_0.gguf" | cut -f1)")"
   SERVICES="$SERVICES local-rerank"
 else
   systemctl disable --now local-rerank >/dev/null 2>&1 || true
@@ -251,10 +273,10 @@ done
 say "does it work"
 EMB=$(curl -sS -m 30 -X POST "http://127.0.0.1:$EMBED_PORT/v1/embeddings" \
   -H 'Content-Type: application/json' \
-  -d '{"model":"intfloat/multilingual-e5-large","input":["آیین میترائیسم چه بود؟"]}' 2>/dev/null || echo '')
+  -d '{"model":"bge-m3","input":["آیین میترائیسم چه بود؟"]}' 2>/dev/null || echo '')
 DIMS=$(printf '%s' "$EMB" | grep -o '[-0-9.eE]\+' | wc -l)
 if printf '%s' "$EMB" | grep -q '"embedding"'; then
-  echo "  ✅ embeddings answered (~$DIMS numbers; e5-large is 1024 per vector)"
+  echo "  ✅ embeddings answered (~$DIMS numbers; bge-m3 is 1024 per vector)"
 elif printf '%s' "$EMB" | grep -q 'Loading model'; then
   # Not a failure, just not finished. Saying so beats printing an error for something
   # that will be working in a minute.
@@ -288,7 +310,7 @@ $(say "wiring it into ASC")
   In the bot — the key is ignored, these have no authentication:
 
       /provider add localembed http://127.0.0.1:$EMBED_PORT/v1 local
-      /model embed intfloat/multilingual-e5-large@localembed
+      /model embed bge-m3@localembed
 $( [ "$WANT_RERANK" = "1" ] && cat <<INNER
 
       /provider add localrerank http://127.0.0.1:$RERANK_PORT/v1 local
