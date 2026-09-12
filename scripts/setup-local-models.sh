@@ -189,8 +189,37 @@ fi
 systemctl daemon-reload
 # shellcheck disable=SC2086
 systemctl enable --now $SERVICES >/dev/null
-echo "  started ($SERVICES); giving them a moment to load"
-sleep 12
+echo "  started ($SERVICES)"
+
+# Wait for it rather than guess. A 573MB model read off disk on a shared CPU takes
+# longer than any fixed sleep is willing to be, and llama-server answers 503
+# "Loading model" until it is ready — which reads exactly like a failure if you stop
+# asking too early.
+wait_ready() {
+  local name="$1" port="$2" waited=0
+  printf '  %s: loading' "$name"
+  while [ "$waited" -lt 300 ]; do
+    if curl -fsS -m 3 "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
+      printf ' ready after %ss\n' "$waited"; return 0
+    fi
+    # A process that died will never become ready, so stop waiting for it.
+    if ! systemctl is-active --quiet "$name"; then
+      printf ' the service stopped\n'
+      journalctl -u "$name" -n 12 --no-pager | sed 's/^/      /'
+      return 1
+    fi
+    sleep 5; waited=$((waited + 5)); printf '.'
+  done
+  printf ' still not ready after %ss\n' "$waited"
+  return 1
+}
+
+for svc in $SERVICES; do
+  case "$svc" in
+    local-embed)  wait_ready local-embed "$EMBED_PORT" || true ;;
+    local-rerank) wait_ready local-rerank "$RERANK_PORT" || true ;;
+  esac
+done
 
 say "does it work"
 EMB=$(curl -sS -m 30 -X POST "http://127.0.0.1:$EMBED_PORT/v1/embeddings" \
@@ -199,6 +228,11 @@ EMB=$(curl -sS -m 30 -X POST "http://127.0.0.1:$EMBED_PORT/v1/embeddings" \
 DIMS=$(printf '%s' "$EMB" | grep -o '[-0-9.eE]\+' | wc -l)
 if printf '%s' "$EMB" | grep -q '"embedding"'; then
   echo "  ✅ embeddings answered (~$DIMS numbers; e5-large is 1024 per vector)"
+elif printf '%s' "$EMB" | grep -q 'Loading model'; then
+  # Not a failure, just not finished. Saying so beats printing an error for something
+  # that will be working in a minute.
+  echo "  ⏳ still loading the model. Give it a moment, then:"
+  echo "     curl -s localhost:$EMBED_PORT/health"
 else
   echo "  ✖ embeddings: $(printf '%s' "$EMB" | head -c 160)"
   echo "    journalctl -u local-embed -n 40"
