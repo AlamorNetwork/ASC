@@ -17,6 +17,7 @@ import { modelFor } from './settings.js';
 import { investigate } from './investigate.js';
 import { runResearch } from './research.js';
 import { normalise } from './verify.js';
+import { isWanted } from './cancel.js';
 import { assessEvidence, predictYield, worthSpending, predict, observe } from './metacognition.js';
 import * as store from './db.js';
 
@@ -105,7 +106,7 @@ export async function deepInvestigate({
   const ceiling = ceilingUsd === null ? null : ceilingUsd + (prior?.cost_usd ?? 0);
   const overCeiling = () => ceiling !== null && costUsd >= ceiling;
   const minutes = () => (Date.now() - startedAt) / 60000;
-  const asked = () => id !== null && store.stopRequested(id);
+  const asked = () => (id !== null && store.stopRequested(id)) || isWanted(principalId);
 
   const save = (state, why) => {
     if (id === null) return;
@@ -160,6 +161,9 @@ export async function deepInvestigate({
       const found = await search({
         principalId, dossierId, question: lead, maxHops: 3,
         onStep: (s) => onNote?.({ round, ...s }),
+        // Not from inside: throwing out of a hop would unwind past the save below and
+        // lose the frontier, which is the one thing a deep run must not lose.
+        cancellable: false,
       });
       costToman += found.costToman ?? 0;
       costUsd += found.costUsd ?? 0;

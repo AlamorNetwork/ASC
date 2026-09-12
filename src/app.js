@@ -1468,6 +1468,12 @@ async function handleUpdate(update) {
       const principalId = String(chatId);
       const isOwner = access === 'owner';
 
+      // Anything the user asks for clears a stop left over from before — except a stop
+      // itself. Without this a single press of the button poisoned every later search:
+      // it died at its first hop, forever, and the bot appeared to do nothing at all.
+      const isStopRequest = cb && /^(stop|deepstop)\b/.test(String(cb.data));
+      if (!isStopRequest) cancel.newInstruction(principalId);
+
       if (cb) {
         // Menu callbacks are `m:<screen>[:<arg>]` and all render in place.
         if (String(cb.data).startsWith('m:')) {

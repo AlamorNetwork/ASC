@@ -1226,7 +1226,59 @@ await check('a run in progress can be held, and only that run', async () => {
   // A stop with nothing running reports nothing running, rather than arming a trap for
   // whatever is asked for next.
   if (c.whatIsRunning('u3') !== null) throw new Error('something was reported as running');
-  return `stopped at «${stopped.where}» after ${steps} steps, cleared, scoped`;
+
+  // The bug this cost us: the flag was cleared only by underway(), deep runs did not use
+  // it, and one press of the button left a stop that killed every later search at its
+  // first hop. The bot appeared to do nothing at all. A new instruction must clear it.
+  c.request('u4');
+  if (!c.isWanted('u4')) throw new Error('the stop did not take');
+  c.newInstruction('u4');
+  if (c.isWanted('u4')) throw new Error('a stale stop survived a new instruction — this is the one that broke the bot');
+
+  // And the update loop has to actually call that on anything which is not a stop.
+  const src = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  if (!/cancel\.newInstruction\(principalId\)/.test(src)) {
+    throw new Error('nothing clears a stale stop when a new message arrives');
+  }
+  if (!/isStopRequest/.test(src)) throw new Error('the stop button itself would be cleared before it applied');
+
+  return `stopped at «${stopped.where}» after ${steps} steps, cleared, scoped, and a new request resets it`;
+});
+
+await check('a deep run stops without losing where it got to', async () => {
+  // The generic checkpoint threw from inside a hop, which unwound past deep's own save
+  // and lost the frontier — the one thing a deep run must not lose. It honours the stop
+  // at its own round boundary instead, where it can write down where it was.
+  const inv = fs.readFileSync(new URL('../src/investigate.js', import.meta.url), 'utf8');
+  if (!/cancellable/.test(inv)) throw new Error('investigate cannot be told not to throw');
+
+  const deep = fs.readFileSync(new URL('../src/deep.js', import.meta.url), 'utf8');
+  if (!/cancellable: false/.test(deep)) throw new Error('a deep run still throws out of a hop');
+  if (!/isWanted\(principalId\)/.test(deep)) throw new Error('a deep run ignores the general stop');
+
+  // And it still saves: asked mid-run, it pauses with its leads rather than failing.
+  const { deepInvestigate } = await import('../src/deep.js');
+  const c = await import('../src/cancel.js');
+  const p = `deepstop-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId: p, topic: 'توقف عمومی' });
+
+  let searches = 0;
+  const out = await deepInvestigate({
+    principalId: p, dossierId, question: 'سؤال', ceilingUsd: null,
+    search: async () => {
+      if (++searches === 1) c.request(p);        // the button, during the first round
+      return { passages: [{ id: `c${searches}`, text: 'x' }], trail: [{ lead: 'سرنخ' }], costToman: 0, costUsd: 0 };
+    },
+    web: async () => ({ output: { found: [{ text: 'y' }] }, costToman: 0, costUsd: 0 }),
+    assess: async () => ({ data: { next_leads: ['بعدی'] }, usage: {} }),
+  });
+  c.clear(p);
+
+  if (out.stopped !== 'stopped') throw new Error(`stopped as "${out.stopped}", not a stop`);
+  if (!out.canResume) throw new Error('a stopped run was not resumable');
+  const saved = store.getInvestigation(p, out.runId);
+  if (saved.state !== 'paused') throw new Error(`saved as ${saved.state}`);
+  return 'paused with its frontier, not thrown away';
 });
 
 await check('you can just talk to it, with nothing open', async () => {

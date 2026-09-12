@@ -59,6 +59,10 @@ export async function investigate({
   // The planner is injectable so the loop can be exercised without a model, and so a
   // different search strategy can be dropped in later.
   ask = chatJson,
+  // A deep run turns this off. Throwing out of here would unwind past the round loop
+  // and lose the frontier it had saved — deep stops at its own boundary instead, where
+  // it can write down where it got to.
+  cancellable = true,
 }) {
   const seen = new Map();
   const trail = [];
@@ -90,7 +94,7 @@ export async function investigate({
   for (let hop = 1; hop <= maxHops; hop++) {
     // Between hops is where stopping is worth anything: a call already in flight is
     // already paid for, but the next hop is not.
-    checkpoint(principalId, `گام ${hop}`);
+    if (cancellable) checkpoint(principalId, `گام ${hop}`);
     await onStep?.({ kind: 'searching', hop, queries });
 
     const before = seen.size;

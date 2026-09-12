@@ -34,6 +34,23 @@ export const isWanted = (principalId) => wanted.has(String(principalId));
 export const clear = (principalId) => wanted.delete(String(principalId));
 
 /**
+ * A new instruction cancels an old stop.
+ *
+ * This is the invariant the first version was missing, and it took the bot down: the
+ * flag was only cleared by `underway`, deep runs did not use it, so one press of the
+ * stop button left a flag that killed every later search at its first hop. From outside
+ * the bot simply stopped doing anything.
+ *
+ * A stop is about the job that was running when it was pressed. The moment the user
+ * asks for something else, it is spent.
+ */
+export function newInstruction(principalId) {
+  const had = wanted.delete(String(principalId));
+  if (had) console.warn(`[cancel] a stale stop for ${principalId} was cleared by a new request`);
+  return had;
+}
+
+/**
  * Wraps a job so it is named while it runs and cleared afterwards, however it ends.
  * The name is what the stop button reports back.
  */
