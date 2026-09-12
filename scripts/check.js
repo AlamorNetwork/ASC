@@ -1194,6 +1194,20 @@ await check('spending is proposed, never started by the router alone', async () 
   return 'research and deep both go through a button';
 });
 
+await check('an :online model is not reported missing', async () => {
+  // Web search is a runtime switch on a model, not a separate catalogue entry:
+  // openai/gpt-5.4-mini:online resolves, while the catalogue only lists the bare id.
+  // Checking the literal string reported the best measured research model as absent —
+  // a false alarm on the one role where acting on it costs the most.
+  const { diagnose } = await import('../src/doctor.js');
+  const src = fs.readFileSync(new URL('../src/doctor.js', import.meta.url), 'utf8');
+  if (!/replace\(\/:online\$\/, ''\)/.test(src)) {
+    throw new Error('the :online suffix is checked literally against the catalogue');
+  }
+  void diagnose;
+  return 'the bare id is what gets looked up';
+});
+
 await check('capture is only offered a model that can hear and see', async () => {
   const { suggestionFor } = await import('../src/doctor.js');
 

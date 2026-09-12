@@ -117,7 +117,11 @@ export async function diagnose({ timeoutMs = 20000 } = {}) {
       const { ids } = await ask(provider);
       if (!ids) { links.push({ model, provider: provider.name, state: 'unknown' }); continue; }
       asked = true;
-      const here = ids.has(model);
+      // `:online` is a runtime switch that turns web search on for a model, not a
+      // separate entry in the catalogue. Checking the literal string would report a
+      // perfectly good research model as missing, which is a false alarm on the one
+      // role where being wrong is expensive.
+      const here = ids.has(model) || ids.has(model.replace(/:online$/, ''));
       links.push({ model, provider: provider.name, state: here ? 'present' : 'absent' });
       if (here && !working) working = { model, provider: provider.name };
     }
