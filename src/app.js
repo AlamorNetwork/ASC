@@ -1366,8 +1366,10 @@ export async function run() {
         await tg.typing(chatId);
         const buf = await tg.downloadFile(voice.file_id);
         keepLastVoice(principalId, buf);
-        const { capture, usage, route } = await captureFromAudio(buf);
-        await handleCapture(chatId, principalId, { ...capture, source: 'voice' }, usage, msg.message_id, route);
+        // Named apart from the imported route(): this one is which transcription path
+        // was taken, not which procedure the user asked for.
+        const { capture, usage, route: heardVia } = await captureFromAudio(buf);
+        await handleCapture(chatId, principalId, { ...capture, source: 'voice' }, usage, msg.message_id, heardVia);
         continue;
       }
 
