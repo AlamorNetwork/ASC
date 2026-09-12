@@ -1194,6 +1194,49 @@ await check('spending is proposed, never started by the router alone', async () 
   return 'research and deep both go through a button';
 });
 
+await check('a catalogue served in slices is read whole', async () => {
+  // OpenRouter's /models returns its chat models and nothing else; its embedding models
+  // and rerankers appear only when asked for by modality. Reading the default view and
+  // concluding the provider has none is a mistake I made in a recommendation and then
+  // wrote into doctor.js, where it told the user a working configuration was broken.
+  const src = fs.readFileSync(new URL('../src/doctor.js', import.meta.url), 'utf8');
+  for (const view of ['output_modalities=embeddings', 'output_modalities=rerank']) {
+    if (!src.includes(view)) throw new Error(`the ${view} view is never asked for`);
+  }
+
+  // A provider that slices its catalogue, and one that ignores the parameter entirely:
+  // both have to end up with every model they serve, and no duplicates.
+  const chat = [{ id: 'a-chat' }, { id: 'b-chat' }];
+  const embeds = [{ id: 'an-embed' }];
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    if (req.url.includes('embeddings')) return res.end(JSON.stringify({ data: embeds }));
+    if (req.url.includes('rerank')) return res.end(JSON.stringify({ data: [] }));
+    res.end(JSON.stringify({ data: chat }));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+
+  const { config: cfg } = await import('../src/config.js');
+  cfg.providers.set('sliced', { name: 'sliced', base: `http://127.0.0.1:${server.address().port}/v1`, keys: ['x'] });
+  const settings = await import('../src/settings.js');
+  const before = store.getSetting('model.embed');
+  try {
+    settings.setModel('embed', 'an-embed@sliced');
+    const { diagnose } = await import('../src/doctor.js');
+    const d = await diagnose({ timeoutMs: 5000 });
+    const embed = d.roles.find((r) => r.role === 'embed');
+    if (embed.state === 'broken') {
+      throw new Error('a model served only in a filtered view was reported as missing');
+    }
+  } finally {
+    if (before === null) store.clearSetting('model.embed');
+    else store.setSetting('model.embed', before);
+    cfg.providers.delete('sliced');
+    server.close();
+  }
+  return 'extra views merged, duplicates absorbed';
+});
+
 await check('an :online model is not reported missing', async () => {
   // Web search is a runtime switch on a model, not a separate catalogue entry:
   // openai/gpt-5.4-mini:online resolves, while the catalogue only lists the bare id.

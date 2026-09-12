@@ -59,14 +59,42 @@ async function keyAccepted(provider, timeoutMs) {
   }
 }
 
+/**
+ * Every model a provider serves, which is not always every model it lists.
+ *
+ * OpenRouter's /models returns its 445 chat models and nothing else; its 37 embedding
+ * models and 7 rerankers only appear when you ask for them by modality. Reading the
+ * default view and concluding "this provider has no embeddings" is a mistake I made in
+ * a recommendation and then wrote into this file, where it told the user their working
+ * configuration was broken.
+ *
+ * The extra views are asked for generically: a provider that ignores the parameter
+ * returns the same list again and the Set absorbs it, and one that rejects it is skipped.
+ */
+async function fetchModels(provider, timeoutMs, query = '') {
+  const res = await fetch(`${provider.base}/models${query}`, {
+    headers: { Authorization: `Bearer ${provider.keys[0]}` },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) return { ok: false, status: res.status, models: [] };
+  return { ok: true, models: (await res.json()).data ?? [] };
+}
+
 async function catalogueFor(provider, timeoutMs) {
   try {
-    const res = await fetch(`${provider.base}/models`, {
-      headers: { Authorization: `Bearer ${provider.keys[0]}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) return { ids: null, why: `HTTP ${res.status}`, key: null };
-    const models = (await res.json()).data ?? [];
+    const first = await fetchModels(provider, timeoutMs);
+    if (!first.ok) return { ids: null, why: `HTTP ${first.status}`, key: null };
+
+    const models = [...first.models];
+    const seenIds = new Set(models.map((m) => m.id));
+    for (const view of ['?output_modalities=embeddings', '?output_modalities=rerank']) {
+      try {
+        const more = await fetchModels(provider, timeoutMs, view);
+        if (!more.ok) continue;
+        for (const m of more.models) if (!seenIds.has(m.id)) { seenIds.add(m.id); models.push(m); }
+      } catch { /* this provider does not slice its catalogue; the first view is all there is */ }
+    }
+
     const ids = new Set(models.map((m) => m.id));
 
     // What each one can be given. capture has to take a voice note and a scanned page,
