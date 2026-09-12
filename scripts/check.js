@@ -173,6 +173,37 @@ await check('an exhausted key is set aside and the next one is used', async () =
   return '429 rests a minute, 401 a day, 400 blames neither, 402 blames the model first';
 });
 
+await check('the database can leave the machine by itself', async () => {
+  // When sshd stopped on the server the bot kept answering while the database sat on a
+  // disk nobody could reach. A snapshot has to be takeable from inside the process, and
+  // has to be a real database rather than a torn copy of a file being written to.
+  const { DatabaseSync } = await import('node:sqlite');
+  const target = path.join(path.dirname(config.dbPath), 'snapshot-check.db');
+
+  store.insertCapture({
+    principalId: 'snapshot-src', source: 'text', transcript: 'باید در پشتیبان باشد',
+    kind: 'note', raw: {}, costToman: 0,
+  });
+  const before = store.readOnlyQuery("SELECT count(*) c FROM captures WHERE principal_id = 'snapshot-src'")[0].c;
+
+  const size = store.snapshotTo(target);
+  if (!size) throw new Error('the snapshot was empty');
+
+  const copy = new DatabaseSync(target);
+  const after = copy.prepare("SELECT count(*) c FROM captures WHERE principal_id = 'snapshot-src'").get().c;
+  const tables = copy.prepare("SELECT count(*) c FROM sqlite_master WHERE type='table'").get().c;
+  copy.close();
+  fs.rmSync(target, { force: true });
+
+  if (after !== before) throw new Error(`snapshot has ${after} of ${before} rows`);
+  if (tables < 10) throw new Error(`snapshot has only ${tables} tables`);
+
+  // Taken twice in a row, since the second must not trip over the first one's file.
+  store.snapshotTo(target);
+  fs.rmSync(target, { force: true });
+  return `${tables} tables, ${(size / 1024).toFixed(0)} KB, repeatable`;
+});
+
 await check('the suite never writes to the real database', () => {
   // The guard that makes the separation stick. Without it, one static import creeping
   // back to the top of this file would silently point the whole suite at real data.

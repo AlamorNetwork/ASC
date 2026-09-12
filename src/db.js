@@ -249,6 +249,19 @@ CREATE TABLE IF NOT EXISTS dossier_links (
 `);
 
 /**
+ * A consistent copy of the whole database, written to `target`.
+ *
+ * Copying the file directly is not safe while the bot is running: with WAL, recent
+ * writes live in a sidecar file and a plain copy can land mid-transaction. VACUUM INTO
+ * takes a proper snapshot and compacts it on the way out.
+ */
+export function snapshotTo(target) {
+  fs.rmSync(target, { force: true });          // VACUUM INTO refuses an existing file
+  db.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+  return fs.statSync(target).size;
+}
+
+/**
  * Deletes matching rows across several tables, all or nothing.
  *
  * Used only by scripts/tidy.js. The `where` clause is written by that script, never by

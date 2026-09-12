@@ -858,6 +858,36 @@ async function handleCommand(chatId, principalId, text, isOwner) {
     return true;
   }
 
+  if (text.startsWith('/backup')) {
+    // The file holds every principal's captures, documents and conversations, so this
+    // is the owner's alone — a member downloading it would be reading everyone's work.
+    if (admit(chatId, msg.from) !== 'owner') {
+      await tg.send(chatId, 'فقط مالک بات می‌تواند نسخهٔ پشتیبان بگیرد.');
+      return true;
+    }
+    const status = await tg.send(chatId, '💾 در حال گرفتن نسخهٔ پشتیبان…');
+    try {
+      const target = path.join(config.root, 'data', 'backup.db');
+      const bytes = store.snapshotTo(target);
+      const mb = bytes / 1024 / 1024;
+      if (mb > 49) {
+        await tg.edit(chatId, status.message_id,
+          `❌ دیتابیس ${mb.toFixed(1)} مگابایت است و تلگرام تا ۵۰ مگابایت می‌پذیرد.\n` +
+          `<i>فایل روی سرور ساخته شد: <code>${esc(target)}</code></i>`);
+        return true;
+      }
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      await tg.sendDocument(chatId, fs.readFileSync(target), `asc-${stamp}.db`,
+        `💾 <b>پشتیبان</b> · ${mb.toFixed(1)} مگابایت\n` +
+        `<i>همه‌چیز: ثبت‌ها، پرونده‌ها، اسناد، بردارها، ادعاها. ` +
+        `روی سرور تازه، این را در <code>data/asc.db</code> بگذار.</i>`);
+      await tg.edit(chatId, status.message_id, `💾 پشتیبان فرستاده شد · ${mb.toFixed(1)} مگابایت`);
+    } catch (err) {
+      await tg.edit(chatId, status.message_id, `❌ ${esc(String(err.message ?? err))}`);
+    }
+    return true;
+  }
+
   if (text.startsWith('/calibration')) {
     // Whether the forecasts before each round were worth anything. If they were not,
     // the honest thing is for this screen to say so rather than to show a tidy number.

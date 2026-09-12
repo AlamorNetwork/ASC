@@ -42,6 +42,28 @@ export async function downloadFile(fileId) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+/**
+ * Sends a file out of the machine.
+ *
+ * There was no way to do this, and it turned out to matter: when sshd stopped on the
+ * server the bot kept answering while the database — every capture, document, vector and
+ * verified claim — sat on a disk nobody could reach. The one channel still open could
+ * talk but could not carry anything out.
+ *
+ * Telegram accepts up to 50 MB per document for a bot.
+ */
+export async function sendDocument(chatId, buffer, filename, caption) {
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('document', new Blob([buffer], { type: 'application/octet-stream' }), filename);
+  if (caption) { form.append('caption', caption); form.append('parse_mode', 'HTML'); }
+
+  const res = await fetch(`${API}/sendDocument`, { method: 'POST', body: form });
+  const json = await res.json();
+  if (!json.ok) throw new Error(`telegram sendDocument: ${json.description}`);
+  return json.result;
+}
+
 const CHUNK = 3900; // Telegram's limit is 4096; leave room for entities
 
 export async function send(chatId, text, { buttons, replyTo } = {}) {
