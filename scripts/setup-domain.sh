@@ -4,14 +4,19 @@
 #
 #   bash scripts/setup-domain.sh router.alamornetwork.ir you@example.com
 #
-# 9router listens on 127.0.0.1:20128 and stays there. This adds a reverse proxy in front
-# of it, so the thing facing the internet is a web server doing TLS rather than the
-# gateway itself.
+# 9router listens on 127.0.0.1:20128 and stays there. What this publishes is the
+# dashboard only — the part you need a browser for. The inference API is blocked at the
+# proxy and stays reachable only from the machine itself.
 #
-# Exposing it is defensible because its own endpoints are already authenticated:
-# /v1/chat/completions answers 401 without an API key, and every /api/ admin route
-# answers 401 Unauthorized. Only /v1/models is public, and that is a catalogue.
-# Set a strong API key in the dashboard before pointing anything at this.
+# That split is the point. /v1/ is where money is spent; nothing outside this server has
+# any reason to reach it, and ASC talks to 127.0.0.1:20128 directly. The dashboard does
+# need to be reachable, and it has its own password — the running instance reports
+# {"requireLogin":true,"authMode":"password"} — so a public login page is the only
+# surface, and a strong password is what stands on it.
+#
+# One consequence worth knowing: a dashboard feature that calls /v1/ from your browser
+# (testing a model, say) will not work over the domain, because that is exactly what is
+# blocked. Use the SSH tunnel for that.
 #
 # BEFORE RUNNING — Cloudflare:
 #   Let's Encrypt has to reach this machine on port 80 to prove you own the name. With
@@ -58,10 +63,13 @@ if systemctl is-active --quiet caddy 2>/dev/null; then
     cat >> "$CADDYFILE" <<EOF
 
 $DOMAIN {
-	reverse_proxy $UPSTREAM {
-		# Streamed completions arrive token by token; buffering them would hold the
-		# whole reply back until it finished.
-		flush_interval -1
+	# The dashboard, and nothing else. /v1/ is where spending happens and it has no
+	# business being reachable from outside this machine.
+	handle /v1/* {
+		respond "not exposed — use 127.0.0.1:20128 from the server" 403
+	}
+	handle {
+		reverse_proxy $UPSTREAM
 	}
 }
 EOF
@@ -79,6 +87,12 @@ server {
     listen 80;
     server_name $DOMAIN;
 
+    # The dashboard, and nothing else. /v1/ is where spending happens and it has no
+    # business being reachable from outside this machine — ASC reaches it on localhost.
+    location /v1/ {
+        return 403 "not exposed - use 127.0.0.1:20128 from the server\n";
+    }
+
     location / {
         proxy_pass http://$UPSTREAM;
         proxy_http_version 1.1;
@@ -87,18 +101,13 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
 
-        # Streaming: without these, a token-by-token reply is held until it completes.
+        # The dashboard streams logs, so buffering would make them arrive in lumps.
         proxy_buffering off;
-        proxy_cache off;
         proxy_set_header Connection '';
-        chunked_transfer_encoding off;
-
-        # A long investigation can sit on one request for minutes.
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
+        proxy_read_timeout 120s;
     }
 
-    client_max_body_size 64m;   # audio and documents go through here
+    client_max_body_size 16m;
 }
 EOF
   ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
@@ -116,20 +125,39 @@ fi
 
 say "trying it"
 sleep 2
-CODE=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$DOMAIN/v1/models" 2>/dev/null || echo 'failed')
-echo "  https://$DOMAIN/v1/models -> $CODE"
+LOGIN=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$DOMAIN/login" 2>/dev/null || echo 'failed')
+API=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$DOMAIN/v1/models" 2>/dev/null || echo 'failed')
+LOCAL=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "http://$UPSTREAM/v1/models" 2>/dev/null || echo 'failed')
+
+echo "  dashboard   https://$DOMAIN/login    -> $LOGIN   (want 200)"
+echo "  api, public https://$DOMAIN/v1/models -> $API   (want 403)"
+echo "  api, local  http://$UPSTREAM/v1/models -> $LOCAL   (want 200)"
+
+if [ "$LOGIN" = "200" ] && [ "$API" = "403" ] && [ "$LOCAL" = "200" ]; then
+  echo "
+  That is the shape you asked for: the settings page reachable, the spending
+  endpoint not, and the bot still able to use it from here."
+elif [ "$API" = "200" ]; then
+  echo "
+  ⚠ The API answered over the domain. It should not. Check the proxy config before
+  putting a key in it — right now anyone who finds the name can spend your balance."
+else
+  echo "
+  Not there yet. With Cloudflare's proxy on, this is expected from outside until the
+  SSL/TLS mode is Full (strict)."
+fi
 
 cat <<TEXT
 
-$( [ "$CODE" = "200" ] && echo "Working." || echo "Not answering yet. If Cloudflare's proxy is on, that is expected from outside; try again once it is set to Full (strict)." )
-
 Now, in order:
   1. Cloudflare → set the record back to proxied (orange), SSL/TLS mode Full (strict).
-  2. 9router dashboard → set a strong API key. The gateway is on the open internet now;
-     that key is the only thing between a stranger and your balance.
-  3. Point ASC at it, keeping a direct provider as the last link of every chain so the
-     bot survives this going down:
-       ROUTER_BASE_URL=https://$DOMAIN/v1
-       ROUTER_KEY=<the key from the dashboard>
+  2. Open https://$DOMAIN and set a strong dashboard password. That login page is on
+     the open internet; the password is the whole of what protects it.
+  3. Leave ASC pointing at localhost — it is on this machine, so it does not need the
+     domain and should not depend on it:
+       ROUTER_BASE_URL=http://127.0.0.1:20128/v1
+
+  Cloudflare can narrow it further if you want: Zero Trust → Access → a policy on
+  $DOMAIN limiting it to your own email. Then the login page is not public either.
 
 TEXT
