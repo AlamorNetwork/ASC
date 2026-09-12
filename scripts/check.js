@@ -1194,6 +1194,41 @@ await check('spending is proposed, never started by the router alone', async () 
   return 'research and deep both go through a button';
 });
 
+await check('a run in progress can be held, and only that run', async () => {
+  // Deep investigation could already be stopped. A research round and a multi-hop search
+  // could not — once begun they ran to the end, so a search going after the wrong
+  // subject had to be watched while it spent.
+  const c = await import('../src/cancel.js');
+
+  let steps = 0;
+  const job = async () => {
+    for (let h = 1; h <= 5; h++) {
+      c.checkpoint('u1', `گام ${h}`);
+      steps++;
+      if (h === 2) c.request('u1');    // the button, pressed mid-run
+    }
+  };
+
+  let stopped = null;
+  try { await c.underway('u1', 'تست', job); } catch (err) { stopped = err; }
+  if (stopped?.name !== 'Stopped') throw new Error('the run did not stop');
+  if (steps !== 2) throw new Error(`ran ${steps} steps; it should notice at the next checkpoint`);
+  if (!stopped.where) throw new Error('it did not say where it stopped');
+
+  // Cleared afterwards, or the next thing asked for would be cancelled before starting.
+  if (c.isWanted('u1')) throw new Error('the stop outlived its job');
+
+  // And one person's stop is not everyone's.
+  c.request('u1');
+  if (c.isWanted('u2')) throw new Error('a stop crossed between principals');
+  c.clear('u1');
+
+  // A stop with nothing running reports nothing running, rather than arming a trap for
+  // whatever is asked for next.
+  if (c.whatIsRunning('u3') !== null) throw new Error('something was reported as running');
+  return `stopped at «${stopped.where}» after ${steps} steps, cleared, scoped`;
+});
+
 await check('you can just talk to it, with nothing open', async () => {
   // "سلام خودتو معرفی کن" opened a research dossier into the user's own biography and
   // spent money on it, because with no dossier there was no conversation to have —

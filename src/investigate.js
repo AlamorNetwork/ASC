@@ -12,6 +12,7 @@
  */
 import { chatJson } from './llm.js';
 import { modelFor } from './settings.js';
+import { checkpoint } from './cancel.js';
 import { retrieve } from './chunks.js';
 import * as store from './db.js';
 
@@ -87,6 +88,9 @@ export async function investigate({
   if (!queries.length) queries = [question];
 
   for (let hop = 1; hop <= maxHops; hop++) {
+    // Between hops is where stopping is worth anything: a call already in flight is
+    // already paid for, but the next hop is not.
+    checkpoint(principalId, `گام ${hop}`);
     await onStep?.({ kind: 'searching', hop, queries });
 
     const before = seen.size;

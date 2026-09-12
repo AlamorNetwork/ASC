@@ -1,5 +1,6 @@
 import { chatJson } from './llm.js';
 import { verifyClaim } from './verify.js';
+import { isWanted } from './cancel.js';
 import { modelFor, budget } from './settings.js';
 import * as store from './db.js';
 
@@ -85,6 +86,12 @@ export async function runResearch({
     const verified = [];
     const found = [];
     for (const c of rawClaims) {
+      // Each of these opens a page on the internet. The gathering call is already paid
+      // for by now, but a dozen fetches after the user has said stop are not.
+      if (isWanted(principalId)) {
+        onProgress?.('نگه داشتم — آنچه تا اینجا بررسی شد نگه داشته می‌شود.');
+        break;
+      }
       const result = await verifyClaim({ sourceUrl: c.source_url, quote: c.quote });
       const row = {
         text: c.text ?? '',

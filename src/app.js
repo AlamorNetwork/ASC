@@ -13,6 +13,7 @@ import { relatedDossiers } from './chunks.js';
 import { startScheduler } from './scheduler.js';
 import * as menu from './menu.js';
 import { deepInvestigate } from './deep.js';
+import * as cancel from './cancel.js';
 import { route } from './router.js';
 import { calibration } from './metacognition.js';
 
@@ -456,8 +457,19 @@ async function offerADossier(chatId, principalId, text, msg) {
 
 /** A web round on an existing dossier, when its own documents did not hold the answer. */
 async function runWebResearch(chatId, principalId, dossierId, topic, question) {
-  const status = await tg.send(chatId, `🌐 <b>${esc(question.slice(0, 60))}</b>\n\nدر حال جست‌وجو در وب…`);
+  // The button is on the message from the start: research goes off after a subject
+  // immediately, so the moment you want to stop it is the moment it begins.
+  const status = await tg.send(chatId, `🌐 <b>${esc(question.slice(0, 60))}</b>\n\nدر حال جست‌وجو در وب…`,
+    { buttons: [[{ text: '⏹ نگه دار', callback_data: 'stop' }]] });
   try {
+    return await cancel.underway(principalId, `تحقیق «${topic}»`, () => webResearchBody(chatId, principalId, dossierId, topic, question, status));
+  } catch (err) {
+    await tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>\n\n❌ ${esc(String(err.message ?? err))}`, []);
+  }
+}
+
+async function webResearchBody(chatId, principalId, dossierId, topic, question, status) {
+  {
     const { output, costToman } = await runResearch({
       principalId, dossierId, topic, question,
       onProgress: (m) => tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>\n\n${esc(m)}`),
@@ -465,13 +477,12 @@ async function runWebResearch(chatId, principalId, dossierId, topic, question) {
         if (SECTION[name]) await tg.send(chatId, SECTION[name]({ topic, ...payload }));
       },
     });
-    await tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>`);
+    // The button goes once there is nothing left to stop.
+    await tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>`, []);
     if (!output.verified?.length) {
       await tg.send(chatId, '✅ <b>تأییدشده</b>\n\n<i>هیچ ادعایی تأیید نشد.</i>');
     }
     await tg.send(chatId, `💰 ${toman(costToman)} تومان · به پرونده #${dossierId} اضافه شد`);
-  } catch (err) {
-    await tg.edit(chatId, status.message_id, `🌐 ❌ ${esc(String(err.message ?? err))}`);
   }
 }
 
@@ -695,7 +706,10 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
     return;
   }
 
-  const placeholder = await tg.send(chatId, '…');
+  // A question over documents runs several hops, each a model call. The button is there
+  // from the start so a search going the wrong way can be ended before it finishes.
+  const placeholder = await tg.send(chatId, '…',
+    { buttons: [[{ text: '⏹ نگه دار', callback_data: 'stop' }]] });
   let lastEdit = 0;
   let lastShown = '';
 
@@ -712,7 +726,7 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
   };
 
   try {
-    const { text, usage, research } = await chat.reply({
+    const { text, usage, research } = await cancel.underway(principalId, 'جست‌وجو در اسناد', () => chat.reply({
       principalId, dossierId, userText,
       onStep: async (step) => {
         if (step.kind === 'searching') {
@@ -738,7 +752,7 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
         lastShown = soFar;
         tg.edit(chatId, placeholder.message_id, esc(soFar) + ' ▍');
       },
-    });
+    }));
 
     const total = (usage.costToman ?? 0) + (research?.costToman ?? 0);
     const tail = research?.hops
@@ -769,7 +783,11 @@ async function handleChatTurn(chatId, principalId, dossierId, userText) {
         { buttons: [[{ text: '🌐 تحقیق در وب', callback_data: `webresearch:${dossierId}` }]] });
     }
   } catch (err) {
-    await tg.edit(chatId, placeholder.message_id, `⚠️ ${esc(String(err.message ?? err))}`);
+    // Being stopped is not a failure — it was asked for, and it should not be dressed
+    // up as something going wrong.
+    await tg.edit(chatId, placeholder.message_id, err.name === 'Stopped'
+      ? `⏹ <i>نگه داشتم${err.where ? ` — سرِ ${esc(err.where)}` : ''}. آنچه پیدا شده بود در پرونده هست.</i>`
+      : `⚠️ ${esc(String(err.message ?? err))}`, []);
   }
 }
 
@@ -887,6 +905,15 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
     } catch (err) {
       await tg.send(chatId, `❌ ${esc(err.message)}`);
     }
+    return true;
+  }
+
+  if (text === '/stop' || text.startsWith('/stop')) {
+    const label = cancel.request(principalId);
+    await tg.send(chatId, label
+      ? `⏹ <b>${esc(label)}</b> را نگه می‌دارم.\n<i>آنچه تا اینجا شده نگه داشته می‌شود. ` +
+        'درخواستی که همین حالا در راه است پولش رفته — بعدی‌ها نه.</i>'
+      : 'چیزی در حال اجرا نیست.');
     return true;
   }
 
@@ -1488,6 +1515,16 @@ async function handleUpdate(update) {
           if (d && lastUser) {
             runWebResearch(chatId, principalId, id, d.topic, lastUser.text)
               .catch((e) => console.error('[webresearch]', e));
+          }
+        } else if (action === 'stop') {
+          // Everything that is not a deep run: a research round, a multi-hop search.
+          // They keep no frontier, so stopping means stopping — what has been found is
+          // already saved, and nothing further is begun.
+          const label = cancel.request(principalId);
+          await tg.answerCallback(cb.id, label ? 'نگه می‌دارم' : 'چیزی در حال اجرا نبود');
+          if (label) {
+            await tg.edit(chatId, cb.message.message_id,
+              `${cb.message.text ?? ''}\n\n⏹ <i>نگه می‌دارم. آنچه تا اینجا شده می‌ماند.</i>`, []);
           }
         } else if (action === 'deepstop') {
           // `id` here is the run, not the dossier. The run notices between steps and
