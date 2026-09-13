@@ -2,7 +2,13 @@
  * Which model should do the thinking, measured on the thinking it actually does.
  *
  *   node scripts/probe-structure.js
- *   node scripts/probe-structure.js kirafree qwen3.8-flash-free@openrouter
+ *   node scripts/probe-structure.js kirafree
+ *   node scripts/probe-structure.js kirafree --free openrouter 5
+ *
+ * `--free <provider> [n]` asks that provider's catalogue which free models it serves and
+ * probes the n roomiest, rather than trusting a list of names — two ids suggested from
+ * memory came back 404 because they were names a setup script knows, not ids that
+ * endpoint serves.
  *
  * `structure` is called dozens of times per investigation, so it is the role where
  * latency is not a comfort question — it is the whole cost of an investigation in time,
@@ -23,7 +29,7 @@
  */
 import { config } from '../src/config.js';
 import { chatJson, DEFAULT_BUDGET_MS } from '../src/llm.js';
-import { planFor } from '../src/providers.js';
+import { planFor, clearCooling } from '../src/providers.js';
 import { modelFor } from '../src/settings.js';
 
 const ASSESS_SYSTEM = `از پاساژهای زیر برای جواب دادن به پرسش استفاده کن. فقط JSON بده، بدون code fence:
@@ -141,15 +147,85 @@ const CASES = [
   },
 ];
 
+/**
+ * Every free model a provider serves that could plausibly do this job.
+ *
+ * Asked for rather than remembered: two model ids I suggested from memory came back 404
+ * because they were names the setup script knows, not ids that endpoint serves. The
+ * catalogue is the only thing that knows.
+ *
+ * The context filter is not tidiness. The claim pass sends a document — the fixture here
+ * is 38,000 characters, which is somewhere north of 12,000 tokens of Persian before the
+ * system prompt and the room to answer. A model whose window cannot hold that fails the
+ * long case by construction, and finding that out costs a minute each. So they are
+ * excluded up front and counted, because "there were none" and "there were nine that
+ * cannot hold a document" are different answers.
+ */
+const NEEDED_CONTEXT = 32768;
+
+async function freeModelsOn(name, limit) {
+  const provider = config.providers.get(name);
+  if (!provider) throw new Error(`ارائه‌دهنده‌ی «${name}» تعریف نشده — با /provider اضافه‌اش کن`);
+
+  const res = await fetch(`${provider.base}/models`, {
+    headers: { Authorization: `Bearer ${provider.keys[0]}` },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!res.ok) throw new Error(`کاتالوگ ${name}: HTTP ${res.status}`);
+  const all = (await res.json()).data ?? [];
+
+  const free = all.filter((m) => /(:free|-free)$/.test(m.id));
+  const roomy = free.filter((m) =>
+    Math.max(m.context_length ?? 0, m.top_provider?.context_length ?? 0) >= NEEDED_CONTEXT);
+
+  console.log(`${name}: ${all.length} مدل، ${free.length} رایگان، ${roomy.length} با کانتکست ≥ ${(NEEDED_CONTEXT / 1024).toFixed(0)}k`);
+  if (free.length && !roomy.length) {
+    console.log(`  ⚠ هیچ مدل رایگانی پنجره‌ی کافی برای یک سند ندارد؛ برای برنامه‌ریزی بله، برای خواندن فایل نه.`);
+  }
+
+  // Widest window first: this role's hard case is the long one, and among free models
+  // that is the axis they actually differ on.
+  roomy.sort((a, b) =>
+    Math.max(b.context_length ?? 0, b.top_provider?.context_length ?? 0)
+    - Math.max(a.context_length ?? 0, a.top_provider?.context_length ?? 0));
+
+  return roomy.slice(0, limit).map((m) => `${m.id}@${name}`);
+}
+
+// `kirafree --free openrouter 3` means: that model, plus the three roomiest free models
+// openrouter serves. Everything that is not part of a --free clause is a spec.
+const argv = process.argv.slice(2);
+const specs = [];
+const discover = [];
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] !== '--free') { specs.push(argv[i]); continue; }
+  const name = argv[++i];
+  if (!name) {
+    console.log('\n  node scripts/probe-structure.js --free openrouter [تعداد]\n');
+    process.exit(1);
+  }
+  const limit = Number(argv[i + 1]);
+  if (Number.isFinite(limit)) i++;
+  discover.push({ name, limit: Number.isFinite(limit) ? limit : 5 });
+}
+
+if (discover.length) console.log('');
+for (const { name, limit } of discover) {
+  try {
+    specs.push(...await freeModelsOn(name, limit));
+  } catch (err) {
+    console.log(`✖ ${err.message}`);
+  }
+}
+
 // modelFor, not config: the setting in the database is what the bot actually uses, and
 // probing the .env value would measure a model that nothing calls.
-const specs = process.argv.slice(2).length
-  ? process.argv.slice(2)
-  : [modelFor('structure')].filter(Boolean);
+if (!specs.length) specs.push(...[modelFor('structure')].filter(Boolean));
 
 if (!specs.length) {
   console.log('\nهیچ مدلی داده نشد و نقش structure هم خالی است.\n');
-  console.log('  node scripts/probe-structure.js kirafree qwen3.8-flash-free@openrouter\n');
+  console.log('  node scripts/probe-structure.js kirafree');
+  console.log('  node scripts/probe-structure.js --free openrouter 5\n');
   process.exit(0);
 }
 
@@ -158,6 +234,12 @@ console.log(`the last on a ${DOC.length.toLocaleString('en-US')}-character docum
 
 const results = [];
 for (const spec of specs) {
+  // Free tiers are rate limited per key, and a 429 rests that key for a minute — which
+  // is right for the bot and wrong here, because the next model measured would come back
+  // "all keys are resting" and be recorded as broken when it was never asked. Each
+  // candidate is measured on its own merits, so the cool-offs are cleared between them.
+  clearCooling();
+
   const links = planFor(spec, config.providers);
   console.log(`── ${spec}${links.length > 1 ? `  (${links.length} links)` : ''}`);
   if (!links.length) { console.log('   ✖ به هیچ ارائه‌دهنده‌ای وصل نیست\n'); continue; }
