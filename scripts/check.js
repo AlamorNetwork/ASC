@@ -281,6 +281,142 @@ await check('one slow chat does not silence the others', async () => {
   return order.join(' → ');
 });
 
+await check('a chain of silent providers gives up on a clock, not on a chain length', async () => {
+  // A PDF stopped on «استخراج ادعاها…» and stayed there. The structure role is a chain,
+  // every link was merely slow, and nothing bounded the walk — so its cost was the
+  // product of models × keys × retries × 120s. Measured before the fix: 1,442 seconds
+  // for three models across two keys. The turn above gives up at five minutes, so the
+  // user saw a stuck progress line and then an error naming a single model, which made
+  // the twenty-four minutes look like one timeout.
+  const p = await import('../src/providers.js');
+  const { chat } = await import('../src/llm.js');
+  const { config } = await import('../src/config.js');
+
+  const held = [];
+  const srv = http.createServer((req, res) => { held.push(res); });   // accept, never answer
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+
+  p.clearCooling();
+  const saved = config.providers;
+  config.providers = p.buildProviders(
+    { STALL_BASE_URL: `http://127.0.0.1:${port}/v1`, STALL_KEYS: 'k1,k2' },
+    { base: `http://127.0.0.1:${port}/v1`, key: 'k' });
+
+  try {
+    const spec = 'test/stalls-1@stall,test/stalls-2@stall,test/stalls-3@stall';
+    const seen = [];
+    const t0 = Date.now();
+    let message = '';
+    try {
+      await chat({
+        model: spec, content: '.', maxTokens: 8,
+        budgetMs: 8000,
+        onAttempt: (a) => seen.push(a.model),
+      });
+      throw new Error('a server that never answers returned a completion');
+    } catch (err) { message = err.message; }
+    const took = Date.now() - t0;
+
+    // The budget is the bound, not a suggestion. Six links (3 models × 2 keys) would be
+    // minutes without it.
+    if (took > 8000 * 1.6) throw new Error(`walked ${Math.round(took / 1000)}s against an 8s budget`);
+    if (!seen.length) throw new Error('no link was tried at all');
+
+    // A timeout must not be retried on the same link: the far end is slow, not wedged,
+    // and when it is a gateway walking its own chain of free models — a 9router combo —
+    // the retry makes it start that walk again while the first one is still running.
+    // That retry alone doubled every link from 120s to 240s.
+    const llmSrc = fs.readFileSync(new URL('../src/llm.js', import.meta.url), 'utf8');
+    if (/if \(timedOut && attempt >= 2\) break;/.test(llmSrc)) {
+      throw new Error('a timed-out request is retried on the same link again');
+    }
+
+    // The message has to say the walk was cut short, not just name whichever link was
+    // unlucky enough to be last.
+    if (!/حلقه/.test(message)) throw new Error(`the error does not say how far it got: ${message}`);
+
+    // With one link and one key there is nowhere else to go, so stopping at the per-link
+    // timeout and failing with budget unspent is strictly worse than waiting. This is
+    // the ordinary shape behind a gateway: one combo id, the chain hidden inside it.
+    config.providers = p.buildProviders(
+      { ONE_BASE_URL: `http://127.0.0.1:${port}/v1`, ONE_KEYS: 'k1' },
+      { base: `http://127.0.0.1:${port}/v1`, key: 'k' });
+    const t1 = Date.now();
+    await chat({ model: 'test/stalls-alone@one', content: '.', maxTokens: 8, budgetMs: 6000 }).catch(() => {});
+    const alone = Date.now() - t1;
+    if (alone < 6000 * 0.8) {
+      throw new Error(`the only link was cut off after ${alone}ms of a 6000ms budget`);
+    }
+
+    return `6 silent links bounded to ${(took / 1000).toFixed(1)}s of an 8s budget; a lone link got ${(alone / 1000).toFixed(1)}s of 6s`;
+  } finally {
+    config.providers = saved;
+    p.clearCooling();
+    for (const r of held) r.destroy();
+    srv.close();
+  }
+});
+
+await check('a document survives a failure in the step after it is stored', async () => {
+  // Claim extraction is the last step of an ingest and the only one that can fail on its
+  // own — by then the text, the chunks and the vectors are all stored, which is the part
+  // that cost money and the part that answers questions. Letting it throw discarded a
+  // whole PDF over one slow model, and the user saw a red error and reasonably concluded
+  // nothing had been read.
+  const whole = fs.readFileSync(new URL('../src/ingest.js', import.meta.url), 'utf8');
+  // Scoped to the ingest itself: claimsFrom is also called by extractClaimsFor, where
+  // throwing is the correct behaviour — there is nothing else in that call to lose.
+  const from = whole.indexOf('export async function ingestToDossier(');
+  if (from < 0) throw new Error('ingestToDossier moved; this check no longer looks at it');
+  const src = whole.slice(from);
+
+  const call = src.indexOf('await claimsFrom(');
+  if (call < 0) throw new Error('claim extraction moved; this check no longer looks at it');
+
+  // The try has to open after the chunks are stored, or it is guarding the wrong thing.
+  const stored = src.indexOf('store.insertChunks(');
+  const guard = src.lastIndexOf('try {', call);
+  if (!(stored < guard && guard < call)) {
+    throw new Error('claim extraction is not inside a try that opens after the chunks are stored');
+  }
+  if (!/claimsFailed/.test(whole)) throw new Error('a failed claim pass is not reported to the caller');
+
+  // Reported, not swallowed: silence would be its own bug, since the user would be left
+  // wondering why a document has no claims.
+  const app = fs.readFileSync(new URL('../src/app.js', import.meta.url), 'utf8');
+  if (!/out\.claimsFailed/.test(app)) throw new Error('the ingest report never mentions a failed claim pass');
+
+  // And redoable on its own, from the stored text rather than the file — re-reading a
+  // scanned book means paying for the vision pass twice.
+  const ingest = await import('../src/ingest.js');
+  if (typeof ingest.extractClaimsFor !== 'function') throw new Error('no way to run the claim pass again');
+  if (!/\/claims/.test(app)) throw new Error('extractClaimsFor exists but nothing reaches it');
+
+  const refuses = async (args, pattern, why) => {
+    try {
+      await ingest.extractClaimsFor(args);
+    } catch (err) {
+      if (pattern.test(err.message)) return;
+      throw new Error(`${why} — refused, but with: ${err.message}`);
+    }
+    throw new Error(why);
+  };
+
+  const p = `claims-${Date.now()}`;
+  await refuses({ principalId: p, documentId: 999999 }, /پیدا نشد/,
+    'a missing document was not refused');
+
+  // Refused before a model call, not after: a document with nothing stored cannot
+  // produce claims, and finding that out by paying for a completion is the wrong order.
+  const d = store.insertDossier({ principalId: p, topic: 'ت' });
+  const doc = store.insertDocument({ principalId: p, dossierId: d, filename: 'e.txt', kind: 'text', extraction: 'local' });
+  await refuses({ principalId: p, documentId: doc }, /متن/,
+    'a document with no stored text was not refused before a model call');
+
+  return 'the chunks outlive the claim pass, and it can be run again without them';
+});
+
 await check('no command reaches for a variable it does not have', () => {
   // /provider threw "msg is not defined" the first time it ran — it used msg.from and
   // msg.message_id, which handleCommand never receives. Loading the file cannot catch

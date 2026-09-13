@@ -7,7 +7,7 @@ import * as settings from './settings.js';
 import * as chat from './chat.js';
 import { captureFromAudio, captureFromText } from './capture.js';
 import { runResearch } from './research.js';
-import { ingestToDossier, sha256 } from './ingest.js';
+import { ingestToDossier, extractClaimsFor, sha256 } from './ingest.js';
 import { createWatch } from './intentions.js';
 import { relatedDossiers } from './chunks.js';
 import { startScheduler } from './scheduler.js';
@@ -652,7 +652,18 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
     if (out.summary) await tg.send(chatId, esc(out.summary));
     if (out.verified.length) await tg.send(chatId, SECTION.verified({ verified: out.verified }));
     if (out.found.length) await tg.send(chatId, SECTION.found({ found: out.found }));
-    if (!out.verified.length && !out.found.length) {
+    if (out.claimsFailed) {
+      // The document is in and searchable; only the claim pass did not run. Saying so is
+      // the difference between "nothing happened" and "one optional step is missing",
+      // and it is the difference between the user re-uploading a book and asking it a
+      // question.
+      await tg.send(chatId, [
+        '<i>سند ذخیره و نمایه شد، اما استخراج ادعاها انجام نشد:</i>',
+        `<i>${esc(out.claimsFailed.slice(0, 300))}</i>`, '',
+        'می‌توانی همین حالا ازش سؤال بپرسی — متن و بردارهایش سر جایشان است.',
+        `برای تلاش دوباره فقط برای ادعاها: <code>/claims ${out.documentId}</code>`,
+      ].join('\n'));
+    } else if (!out.verified.length && !out.found.length) {
       await tg.send(chatId, '<i>ادعای مشخصی از این سند بیرون نیامد. متنش ذخیره شد.</i>');
     }
 
@@ -1141,6 +1152,36 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
       await tg.edit(chatId, status.message_id, `💾 پشتیبان فرستاده شد · ${mb.toFixed(1)} مگابایت`);
     } catch (err) {
       await tg.edit(chatId, status.message_id, `❌ ${esc(String(err.message ?? err))}`);
+    }
+    return true;
+  }
+
+  if (text.startsWith('/claims')) {
+    // The one step of an ingest that can fail on its own, so the one step worth being
+    // able to redo on its own. Re-reading the file would mean paying for the vision pass
+    // again; the text is already in the chunks, so this costs one call to the structure
+    // chain and nothing else.
+    const id = Number(text.split(/\s+/)[1]);
+    if (!Number.isInteger(id) || id <= 0) {
+      await tg.send(chatId, 'شماره‌ی سند را بده: <code>/claims 12</code>');
+      return true;
+    }
+    const status = await tg.send(chatId, `📎 سند #${id} — استخراج ادعاها…`);
+    try {
+      const out = await extractClaimsFor({
+        principalId, documentId: id,
+        onProgress: (m) => tg.edit(chatId, status.message_id, `📎 سند #${id} — ${esc(m)}`).catch(() => {}),
+      });
+      await tg.edit(chatId, status.message_id,
+        `📎 <b>${esc(out.filename || 'سند')}</b> · ${out.verified.length + out.found.length} ادعا · ${toman(out.costToman)} تومان`);
+      if (out.summary) await tg.send(chatId, esc(out.summary));
+      if (out.verified.length) await tg.send(chatId, SECTION.verified({ verified: out.verified }));
+      if (out.found.length) await tg.send(chatId, SECTION.found({ found: out.found }));
+      if (!out.verified.length && !out.found.length) {
+        await tg.send(chatId, '<i>ادعای مشخصی از این سند بیرون نیامد.</i>');
+      }
+    } catch (err) {
+      await tg.edit(chatId, status.message_id, `📎 سند #${id}\n\n❌ ${esc(String(err.message ?? err))}`);
     }
     return true;
   }

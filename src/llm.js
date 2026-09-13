@@ -7,6 +7,17 @@ import {
 
 const { key, base } = config.router;
 
+// Below this there is no point starting another link: it would be cut off mid-request
+// and the only thing gained is a longer wait before the same failure. Expressed as a
+// share of the budget as well as an absolute, so the rule stays meaningful for a caller
+// working to a much shorter deadline than the default — including the suite, which
+// cannot spend twenty seconds proving a floor exists.
+const FLOOR_MS = 20000;
+const floorFor = (budget) => Math.min(FLOOR_MS, Math.floor(budget / 4));
+
+/** Four minutes, so the walk ends before the turn above it gives up at five. */
+export const DEFAULT_BUDGET_MS = 240000;
+
 /**
  * Sends one request for a model that may name its provider, and may name several.
  *
@@ -16,10 +27,21 @@ const { key, base } = config.router;
  * Only a failure that a different key or model could fix moves on — a 400 means the
  * request is wrong and will be just as wrong everywhere.
  *
+ * The walk is bounded by a wall clock. Without one its cost is the product of every
+ * dimension it has: measured at 1,442 seconds — twenty-four minutes — for three models
+ * across two keys, none of them broken, all of them merely slow. Nobody watching a
+ * progress line waits that long, and the turn above gives up at five minutes anyway, so
+ * the walk has to finish while there is still someone to tell.
+ *
  * @param body must carry `model`, which may be `a@kira,b@kira,c`
+ * @param deadlineAt an instant rather than a duration, because one chat() can walk the
+ *   chain more than once — the reasoning-disabled rejection and the out-of-room retry
+ *   each start a fresh walk, and three independent four-minute budgets is twelve minutes
  * @returns {{res, raw, model, provider}} the attempt that answered
  */
-async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
+async function attempt(path, body, {
+  label, timeoutMs = 120000, tries = 3, budgetMs = DEFAULT_BUDGET_MS, deadlineAt, onAttempt,
+} = {}) {
   const plan = planFor(body.model, config.providers);
   if (!plan.length) throw new Error(`مدل «${body.model}» به هیچ ارائه‌دهنده‌ای وصل نیست`);
 
@@ -31,6 +53,22 @@ async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
   const ordered = [...plan.filter((p) => !modelResting(p.provider.name, p.model)),
                    ...plan.filter((p) => modelResting(p.provider.name, p.model))];
 
+  const started = Date.now();
+  const deadline = deadlineAt ?? (started + budgetMs);
+  const left = () => deadline - Date.now();
+  const floor = floorFor(deadline - started);
+  let tried = 0;
+  let exhausted = false;
+
+  // The per-link timeout exists so a dead link does not eat the time the next one needs.
+  // On the last link there is no next one, so cutting it off at 120s and then failing
+  // with two minutes of budget unspent is the worst of both. This is the ordinary case
+  // behind a gateway: MODEL_STRUCTURE is one 9router combo id, so ASC sees a single link
+  // while 9router walks a chain of free models inside it — and 120s was interrupting
+  // that walk rather than waiting for it.
+  const totalAttempts = ordered.reduce((n, p) => n + keysAvailable(p.provider).length, 0);
+
+  outer:
   for (const { model, provider } of ordered) {
     const usable = keysAvailable(provider);
     if (!usable.length) {
@@ -39,12 +77,22 @@ async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
     }
 
     for (const { key: apiKey, index } of usable) {
+      if (left() < floor) { exhausted = true; break outer; }
+      tried++;
+      // Which link is being tried right now, so a caller with a status line can say so
+      // instead of showing one unchanging message for minutes.
+      onAttempt?.({ model, provider: provider.name, tried, of: ordered.length });
+
       const res = await routerFetch(path, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body, model }),
-      }, { label: `${label}/${model}`, timeoutMs, tries, base: provider.base })
-        .catch((err) => { last = err; return null; });
+      }, {
+        label: `${label}/${model}`,
+        timeoutMs: tried === totalAttempts ? Math.max(floor, left()) : Math.min(timeoutMs, left()),
+        tries,
+        base: provider.base,
+      }).catch((err) => { last = err; return null; });
 
       if (!res) continue;                       // the network, not the key
       const raw = await res.text();
@@ -84,7 +132,18 @@ async function attempt(path, body, { label, timeoutMs = 120000, tries = 3 }) {
     }
   }
 
-  throw last ?? new Error(`هیچ ارائه‌دهنده‌ای به «${body.model}» جواب نداد`);
+  const secs = Math.round((Date.now() - started) / 1000);
+  if (exhausted) {
+    throw new Error(`«${body.model}»: ${secs} ثانیه صرف شد و ${tried} حلقه جواب نداد — ` +
+      `بقیه‌ی زنجیره امتحان نشد. ${last ? `آخرین خطا: ${last.message}` : ''}`.trim());
+  }
+  // How many links were tried matters as much as why the last one failed: "one model
+  // timed out" and "the whole chain is down" read identically otherwise.
+  if (last) {
+    last.message = `${last.message}${tried > 1 ? ` · ${tried} حلقه امتحان شد در ${secs} ثانیه` : ''}`;
+    throw last;
+  }
+  throw new Error(`هیچ ارائه‌دهنده‌ای به «${body.model}» جواب نداد`);
 }
 
 // 9router appends a trailing `data: [DONE]` even to non-streaming responses,
@@ -151,23 +210,27 @@ export async function routerFetch(path, init, {
     } catch (err) {
       lastErr = err;
       const timedOut = err.name === 'AbortError';
-      const cause = timedOut ? `timeout after ${timeoutMs / 1000}s` : (err.cause?.code ?? err.name);
+      const cause = timedOut ? `timeout after ${Math.round(timeoutMs / 1000)}s` : (err.cause?.code ?? err.name);
       console.warn(`[llm] ${label} attempt ${attempt}/${tries} failed: ${cause}`);
-      // A timeout means the far end is slow, so hammering it again mostly multiplies
-      // the wait. One more try, then give up and say so.
-      if (timedOut && attempt >= 2) break;
+      // A timeout is not retried at all. A dropped connection is worth another go, but a
+      // far end that went quiet is slow rather than wedged — and when it is a gateway
+      // walking its own chain of free models, as a 9router combo does, the retry makes it
+      // start that walk again from the top while the first one is still running. So the
+      // retry does not rescue the call, it doubles it: every link cost 240s instead of
+      // 120s, which is half of the twenty-four minutes measured across a three-link chain.
+      if (timedOut) break;
       if (attempt < tries) await new Promise((r) => setTimeout(r, 400 * attempt));
     } finally {
       clearTimeout(timer);
     }
   }
   const cause = lastErr?.name === 'AbortError'
-    ? `پاسخی نداد (${timeoutMs / 1000} ثانیه)`
+    ? `پاسخی نداد (${Math.round(timeoutMs / 1000)} ثانیه)`
     : (lastErr?.cause?.code ?? lastErr?.message ?? 'unknown');
   throw new Error(`ارتباط با ${label} برقرار نشد — ${cause} · ${origin}`);
 }
 
-const post = (body) => attempt('/chat/completions', body, { label: 'chat' });
+const post = (body, opts = {}) => attempt('/chat/completions', body, { label: 'chat', ...opts });
 
 /**
  * Where to send a request for `spec`, for the paths that cannot use `attempt` — streaming,
@@ -191,7 +254,9 @@ export function endpointFor(spec) {
  * (so audio goes through the same path as text).
  * Returns { text, usage } where usage carries the provider's own cost figures.
  */
-export async function chat({ model, system, content, maxTokens = 3000, noThinking = true }) {
+export async function chat({
+  model, system, content, maxTokens = 3000, noThinking = true, budgetMs, onAttempt,
+}) {
   const messages = [];
   if (system) messages.push({ role: 'system', content: system });
   messages.push({ role: 'user', content });
@@ -201,13 +266,14 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
   // buy nothing there, so they are turned off where the endpoint permits it.
   if (noThinking && reasoningCanBeDisabled) body.reasoning_effort = 'none';
 
-  let { res, raw, model: served, provider } = await post(body);
+  const walk = { deadlineAt: Date.now() + (budgetMs ?? DEFAULT_BUDGET_MS), onAttempt };
+  let { res, raw, model: served, provider } = await post(body, walk);
 
   if (!res.ok && body.reasoning_effort && /reasoning/i.test(raw)) {
     reasoningCanBeDisabled = false;
     console.warn('[llm] endpoint requires reasoning; retrying with it enabled (costs more)');
     delete body.reasoning_effort;
-    ({ res, raw, model: served, provider } = await post(body));
+    ({ res, raw, model: served, provider } = await post(body, walk));
   }
 
   // Naming the model matters: most failures here are "this endpoint does not have that
@@ -232,7 +298,7 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
     const roomier = Math.max(maxTokens * 3, spentThinking * 2 + 1500);
     console.warn(`[llm] ${served} ran out of room (${finish}, ${spentThinking} thinking tokens); ` +
       `retrying with ${roomier}`);
-    const retry = await post({ ...body, max_tokens: roomier });
+    const retry = await post({ ...body, max_tokens: roomier }, walk);
     if (retry.res.ok) {
       json = parseRouterBody(retry.raw);
       usage = json.usage ?? {};
@@ -254,7 +320,7 @@ export async function chat({ model, system, content, maxTokens = 3000, noThinkin
 }
 
 /** Same call, but the reply must be a JSON object. Returns { data, usage }. */
-export async function chatJson(opts) {
+export async function chatJson(opts) {   // budgetMs and onAttempt ride along in opts
   const { text, usage } = await chat(opts);
   const cleaned = text
     .replace(/^\s*```(?:json)?\s*/i, '')

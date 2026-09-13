@@ -152,7 +152,7 @@ export async function extractText({ buffer, filename, mime, kind, allowVision, p
 }
 
 /** Claims come from a bounded slice, not the whole book. */
-async function claimsFrom(text, filename) {
+async function claimsFrom(text, filename, onProgress) {
   const sample = text.length > 40000
     ? `${text.slice(0, 24000)}\n\n[…]\n\n${text.slice(-12000)}`
     : text;
@@ -162,11 +162,74 @@ async function claimsFrom(text, filename) {
     content: `سند «${filename}»:\n\n${sample}`,
     maxTokens: 3000,
     noThinking: false,
+    // The structure role is usually a chain of free models, and a chain that is quietly
+    // working through its links looks exactly like one that has died. Saying which link
+    // is being tried is the difference.
+    onAttempt: ({ model, tried, of }) =>
+      onProgress?.(of > 1 ? `استخراج ادعاها… (${tried} از ${of}: ${model})` : 'استخراج ادعاها…'),
   });
   return {
     summary: data.summary ?? null,
     claims: Array.isArray(data.claims) ? data.claims.slice(0, 10) : [],
     costToman: usage.costToman ?? 0,
+  };
+}
+
+/**
+ * Store each claim with the verdict of matching its quote against the document itself.
+ *
+ * A quote is checked against the text the claim came from, so a model that paraphrased
+ * instead of copying is caught here rather than believed. An image has no text layer to
+ * match against, so its claims are recorded as read-but-unverifiable — which is honest,
+ * and different from verified.
+ */
+function recordClaims({ principalId, dossierId, claims, kind, text, filename }) {
+  const verified = [];
+  const found = [];
+  for (const c of claims) {
+    const result = kind === 'image'
+      ? { status: 'found', method: null, note: 'از روی تصویر خوانده شد — با نقل‌قول قابل تأیید نیست' }
+      : verifyAgainstText(text, c.quote, 'document_quote_matched');
+
+    const row = {
+      text: c.text ?? '', sourceUrl: null, sourceTitle: filename || 'سند کاربر',
+      quote: c.quote ?? null, status: result.status,
+      verifyMethod: result.method, verifyNote: result.note,
+    };
+    store.insertClaim({ principalId, dossierId, ...row });
+    (result.status === 'verified' ? verified : found).push(row);
+  }
+  return { verified, found };
+}
+
+/**
+ * Run the claim pass again over a document that is already stored.
+ *
+ * The text comes back from the chunks, not the file, so a scanned book that cost real
+ * money to read through vision is never read a second time — this is the cheap half of
+ * an ingest, and the half that fails when the structure chain is slow.
+ */
+export async function extractClaimsFor({ principalId, documentId, onProgress }) {
+  const doc = store.getDocument(principalId, documentId);
+  if (!doc) throw new Error(`سند #${documentId} پیدا نشد.`);
+
+  const text = store.documentText(principalId, documentId);
+  if (!text.trim()) throw new Error(`سند #${documentId} متن ذخیره‌شده‌ای ندارد.`);
+
+  const already = store.dossierClaims(principalId, doc.dossier_id)
+    .filter((c) => c.source_title === (doc.filename || 'سند کاربر')).length;
+  if (already) {
+    throw new Error(`این سند از قبل ${already} ادعا دارد — دوباره اجرا کردن فقط تکرارشان می‌کند.`);
+  }
+
+  const c = await claimsFrom(text, doc.filename, onProgress);
+  const { verified, found } = recordClaims({
+    principalId, dossierId: doc.dossier_id, claims: c.claims,
+    kind: doc.kind, text, filename: doc.filename,
+  });
+  return {
+    dossierId: doc.dossier_id, filename: doc.filename,
+    summary: c.summary, verified, found, costToman: c.costToman,
   };
 }
 
@@ -238,31 +301,27 @@ export async function ingestToDossier({
   onProgress?.('استخراج ادعاها…');
   let summary = extracted.summary ?? null;
   let claims = [];
+  let claimsFailed = null;
   if (extracted.text.trim()) {
-    const c = await claimsFrom(extracted.text, filename);
-    summary = c.summary ?? summary;
-    claims = c.claims;
-    costToman += c.costToman;
+    // By this point the document, its chunks and its vectors are all stored, and that is
+    // the part that cost money and answers questions. Claims are a convenience on top.
+    // Letting this throw discarded a whole scanned book because one model was slow — the
+    // user saw a red error and reasonably concluded nothing had been read at all.
+    try {
+      const c = await claimsFrom(extracted.text, filename, onProgress);
+      summary = c.summary ?? summary;
+      claims = c.claims;
+      costToman += c.costToman;
+    } catch (err) {
+      claimsFailed = err.message;
+      console.warn('[ingest] claim extraction failed:', err.message);
+    }
   }
 
-  const verified = [];
-  const found = [];
-  for (const c of claims) {
-    const result = kind === 'image'
-      ? { status: 'found', method: null, note: 'از روی تصویر خوانده شد — با نقل‌قول قابل تأیید نیست' }
-      : verifyAgainstText(extracted.text, c.quote, 'document_quote_matched');
-
-    const row = {
-      text: c.text ?? '', sourceUrl: null, sourceTitle: filename || 'سند کاربر',
-      quote: c.quote ?? null, status: result.status,
-      verifyMethod: result.method, verifyNote: result.note,
-    };
-    store.insertClaim({ principalId, dossierId, ...row });
-    (result.status === 'verified' ? verified : found).push(row);
-  }
+  const { verified, found } = recordClaims({ principalId, dossierId, claims, kind, text: extracted.text, filename });
 
   return {
-    documentId, kind, filename, summary, verified, found,
+    documentId, kind, filename, summary, verified, found, claimsFailed,
     pages: extracted.pages, readPages: extracted.readPages ?? null,
     chunks: rows.length, embedded,
     textLength: extracted.text.length, extraction: extracted.extraction,
