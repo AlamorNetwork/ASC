@@ -29,7 +29,7 @@
  */
 import { config } from '../src/config.js';
 import { chatJson, DEFAULT_BUDGET_MS } from '../src/llm.js';
-import { planFor, clearCooling } from '../src/providers.js';
+import { planFor, clearCooling, keysAvailable } from '../src/providers.js';
 import { modelFor } from '../src/settings.js';
 
 const ASSESS_SYSTEM = `از پاساژهای زیر برای جواب دادن به پرسش استفاده کن. فقط JSON بده، بدون code fence:
@@ -284,7 +284,15 @@ for (const spec of specs) {
       times.push(ms);
       per.set(c.name, { ms, ok: false, err: err.message });
       died = err.message;
-      console.log(`   ✖  ${c.name.padEnd(5)} ${String(ms).padStart(6)}ms  ${err.message.replace(/\s+/g, ' ').slice(0, 60)}`);
+      console.log(`   ✖  ${c.name.padEnd(5)} ${String(ms).padStart(6)}ms  ${err.message.replace(/\s+/g, ' ').slice(0, 90)}`);
+
+      // Once the key itself is out of play, the remaining cases cannot be asked — they
+      // would each fail in a millisecond with "all keys are resting" and be tallied as
+      // separate failures. Reporting 0/3 for one refusal overstates what was measured.
+      if (links.every(({ provider }) => !keysAvailable(provider).length)) {
+        console.log(`   ↳ کلید از دسترس خارج شد؛ ${CASES.length - times.length} حالت باقی‌مانده پرسیده نشد.`);
+        break;
+      }
     }
   }
 

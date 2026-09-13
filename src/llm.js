@@ -19,6 +19,25 @@ const floorFor = (budget) => Math.min(FLOOR_MS, Math.floor(budget / 4));
 export const DEFAULT_BUDGET_MS = 240000;
 
 /**
+ * The sentence a provider put in the body, without the envelope it wrapped it in.
+ *
+ * Providers disagree about where the message lives — `error.message`, `error`, `message`,
+ * `detail` — and one of them will be a bare string. Falling back to the raw body is fine;
+ * what is not fine is discarding it, which is what turned "your account does not allow
+ * prompts to be sent to free endpoints" into the number 403.
+ */
+function explain(raw, limit = 160) {
+  if (!raw) return '';
+  let said = raw;
+  try {
+    const body = JSON.parse(raw);
+    said = body?.error?.message ?? body?.error ?? body?.message ?? body?.detail ?? raw;
+  } catch { /* not JSON; the body itself is the message */ }
+  const line = String(typeof said === 'object' ? JSON.stringify(said) : said).replace(/\s+/g, ' ').trim();
+  return line.length > limit ? `${line.slice(0, limit)}…` : line;
+}
+
+/**
  * Sends one request for a model that may name its provider, and may name several.
  *
  * Two things are being worked around, and they compose: a free tier limits each key, so
@@ -101,7 +120,12 @@ async function attempt(path, body, {
       const kind = kindOfFailure(res.status);
       if (!kind) return { res, raw, model, provider };   // a real answer: wrong request
 
-      last = new Error(`${model}@${provider.name}: ${res.status}`);
+      // The status alone is not the reason, and the reason is in the body we already
+      // have. A 403 from OpenRouter on a :free model is not a bad key — it is an account
+      // setting about where prompts may go — and its body says exactly that, while
+      // "openrouter: 403" sends you to regenerate a key that was never the problem.
+      const why = explain(raw);
+      last = new Error(`${model}@${provider.name}: ${res.status}${why ? ` — ${why}` : ''}`);
 
       if (blamesTheModel(kind)) {
         // Their gateway is down for this model, or does not carry it. Another key gets
@@ -109,26 +133,29 @@ async function attempt(path, body, {
         // key alone, since there is nothing wrong with it. The model is set aside for a
         // couple of minutes so the rest of this investigation does not pay for it again.
         restModel(provider.name, model);
-        console.warn(`[llm] ${model}@${provider.name} unavailable (${res.status}), next in chain`);
+        console.warn(`[llm] ${model}@${provider.name} unavailable (${res.status}), next in chain${why ? ` — ${why}` : ''}`);
         break;
       }
 
-      if (kind === 'credit') {
-        // Ambiguous: an empty account, or a model outside the plan. Assume the model
-        // until a second one refuses too, because getting this wrong the other way takes
-        // down every role on a working key.
+      if (kind === 'credit' || kind === 'forbidden') {
+        // Both are ambiguous in the same way. 402 is an empty account or a model outside
+        // the plan; 403 is a refused key or a model this account may not reach — which on
+        // OpenRouter is how every `:free` model answers until prompts are allowed to
+        // leave for free endpoints. Assume the model until a second, different one
+        // refuses too, because getting this wrong the other way rests a working key for a
+        // day and takes every role down with it.
         restModel(provider.name, model);
         const distinct = noteRefusal(provider.name, index, model);
         if (distinct < 2) {
-          console.warn(`[llm] ${model}@${provider.name} refused (402) — treating it as this model, not the key`);
+          console.warn(`[llm] ${model}@${provider.name} refused (${res.status}) — treating it as this model, not the key`);
           break;
         }
-        console.warn(`[llm] ${provider.name} key #${index + 1}: ${distinct} models refused with 402, resting the key`);
+        console.warn(`[llm] ${provider.name} key #${index + 1}: ${distinct} models refused with ${res.status}, resting the key`);
       }
 
       // Out of quota on this key. Rest it and let the next one try.
       setAside(provider.name, index, kind);
-      console.warn(`[llm] ${provider.name} key #${index + 1} set aside (${kind}, ${res.status}) on ${model}`);
+      console.warn(`[llm] ${provider.name} key #${index + 1} set aside (${kind}, ${res.status}) on ${model}${why ? ` — ${why}` : ''}`);
     }
   }
 

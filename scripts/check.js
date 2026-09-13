@@ -172,9 +172,24 @@ await check('an exhausted key is set aside and the next one is used', async () =
   }
   if (p.kindOfFailure(404) !== 'missing') throw new Error('404 should mean this provider lacks the model');
   if (!p.blamesTheModel('missing')) throw new Error('a missing model should move to the next one');
-  for (const kind of ['rate', 'credit', 'auth']) {
+  for (const kind of ['rate', 'credit', 'auth', 'forbidden']) {
     if (p.blamesTheModel(kind)) throw new Error(`${kind} is about the key, not the model`);
   }
+
+  // 401 and 403 were one case and they are not. 401 is the credential and will be
+  // refused for everything. 403 is permission, which is usually per-model: OpenRouter
+  // answers it on every `:free` model until the account allows prompts to reach free
+  // endpoints, on a key that works for everything else. Merging them rested a working
+  // openrouter key for twenty-four hours over one model's policy, mid-probe, which then
+  // reported every model measured after it as broken without asking any of them.
+  if (p.kindOfFailure(401) !== 'auth') throw new Error('401 should condemn the key');
+  if (p.kindOfFailure(403) !== 'forbidden') throw new Error('403 was read as a dead key again');
+  if (p.refusalCount('openrouter', 0) !== 0) throw new Error('refusals did not start empty');
+  if (p.noteRefusal('openrouter', 0, 'a:free') !== 1) throw new Error('first 403 not counted');
+  if (p.noteRefusal('openrouter', 0, 'a:free') !== 1) throw new Error('the same model counted twice');
+  if (p.noteRefusal('openrouter', 0, 'b:free') !== 2) throw new Error('a second model was not distinct');
+  // Deliberately not cleared here: the keys rested above are what the rest of this check
+  // is about, and wiping them made a later assertion pass for the wrong reason.
 
   // Which free models are up changed completely between two probe runs minutes apart,
   // so the chain has to be long — and a long chain of down links must not cost a failed
@@ -354,6 +369,61 @@ await check('a chain of silent providers gives up on a clock, not on a chain len
     config.providers = saved;
     p.clearCooling();
     for (const r of held) r.destroy();
+    srv.close();
+  }
+});
+
+await check('a 403 on one model does not cost the key a day, and says why', async () => {
+  // OpenRouter answers 403 on every `:free` model until the account allows prompts to
+  // reach free endpoints. Read as a dead credential, that rested a working key for
+  // twenty-four hours over one model's policy — in the middle of a probe, so every model
+  // measured afterwards came back "all keys are resting" without being asked. And the
+  // body said exactly what was wrong while the error carried only the number 403.
+  const p = await import('../src/providers.js');
+  const { chat } = await import('../src/llm.js');
+  const { config } = await import('../src/config.js');
+
+  const REASON = 'No endpoints found matching your data policy (Free model publication)';
+  const srv = http.createServer((req, res) => {
+    res.writeHead(403, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: REASON, code: 403 } }));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+
+  p.clearCooling();
+  const saved = config.providers;
+  config.providers = p.buildProviders(
+    { ORTEST_BASE_URL: `http://127.0.0.1:${port}/v1`, ORTEST_KEYS: 'k1' },
+    { base: `http://127.0.0.1:${port}/v1`, key: 'k' });
+
+  try {
+    let message = '';
+    await chat({ model: 'test/a:free@ortest', content: '.', maxTokens: 8, budgetMs: 8000 })
+      .catch((err) => { message = err.message; });
+
+    // The reason was in the body all along. Without it, "openrouter: 403" sends you to
+    // regenerate a key that was never the problem.
+    if (!message.includes('data policy')) {
+      throw new Error(`the provider's own explanation was discarded: ${message}`);
+    }
+
+    // One refused model is not a refused key.
+    const ortest = config.providers.get('ortest');
+    if (p.keysAvailable(ortest).length !== 1) {
+      throw new Error('a single 403 rested the key for a day');
+    }
+
+    // A second, different model refusing is a different story — now it is the key.
+    await chat({ model: 'test/b:free@ortest', content: '.', maxTokens: 8, budgetMs: 8000 }).catch(() => {});
+    if (p.keysAvailable(ortest).length !== 0) {
+      throw new Error('two distinct models refused and the key was still offered');
+    }
+
+    return 'one model refused blames the model; two blames the key; the body says which';
+  } finally {
+    config.providers = saved;
+    p.clearCooling();
     srv.close();
   }
 });

@@ -61,7 +61,13 @@ export function buildProviders(env, fallback) {
  */
 const cooling = new Map();   // `${provider}#${index}` -> timestamp it becomes usable again
 
-const COOL_OFF = { rate: 60_000, credit: 30 * 60_000, auth: 24 * 60 * 60_000 };
+const COOL_OFF = {
+  rate: 60_000,
+  credit: 30 * 60_000,
+  auth: 24 * 60 * 60_000,
+  // Only reached once a second model has refused too, at which point it is the key.
+  forbidden: 24 * 60 * 60_000,
+};
 
 const coolKey = (provider, index) => `${provider}#${index}`;
 
@@ -84,19 +90,29 @@ export function setAside(providerName, index, kind = 'rate') {
 /**
  * What a failure says about whose problem it is.
  *
- * The three that mean "this key is spent" rest the key. The two that mean "this endpoint
+ * The ones that mean "this key is spent" rest the key. The ones that mean "this endpoint
  * cannot serve this model right now" do not — another key would be told exactly the same
  * thing, and resting a perfectly good key over the provider's own outage would spend the
  * whole free tier's worth of keys on a single bad afternoon. Everything else is a
  * malformed request, which is malformed on every key and every model.
+ *
+ * 401 and 403 were one case, and they are not. 401 is the key: it will be refused for
+ * everything, so resting it for a day is right. 403 is permission, and permission is
+ * usually per-model — OpenRouter answers 403 on a `:free` model when the account has not
+ * allowed prompts to reach free endpoints, on a key that works perfectly for everything
+ * else. Treating that as a dead credential rested the whole provider for twenty-four
+ * hours over one model's policy, which is how a working openrouter key disappeared in
+ * the middle of a probe. So it is handled like 402: blame the model, and only condemn
+ * the key once a second, different model on it refuses too.
  */
 export const kindOfFailure = (status) =>
   status === 429 ? 'rate'
     : status === 402 ? 'credit'
-      : (status === 401 || status === 403) ? 'auth'
-        : status >= 500 ? 'upstream'          // their servers, not our credentials
-          : status === 404 ? 'missing'        // this provider does not carry this model
-            : null;
+      : status === 401 ? 'auth'               // this key is not accepted anywhere
+        : status === 403 ? 'forbidden'        // this key may not have THIS model
+          : status >= 500 ? 'upstream'        // their servers, not our credentials
+            : status === 404 ? 'missing'      // this provider does not carry this model
+              : null;
 
 /** Failures that mean move on to the next model rather than the next key. */
 export const blamesTheModel = (kind) => kind === 'upstream' || kind === 'missing';
