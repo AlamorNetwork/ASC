@@ -40,6 +40,58 @@ const ASSESS_SYSTEM = `از پاساژهای زیر برای جواب دادن �
 - اگر پاساژها نشان می‌دهند سند اصطلاح دیگری به کار می‌برد، آن را به‌عنوان lead بنویس و next_queries را از همان بساز. این مهم‌ترین کار توست.
 - اگر هیچ ربطی پیدا نشد و سرنخی هم نیست، enough را true کن و next_queries را خالی بگذار.`;
 
+// The claim pass, which is the call that actually stalled. Same role, same chatJson,
+// but a different order of magnitude of input — and that turned out to be the variable
+// that separates "answers in seven seconds" from "silent for two minutes".
+const CLAIMS_SYSTEM = `از متن زیر ادعاهای مشخص استخراج کن. فقط JSON بده، بدون توضیح و بدون code fence:
+
+{
+  "summary": "دو تا سه جمله فارسی: این سند چیست و چه می‌گوید",
+  "claims": [
+    { "text": "یک ادعای مشخص، به فارسی",
+      "quote": "عین همان جمله از متن، کلمه‌به‌کلمه، بدون ترجمه و بدون تغییر" }
+  ]
+}
+
+قواعد:
+- quote باید عیناً از متن کپی شود. خودکار تطبیق داده می‌شود و بازنویسی رد می‌شود.
+- چیزی که در متن نیست ننویس.
+- حداکثر ۱۰ ادعای مهم.`;
+
+/**
+ * A document of a realistic size, every sentence different.
+ *
+ * Padding with a repeated paragraph would make the quote test meaningless — any sentence
+ * would appear many times and a model could "quote" without having read anything. Each
+ * paragraph here carries its own number and its own facts, so a quote that matches was
+ * copied from one specific place.
+ */
+function longDocument(targetChars) {
+  const parts = [
+    'پژوهش درباره‌ی آیین‌های رازآمیز در دوران باستان با دشواری منابع روبه‌روست.',
+    'کتیبه‌ها اغلب ناقص‌اند و بخش بزرگی از آن‌ها در آتش‌سوزی‌های متأخر از میان رفته است.',
+    'باستان‌شناسان بر سر تاریخ‌گذاری لایه‌های زیرین هم‌نظر نیستند.',
+    'سفال‌های یافت‌شده در لایه‌ی چهارم با نمونه‌های شناخته‌شده‌ی منطقه تفاوت دارند.',
+    'گزارش‌های سفرنامه‌نویسان سده‌ی نوزدهم را باید با احتیاط خواند.',
+    'نقشه‌های آن دوره مقیاس ثابتی ندارند و فاصله‌ها را اغلب اغراق‌آمیز نشان می‌دهند.',
+  ];
+  const out = [];
+  let n = 1;
+  let size = 0;
+  while (size < targetChars) {
+    const p = `بند ${n}: ${parts[n % parts.length]} در بررسی شماره‌ی ${n} این نکته بار دیگر تأیید شد.`;
+    out.push(p);
+    size += p.length + 2;
+    n++;
+  }
+  // Planted last so it cannot be reached by reading only the opening — the sample sent
+  // to a model keeps the head and the tail, and this is how we learn the tail arrived.
+  out.push('یافته‌ی کلیدی: مهرابه‌ی کشف‌شده در دهکده‌ی سرخ‌آباد دارای سه سکوی سنگی متمایز است.');
+  return out.join('\n\n');
+}
+
+const DOC = longDocument(38000);
+
 const CASES = [
   {
     name: 'lead',
@@ -68,6 +120,25 @@ const CASES = [
     wants: (d) => d.enough === true && (d.next_queries ?? []).length === 0,
     why: 'باید بایستد، نه اینکه دور بعد را روی هیچ خرج کند',
   },
+  {
+    name: 'long',
+    // The call that stalled. Everything above fits in a few hundred characters; the
+    // claim pass sends up to forty thousand, and a model behind a gateway combo can
+    // answer the first two in seconds and then go silent on this one — either because it
+    // is genuinely slower on a long prompt, or because the gateway is walking past
+    // members whose context window cannot hold it. Either way the role is unusable for
+    // documents, and nothing measured that until now.
+    system: CLAIMS_SYSTEM,
+    content: `سند «گزارش کاوش»:\n\n${DOC}`,
+    maxTokens: 3000,
+    // The quote is the whole point: a claim whose quote is not verbatim in the document
+    // is rejected by verify, so a model that paraphrases produces nothing usable no
+    // matter how sensible it sounds.
+    wants: (d) => Array.isArray(d.claims) && d.claims.length > 0
+      && d.claims.some((c) => c.quote && DOC.includes(String(c.quote).trim())),
+    shown: (d) => `${(d.claims ?? []).length} ادعا · ${(d.claims ?? []).filter((c) => c.quote && DOC.includes(String(c.quote).trim())).length} نقل‌قول دقیق`,
+    why: 'باید دست‌کم یک نقل‌قول عیناً از متن کپی کند، وگرنه هیچ ادعایی تأیید نمی‌شود',
+  },
 ];
 
 // modelFor, not config: the setting in the database is what the bot actually uses, and
@@ -82,7 +153,8 @@ if (!specs.length) {
   process.exit(0);
 }
 
-console.log(`\n${CASES.length} judgement(s) per model — the ones this role is actually asked for\n`);
+console.log(`\n${CASES.length} judgement(s) per model — the ones this role is actually asked for,`);
+console.log(`the last on a ${DOC.length.toLocaleString('en-US')}-character document, which is the call that stalled\n`);
 
 const results = [];
 for (const spec of specs) {
@@ -94,6 +166,7 @@ for (const spec of specs) {
   let json = 0;
   let cost = 0;
   const times = [];
+  const per = new Map();
   let died = null;
 
   for (const c of CASES) {
@@ -101,28 +174,33 @@ for (const spec of specs) {
     try {
       const { data, usage } = await chatJson({
         model: spec,
-        system: ASSESS_SYSTEM,
-        content: `پرسش: ${c.question}\n\nپاساژها:\n${c.passages.map((p, i) => `[${i + 1}] ${p}`).join('\n')}`,
-        maxTokens: 700,
+        system: c.system ?? ASSESS_SYSTEM,
+        content: c.content
+          ?? `پرسش: ${c.question}\n\nپاساژها:\n${c.passages.map((p, i) => `[${i + 1}] ${p}`).join('\n')}`,
+        maxTokens: c.maxTokens ?? 700,
         noThinking: false,
-        // A probe that can sit for four minutes per model is not a probe you run.
-        budgetMs: 60000,
+        // A probe that can sit for four minutes per model is not a probe you run. The
+        // long case gets the real ceiling, because being slower there is the finding.
+        budgetMs: c.name === 'long' ? DEFAULT_BUDGET_MS : 60000,
       });
       const ms = Date.now() - t0;
       times.push(ms);
+      per.set(c.name, { ms, ok: null });
       json++;
       cost += usage.costToman ?? 0;
 
       const right = Boolean(c.wants(data));
       if (right) won++;
-      const shown = c.name === 'lead'
-        ? (data.lead ?? '—')
-        : `enough=${data.enough} · ${(data.next_queries ?? []).length} query`;
+      per.get(c.name).ok = right;
+      const shown = c.shown ? c.shown(data)
+        : c.name === 'lead' ? (data.lead ?? '—')
+          : `enough=${data.enough} · ${(data.next_queries ?? []).length} query`;
       console.log(`   ${right ? '✅' : '✖ '} ${c.name.padEnd(5)} ${String(ms).padStart(6)}ms  ${String(shown).slice(0, 54)}`);
       if (!right) console.log(`      ↳ ${c.why}`);
     } catch (err) {
       const ms = Date.now() - t0;
       times.push(ms);
+      per.set(c.name, { ms, ok: false, err: err.message });
       died = err.message;
       console.log(`   ✖  ${c.name.padEnd(5)} ${String(ms).padStart(6)}ms  ${err.message.replace(/\s+/g, ' ').slice(0, 60)}`);
     }
@@ -130,7 +208,7 @@ for (const spec of specs) {
 
   const slowest = times.length ? Math.max(...times) : 0;
   results.push({
-    spec, won, json, cost, links: links.length,
+    spec, won, json, cost, links: links.length, long: per.get('long') ?? null, times,
     avg: times.length ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0,
     slowest, died,
   });
@@ -145,19 +223,38 @@ if (!results.length) { console.log('Nothing answered.\n'); process.exit(0); }
 results.sort((a, b) => b.json - a.json || b.won - a.won || a.avg - b.avg);
 
 console.log('─'.repeat(78));
-console.log('model'.padEnd(40) + 'json'.padStart(7) + 'right'.padStart(7) + 'avg'.padStart(9) + 'worst'.padStart(9));
+console.log('model'.padEnd(34) + 'json'.padStart(7) + 'right'.padStart(7) + 'short'.padStart(10) + `${(DOC.length / 1000).toFixed(0)}k doc`.padStart(11));
 console.log('─'.repeat(78));
 for (const r of results) {
-  console.log(r.spec.slice(0, 39).padEnd(40) +
+  // The short cases and the long one are reported apart rather than averaged together.
+  // Averaging is what hid this in the first place: a model that answers a paragraph in
+  // seven seconds and a document in a hundred and twenty has one number that describes
+  // neither, and it is the second one that decides whether documents work at all.
+  const shortMs = r.times.filter((_, i) => CASES[i]?.name !== 'long');
+  const shortAvg = shortMs.length ? Math.round(shortMs.reduce((a, b) => a + b, 0) / shortMs.length) : 0;
+  const long = r.long
+    ? `${(r.long.ms / 1000).toFixed(1)}s${r.long.ok === false ? ' ✖' : ''}`
+    : '—';
+  console.log(r.spec.slice(0, 33).padEnd(34) +
     `${r.json}/${CASES.length}`.padStart(7) + `${r.won}/${CASES.length}`.padStart(7) +
-    `${r.avg}ms`.padStart(9) + `${r.slowest}ms`.padStart(9));
+    `${shortAvg}ms`.padStart(10) + long.padStart(11));
 }
 console.log('─'.repeat(78));
 
 const usable = results.filter((r) => r.json === CASES.length);
 if (!usable.length) {
-  console.log('\n⚠ هیچ‌کدام در هر دو حالت JSON برنگرداندند. این نقش فقط از راه chatJson صدا');
-  console.log('  زده می‌شود، پس مدلی که گاهی متن می‌دهد اینجا قابل استفاده نیست.\n');
+  console.log(`\n⚠ هیچ‌کدام در هر ${CASES.length} حالت JSON برنگرداندند. این نقش فقط از راه chatJson`);
+  console.log('  صدا زده می‌شود، پس مدلی که گاهی متن می‌دهد اینجا قابل استفاده نیست.');
+
+  // A model that handles a paragraph and not a document is not simply worse — it is
+  // usable for planning and unusable for reading a file, which are different settings.
+  const shortOnly = results.filter((r) => r.long && r.long.ok !== true && r.json >= CASES.length - 1);
+  if (shortOnly.length) {
+    console.log('\n  اما این‌ها کوتاه‌ها را جواب دادند و فقط روی سند بلند افتادند:');
+    for (const r of shortOnly) console.log(`    ${r.spec} — ${r.long.err ? r.long.err.slice(0, 60) : `${(r.long.ms / 1000).toFixed(0)}s`}`);
+    console.log('  یعنی برای برنامه‌ریزی به درد می‌خورند و برای خواندن سند نه.');
+  }
+  console.log('');
   process.exit(0);
 }
 
@@ -176,6 +273,17 @@ if (providersUsed.size < 2) {
   console.log('  می‌روند. یک مدل از جای دیگر هم امتحان کن.');
 }
 
-console.log(`\nهر تحقیق ده‌ها بار این نقش را صدا می‌زند، پس ${best.avg}ms یعنی حدود`);
-console.log(`${(best.avg * 30 / 1000).toFixed(0)} ثانیه فقط فکر کردن در یک تحقیق سی‌مرحله‌ای.`);
+const bestShort = best.times.filter((_, i) => CASES[i]?.name !== 'long');
+const shortAvg = Math.round(bestShort.reduce((a, b) => a + b, 0) / (bestShort.length || 1));
+console.log(`\nهر تحقیق ده‌ها بار این نقش را صدا می‌زند، پس ${shortAvg}ms یعنی حدود`);
+console.log(`${(shortAvg * 30 / 1000).toFixed(0)} ثانیه فقط فکر کردن در یک تحقیق سی‌مرحله‌ای.`);
+
+if (best.long) {
+  console.log(`\nروی سند ${(DOC.length / 1000).toFixed(0)} هزار کاراکتری: ${(best.long.ms / 1000).toFixed(1)} ثانیه` +
+    `${best.long.ok ? '' : ' — و نتیجه‌اش به درد نخورد'}.`);
+  if (best.long.ms > 60000) {
+    console.log('این همان فراخوانی است که سند را نگه می‌دارد. اگر خیلی از سقف فاصله ندارد،');
+    console.log('برای نقش structure یک مدل با کانتکست بزرگ‌تر بگذار، یا سند را کوچک‌تر بفرست.');
+  }
+}
 console.log(`\nسقف هر فراخوانی ${DEFAULT_BUDGET_MS / 1000} ثانیه است — هرچه بالاتر از آن، خطا می‌شود.\n`);
