@@ -40,6 +40,11 @@
 
 set -euo pipefail
 
+# A script that stops on the first error should say which one. Without this it exits
+# silently mid-run and looks like it finished — the last thing printed was a heading, so
+# the failure read as "this step produced no output" rather than "this step died".
+trap 'printf "\n\033[1m!! stopped at line %s (exit %s)\033[0m\n" "$LINENO" "$?" >&2' ERR
+
 DOMAIN="${1:?usage: setup-domain.sh <domain> [email]}"
 EMAIL="${2:-}"
 UPSTREAM="127.0.0.1:20128"
@@ -112,7 +117,11 @@ echo "  yes"
 # happened here: xray held 443, so both the local test and the one through Cloudflare
 # were talking to xray and reporting its 404 as though nginx had said it.
 say "who owns port $HTTPS_PORT"
-HOLDER=$(ss -tlnpH "sport = :$HTTPS_PORT" 2>/dev/null | grep -o 'users:(("[^"]*' | sed 's/.*"//' | sort -u | tr '\n' ' ')
+# The `|| true` is the whole point of this line. Finding nobody on the port is the good
+# case, and it is also the case where grep matches nothing and exits 1 — which pipefail
+# turns into a failed pipeline and set -e turns into a silent exit. So the script killed
+# itself exactly when the port was free.
+HOLDER=$(ss -tlnpH "sport = :$HTTPS_PORT" 2>/dev/null | grep -o 'users:(("[^"]*' | sed 's/.*"//' | sort -u | tr '\n' ' ' || true)
 if [ -n "${HOLDER// /}" ] && ! printf '%s' "$HOLDER" | grep -q nginx; then
   cat <<TEXT
   $HOLDER is already listening on $HTTPS_PORT.
