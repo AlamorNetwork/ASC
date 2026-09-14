@@ -45,6 +45,12 @@ EMAIL="${2:-}"
 UPSTREAM="127.0.0.1:20128"
 CF_TOKEN="${CF_TOKEN:-}"
 CF_CREDS=/etc/letsencrypt/cloudflare.ini
+# Overridable because 443 is not always free. A VPN or proxy daemon that got there first
+# cannot be evicted without taking something else down, and Cloudflare can be told to
+# reach the origin on another port, so moving is cheaper than fighting. 8443 is one of
+# the ports its proxy accepts for HTTPS.
+HTTPS_PORT="${HTTPS_PORT:-443}"
+LIVE="/etc/letsencrypt/live/$DOMAIN"
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
@@ -96,6 +102,41 @@ curl -fsS -m 5 "http://$UPSTREAM/v1/models" >/dev/null \
   || { echo "9router is not answering on $UPSTREAM. Start it first: systemctl start 9router"; exit 1; }
 echo "  yes"
 
+# Who already owns the HTTPS port, asked before anything is built on the assumption that
+# nobody does.
+#
+# `listen 443 ssl` in a file nginx has read is not the same as nginx holding 443. If
+# something else got there first, the bind fails, nginx keeps serving its old
+# configuration, and every test against 443 is answered by the other program — with a
+# valid certificate sitting on disk and every syntax check green. That is exactly what
+# happened here: xray held 443, so both the local test and the one through Cloudflare
+# were talking to xray and reporting its 404 as though nginx had said it.
+say "who owns port $HTTPS_PORT"
+HOLDER=$(ss -tlnpH "sport = :$HTTPS_PORT" 2>/dev/null | grep -o 'users:(("[^"]*' | sed 's/.*"//' | sort -u | tr '\n' ' ')
+if [ -n "${HOLDER// /}" ] && ! printf '%s' "$HOLDER" | grep -q nginx; then
+  cat <<TEXT
+  $HOLDER is already listening on $HTTPS_PORT.
+
+  nginx cannot bind it, so it will go on serving whatever it served before and every
+  check against $HTTPS_PORT will be answered by $HOLDER instead. Nothing here is wrong
+  with your nginx configuration; it simply never sees the request.
+
+  Two ways out, and neither disturbs $HOLDER:
+
+  1. Put this on another port and let Cloudflare reach it there. Cloudflare's proxy can
+     be told which origin port to use, so visitors still type the plain name:
+       HTTPS_PORT=8443 CF_TOKEN=... PASSWORD_CHANGED=1 bash \$0 $DOMAIN ${EMAIL:-you@example.com}
+     then Cloudflare → Rules → Origin Rules → for $DOMAIN, rewrite destination port 8443.
+
+  2. If $HOLDER is xray or similar, give it a fallback to nginx and leave 443 with it.
+     That is a change to its config, not this one, so this script will not touch it.
+
+  Nothing has been changed.
+TEXT
+  exit 1
+fi
+echo "  ${HOLDER:-nobody}"
+
 # Whatever already owns 443 should keep owning it. Caddy does its own certificates, so
 # if it is here there is nothing for certbot to do and two proxies fighting over the
 # port would be the only result.
@@ -126,15 +167,77 @@ else
   say "installing nginx and certbot"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq nginx certbot python3-certbot-nginx
+  apt-get install -y -qq nginx certbot
   if [ -n "$CF_TOKEN" ]; then
     apt-get install -y -qq python3-certbot-dns-cloudflare
   fi
 
+  # The certificate is obtained first and the server block written around it, rather than
+  # letting certbot edit nginx afterwards. Two reasons. Its nginx installer always writes
+  # `listen 443 ssl`, which is no use when something else already holds 443. And what it
+  # leaves behind is hard to read later — it rewrote the port 80 block into an
+  # `if ($host = ...) { return 301; }` followed by a bare `return 404`, so any request
+  # that missed the redirect answered 404 and looked like a routing fault.
+  say "certificate"
+  ACCOUNT=(--non-interactive --agree-tos)
+  if [ -n "$EMAIL" ]; then
+    ACCOUNT+=(-m "$EMAIL")
+  else
+    ACCOUNT+=(--register-unsafely-without-email)
+  fi
+
+  if [ -n "$CF_TOKEN" ]; then
+    # Written before it is used and only readable by root: certbot re-reads this file at
+    # every renewal, so the token lives here for as long as the certificate does.
+    install -d -m 0755 /etc/letsencrypt
+    umask 077
+    printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$CF_CREDS"
+    chmod 600 "$CF_CREDS"
+    umask 022
+    echo "  proving ownership through DNS, so port 80 is not involved and the proxy can stay on"
+    # Two authorities have to agree the record exists, and Cloudflare's own resolvers
+    # publish it before the rest of the world sees it. Waiting is cheaper than a failed
+    # issuance that counts against the rate limit.
+    certbot certonly --authenticator dns-cloudflare \
+      --dns-cloudflare-credentials "$CF_CREDS" \
+      --dns-cloudflare-propagation-seconds 30 \
+      -d "$DOMAIN" "${ACCOUNT[@]}"
+  else
+    # webroot rather than --nginx: the challenge file is served by the plain port 80
+    # block written below, so nothing has to rewrite configuration to prove ownership.
+    install -d /var/www/html
+    certbot certonly --webroot -w /var/www/html -d "$DOMAIN" "${ACCOUNT[@]}"
+  fi
+  systemctl enable certbot.timer >/dev/null 2>&1 || true
+  echo "  renewal is handled by certbot.timer; check it with: systemctl list-timers certbot*"
+
+  say "nginx"
   cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF
+# Port 80 has two jobs: answering the ACME challenge at renewal time, and sending
+# everything else upstairs. It never proxies, so nothing reaches 9router in the clear.
 server {
     listen 80;
+    listen [::]:80;
     server_name $DOMAIN;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen $HTTPS_PORT ssl;
+    listen [::]:$HTTPS_PORT ssl;
+    server_name $DOMAIN;
+
+    ssl_certificate     $LIVE/fullchain.pem;
+    ssl_certificate_key $LIVE/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
     # The dashboard, and nothing else. /v1/ is where spending happens and it has no
     # business being reachable from outside this machine — ASC reaches it on localhost.
@@ -161,61 +264,29 @@ server {
 EOF
   install -d /etc/nginx/sites-enabled
   ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
-  nginx -t && systemctl reload nginx
 
   # Writing the file is not the same as nginx reading it. Debian's package includes
-  # sites-enabled; the one from nginx.org includes only conf.d, and a symlink into a
-  # directory nginx never opens passes `nginx -t` and changes nothing — which is exactly
-  # how this ended up serving 404 from some other block with a valid certificate
-  # installed and every syntax check green.
-  #
-  # So the test is whether the name appears in the config nginx actually loaded, and the
-  # repair is an include from conf.d rather than editing nginx.conf: conf.d is already
-  # inside http{}, so the directive lands in the right context without a sed into
-  # someone else's file. The site file is left where it is because certbot has already
-  # written the TLS block into it.
+  # sites-enabled and nginx.org's does not, so a symlink can sit in a directory nginx
+  # never opens while `nginx -t` stays perfectly green.
   if ! nginx -T 2>/dev/null | grep -q "server_name $DOMAIN"; then
     say "nginx is not reading sites-enabled — adding the include"
     printf 'include /etc/nginx/sites-enabled/*;\n' > /etc/nginx/conf.d/000-sites-enabled.conf
-    nginx -t && systemctl reload nginx
-    if nginx -T 2>/dev/null | grep -q "server_name $DOMAIN"; then
-      echo "  fixed — the block is loaded now"
-    else
-      echo "  still not loaded. Another block may own the name:"
-      nginx -T 2>/dev/null | grep -n 'server_name' | head -20
-    fi
   fi
 
-  say "certificate"
-  # The account identity is the same either way; only how ownership is proved differs.
-  ACCOUNT=(--non-interactive --agree-tos --redirect)
-  if [ -n "$EMAIL" ]; then
-    ACCOUNT+=(-m "$EMAIL")
-  else
-    ACCOUNT+=(--register-unsafely-without-email)
-  fi
+  nginx -t || { echo "  nginx rejected the configuration; nothing reloaded"; exit 1; }
+  # restart, not reload: a reload HUPs the running master and carries on with the sockets
+  # it already has, so it cannot pick up a listen port that was not there before.
+  systemctl restart nginx
 
-  if [ -n "$CF_TOKEN" ]; then
-    # Written before it is used and only readable by root: certbot re-reads this file at
-    # every renewal, so the token lives here for as long as the certificate does.
-    install -d -m 0755 /etc/letsencrypt
-    umask 077
-    printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$CF_CREDS"
-    chmod 600 "$CF_CREDS"
-    umask 022
-    echo "  proving ownership through DNS, so port 80 is not involved and the proxy can stay on"
-    # Two authorities have to agree the record exists, and Cloudflare's own resolvers
-    # publish it before the rest of the world sees it. Waiting is cheaper than a failed
-    # issuance that counts against the rate limit.
-    certbot --authenticator dns-cloudflare \
-      --dns-cloudflare-credentials "$CF_CREDS" \
-      --dns-cloudflare-propagation-seconds 30 \
-      --installer nginx -d "$DOMAIN" "${ACCOUNT[@]}"
-  else
-    certbot --nginx -d "$DOMAIN" "${ACCOUNT[@]}"
+  # And the question the earlier version never asked: is nginx actually holding the port?
+  # A failed bind leaves it serving the old configuration and writes the reason to a log
+  # nobody reads, which is how a correct file spent an afternoon looking like a bug.
+  if ! ss -tlnpH "sport = :$HTTPS_PORT" 2>/dev/null | grep -q nginx; then
+    echo "  ⚠ nginx is not listening on $HTTPS_PORT. Why:"
+    journalctl -u nginx -n 15 --no-pager 2>/dev/null | grep -i 'bind\|fail\|error' || true
+    exit 1
   fi
-  systemctl enable certbot.timer >/dev/null 2>&1 || true
-  echo "  renewal is handled by certbot.timer; check it with: systemctl list-timers certbot*"
+  echo "  listening on $HTTPS_PORT"
 fi
 
 # Three layers can answer, and testing only through the domain cannot tell them apart.
