@@ -18,20 +18,33 @@
 # (testing a model, say) will not work over the domain, because that is exactly what is
 # blocked. Use the SSH tunnel for that.
 #
-# BEFORE RUNNING — Cloudflare:
-#   Let's Encrypt has to reach this machine on port 80 to prove you own the name. With
-#   Cloudflare's proxy on (orange cloud) that request lands on Cloudflare instead, and
-#   if its SSL mode is Full it then tries to reach your origin over 443, which has no
-#   certificate yet. That deadlock is the usual reason this fails.
+# TWO WAYS TO PROVE YOU OWN THE NAME, and which one you want depends on Cloudflare.
 #
-#   So: set the record to DNS only (grey cloud), run this, then turn the proxy back on
-#   and set SSL/TLS mode to Full (strict). Grey cloud for a few minutes, orange after.
+#   Without CF_TOKEN, Let's Encrypt proves it by fetching a file over port 80. With the
+#   proxy on (orange cloud) that request lands on Cloudflare, which then fetches from
+#   your origin the way its SSL mode says — and on Full that means over 443, which has
+#   no certificate yet. That deadlock is the usual reason this fails, so the proxy has
+#   to go grey for a few minutes and orange again afterwards.
+#
+#   With CF_TOKEN, it is proved by writing a DNS record instead, so nothing ever has to
+#   reach port 80 and the proxy stays on the whole time. Renewals keep working without
+#   anyone remembering to flip the cloud. This is the better path when Cloudflare is
+#   already holding the zone:
+#
+#     CF_TOKEN=... PASSWORD_CHANGED=1 bash scripts/setup-domain.sh router.example.ir you@example.com
+#
+#   Make the token at dash.cloudflare.com → My Profile → API Tokens → Create Token →
+#   Edit zone DNS, scoped to this one zone. It is written to /etc/letsencrypt/ as 0600
+#   because certbot needs it again at every renewal; a token that can edit one zone's
+#   DNS is the least it can be given.
 
 set -euo pipefail
 
 DOMAIN="${1:?usage: setup-domain.sh <domain> [email]}"
 EMAIL="${2:-}"
 UPSTREAM="127.0.0.1:20128"
+CF_TOKEN="${CF_TOKEN:-}"
+CF_CREDS=/etc/letsencrypt/cloudflare.ini
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
@@ -68,8 +81,14 @@ GOT=$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || echo '')
 echo "  this server : ${WANT:-unknown}"
 echo "  $DOMAIN resolves to: ${GOT:-nothing}"
 if [ -n "$WANT" ] && [ -n "$GOT" ] && [ "$WANT" != "$GOT" ]; then
-  echo "  They differ. That is expected while Cloudflare's proxy is on — and it is also"
-  echo "  exactly what stops certbot working. Set the record to DNS only first."
+  if [ -n "$CF_TOKEN" ]; then
+    echo "  They differ, which is what a proxied record looks like. Fine — the DNS"
+    echo "  challenge does not care where the name points."
+  else
+    echo "  They differ. That is expected while Cloudflare's proxy is on — and it is also"
+    echo "  exactly what stops the port 80 challenge working. Either set the record to"
+    echo "  DNS only first, or re-run with CF_TOKEN=... and leave the proxy alone."
+  fi
 fi
 
 say "is 9router actually up"
@@ -108,6 +127,9 @@ else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq nginx certbot python3-certbot-nginx
+  if [ -n "$CF_TOKEN" ]; then
+    apt-get install -y -qq python3-certbot-dns-cloudflare
+  fi
 
   cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF
 server {
@@ -141,10 +163,32 @@ EOF
   nginx -t && systemctl reload nginx
 
   say "certificate"
+  # The account identity is the same either way; only how ownership is proved differs.
+  ACCOUNT=(--non-interactive --agree-tos --redirect)
   if [ -n "$EMAIL" ]; then
-    certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$EMAIL" --redirect
+    ACCOUNT+=(-m "$EMAIL")
   else
-    certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --redirect
+    ACCOUNT+=(--register-unsafely-without-email)
+  fi
+
+  if [ -n "$CF_TOKEN" ]; then
+    # Written before it is used and only readable by root: certbot re-reads this file at
+    # every renewal, so the token lives here for as long as the certificate does.
+    install -d -m 0755 /etc/letsencrypt
+    umask 077
+    printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$CF_CREDS"
+    chmod 600 "$CF_CREDS"
+    umask 022
+    echo "  proving ownership through DNS, so port 80 is not involved and the proxy can stay on"
+    # Two authorities have to agree the record exists, and Cloudflare's own resolvers
+    # publish it before the rest of the world sees it. Waiting is cheaper than a failed
+    # issuance that counts against the rate limit.
+    certbot --authenticator dns-cloudflare \
+      --dns-cloudflare-credentials "$CF_CREDS" \
+      --dns-cloudflare-propagation-seconds 30 \
+      --installer nginx -d "$DOMAIN" "${ACCOUNT[@]}"
+  else
+    certbot --nginx -d "$DOMAIN" "${ACCOUNT[@]}"
   fi
   systemctl enable certbot.timer >/dev/null 2>&1 || true
   echo "  renewal is handled by certbot.timer; check it with: systemctl list-timers certbot*"
@@ -177,7 +221,8 @@ fi
 cat <<TEXT
 
 Now, in order:
-  1. Cloudflare → set the record back to proxied (orange), SSL/TLS mode Full (strict).
+  1. Cloudflare → record proxied (orange), SSL/TLS mode Full (strict). With CF_TOKEN
+     the record never left the proxy, so only the SSL mode needs checking.
   2. Check that https://$DOMAIN does NOT accept 123456. If it does, the password was
      not actually changed and every provider key in the gateway is one guess away.
   3. Leave ASC pointing at localhost — it is on this machine, so it does not need the
