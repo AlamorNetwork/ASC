@@ -194,28 +194,65 @@ EOF
   echo "  renewal is handled by certbot.timer; check it with: systemctl list-timers certbot*"
 fi
 
-say "trying it"
+# Three layers can answer, and testing only through the domain cannot tell them apart.
+# The first version did exactly that and reported a 404 as "expected while the proxy is
+# on, until SSL mode is Full" — which is wrong twice over: a 404 means something
+# answered and did not have the path, while an SSL mismatch at Cloudflare is 525/526 and
+# an unreachable origin is 521/522. So each layer is now asked separately.
+#
+# --resolve sends the request to this machine while still presenting the real name in
+# SNI and Host, which is what nginx selects the server block on. Without it there is no
+# way to ask nginx what it would say without Cloudflare in front.
+say "trying it, one layer at a time"
 sleep 2
-LOGIN=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$DOMAIN/login" 2>/dev/null || echo 'failed')
-API=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "https://$DOMAIN/v1/models" 2>/dev/null || echo 'failed')
-LOCAL=$(curl -sS -m 10 -o /dev/null -w '%{http_code}' "http://$UPSTREAM/v1/models" 2>/dev/null || echo 'failed')
+code() { curl -skS -m 15 -o /dev/null -w '%{http_code}' "$@" 2>/dev/null || echo 'failed'; }
 
-echo "  dashboard   https://$DOMAIN/login    -> $LOGIN   (want 200)"
-echo "  api, public https://$DOMAIN/v1/models -> $API   (want 403)"
-echo "  api, local  http://$UPSTREAM/v1/models -> $LOCAL   (want 200)"
+UP=$(code "http://$UPSTREAM/v1/models")
+ORIGIN_ROOT=$(code --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/")
+ORIGIN_API=$(code --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/v1/models")
+EDGE_ROOT=$(code "https://$DOMAIN/")
+EDGE_API=$(code "https://$DOMAIN/v1/models")
 
-if [ "$LOGIN" = "200" ] && [ "$API" = "403" ] && [ "$LOCAL" = "200" ]; then
+echo "  1. 9router itself   http://$UPSTREAM/v1/models -> $UP   (want 200)"
+echo "  2. nginx, no CDN    https://$DOMAIN/           -> $ORIGIN_ROOT   (want 200)"
+echo "                      https://$DOMAIN/v1/models  -> $ORIGIN_API   (want 403)"
+echo "  3. through Cloudflare  https://$DOMAIN/        -> $EDGE_ROOT   (want 200)"
+echo "                         https://$DOMAIN/v1/models -> $EDGE_API   (want 403)"
+
+if [ "$UP" != "200" ]; then
+  echo "
+  Layer 1. 9router is not answering on $UPSTREAM, so nothing above it can work.
+      systemctl status 9router"
+elif [ "$ORIGIN_API" = "404" ] || [ "$ORIGIN_ROOT" = "404" ]; then
+  # This block returns 403 for /v1/ unconditionally, so a 404 there proves the request
+  # never reached it — some other server block took the name first.
+  echo "
+  Layer 2. nginx answered, but not from this site's block: /v1/ here is a hard 403,
+  so a 404 means another server block claimed the name. Find which:
+      nginx -T | grep -n 'server_name\\|listen' | head -40
+      ls -l /etc/nginx/sites-enabled/"
+elif [ "$ORIGIN_API" != "403" ] || [ "$ORIGIN_ROOT" != "200" ]; then
+  echo "
+  Layer 2. nginx is reachable but not saying what it should. Look at the block:
+      cat /etc/nginx/sites-enabled/$DOMAIN"
+elif [ "$EDGE_API" = "200" ]; then
+  echo "
+  ⚠ The API answered over the domain. It should not. Right now anyone who finds the
+  name can spend your balance. Do not put a key in it until this is 403."
+elif [ "$ORIGIN_ROOT" = "200" ] && [ "$EDGE_ROOT" != "200" ]; then
+  echo "
+  Layer 3. The origin is correct and Cloudflare is not passing it through, so the
+  problem is in the dashboard, not on this machine:
+    $EDGE_ROOT of 521/522  -> Cloudflare cannot reach the origin; check the firewall on 443
+    $EDGE_ROOT of 525/526  -> SSL/TLS mode; set it to Full (strict)
+    $EDGE_ROOT of 404/403  -> something at Cloudflare is claiming this hostname before
+                              the origin is asked: a Worker route, a Pages project, a
+                              Page Rule, or the record pointing somewhere else entirely.
+                              Check DNS → the record for ${DOMAIN%%.*}, and Workers Routes."
+elif [ "$EDGE_ROOT" = "200" ] && [ "$EDGE_API" = "403" ]; then
   echo "
   That is the shape you asked for: the settings page reachable, the spending
   endpoint not, and the bot still able to use it from here."
-elif [ "$API" = "200" ]; then
-  echo "
-  ⚠ The API answered over the domain. It should not. Check the proxy config before
-  putting a key in it — right now anyone who finds the name can spend your balance."
-else
-  echo "
-  Not there yet. With Cloudflare's proxy on, this is expected from outside until the
-  SSL/TLS mode is Full (strict)."
 fi
 
 cat <<TEXT
