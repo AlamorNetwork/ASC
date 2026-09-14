@@ -159,8 +159,32 @@ server {
     client_max_body_size 16m;
 }
 EOF
+  install -d /etc/nginx/sites-enabled
   ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
   nginx -t && systemctl reload nginx
+
+  # Writing the file is not the same as nginx reading it. Debian's package includes
+  # sites-enabled; the one from nginx.org includes only conf.d, and a symlink into a
+  # directory nginx never opens passes `nginx -t` and changes nothing — which is exactly
+  # how this ended up serving 404 from some other block with a valid certificate
+  # installed and every syntax check green.
+  #
+  # So the test is whether the name appears in the config nginx actually loaded, and the
+  # repair is an include from conf.d rather than editing nginx.conf: conf.d is already
+  # inside http{}, so the directive lands in the right context without a sed into
+  # someone else's file. The site file is left where it is because certbot has already
+  # written the TLS block into it.
+  if ! nginx -T 2>/dev/null | grep -q "server_name $DOMAIN"; then
+    say "nginx is not reading sites-enabled — adding the include"
+    printf 'include /etc/nginx/sites-enabled/*;\n' > /etc/nginx/conf.d/000-sites-enabled.conf
+    nginx -t && systemctl reload nginx
+    if nginx -T 2>/dev/null | grep -q "server_name $DOMAIN"; then
+      echo "  fixed — the block is loaded now"
+    else
+      echo "  still not loaded. Another block may own the name:"
+      nginx -T 2>/dev/null | grep -n 'server_name' | head -20
+    fi
+  fi
 
   say "certificate"
   # The account identity is the same either way; only how ownership is proved differs.
