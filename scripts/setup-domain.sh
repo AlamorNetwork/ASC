@@ -312,14 +312,19 @@ sleep 2
 code() { curl -skS -m 15 -o /dev/null -w '%{http_code}' "$@" 2>/dev/null || echo 'failed'; }
 
 UP=$(code "http://$UPSTREAM/v1/models")
-ORIGIN_ROOT=$(code --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/")
-ORIGIN_API=$(code --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/v1/models")
+# Both the resolve and the URL have to carry the real port. Hardcoding 443 here sent the
+# "no CDN" probe straight back to whatever owns 443 — which on this machine is the very
+# program we moved off it — so nginx was reported as broken while it was serving
+# perfectly well one port over.
+ORIGIN="$DOMAIN:$HTTPS_PORT"
+ORIGIN_ROOT=$(code --resolve "$ORIGIN:127.0.0.1" "https://$ORIGIN/")
+ORIGIN_API=$(code --resolve "$ORIGIN:127.0.0.1" "https://$ORIGIN/v1/models")
 EDGE_ROOT=$(code "https://$DOMAIN/")
 EDGE_API=$(code "https://$DOMAIN/v1/models")
 
 echo "  1. 9router itself   http://$UPSTREAM/v1/models -> $UP   (want 200)"
-echo "  2. nginx, no CDN    https://$DOMAIN/           -> $ORIGIN_ROOT   (want 200)"
-echo "                      https://$DOMAIN/v1/models  -> $ORIGIN_API   (want 403)"
+echo "  2. nginx, no CDN    https://$ORIGIN/           -> $ORIGIN_ROOT   (want 200)"
+echo "                      https://$ORIGIN/v1/models  -> $ORIGIN_API   (want 403)"
 echo "  3. through Cloudflare  https://$DOMAIN/        -> $EDGE_ROOT   (want 200)"
 echo "                         https://$DOMAIN/v1/models -> $EDGE_API   (want 403)"
 
@@ -353,6 +358,17 @@ elif [ "$ORIGIN_ROOT" = "200" ] && [ "$EDGE_ROOT" != "200" ]; then
                               the origin is asked: a Worker route, a Pages project, a
                               Page Rule, or the record pointing somewhere else entirely.
                               Check DNS → the record for ${DOMAIN%%.*}, and Workers Routes."
+  if [ "$HTTPS_PORT" != "443" ]; then
+    # Far more likely than any of the above when the port has been moved: Cloudflare is
+    # still knocking on 443, where this is not listening, and whatever does answer there
+    # gives the 404. One rule fixes it, and nothing on this machine needs to change.
+    echo "
+  Before any of that, though: nginx is on $HTTPS_PORT and Cloudflare still calls the
+  origin on 443 unless it is told otherwise. Add the rule and test again:
+    Cloudflare → Rules → Origin Rules → Create rule
+      When  Hostname equals $DOMAIN
+      Then  Rewrite to...  Destination Port  $HTTPS_PORT"
+  fi
 elif [ "$EDGE_ROOT" = "200" ] && [ "$EDGE_API" = "403" ]; then
   echo "
   That is the shape you asked for: the settings page reachable, the spending
