@@ -13,6 +13,7 @@
  */
 import { chatJson, transcribe, audioPart, textPart } from './llm.js';
 import { modelFor } from './settings.js';
+import { oggToMp3 } from './audio.js';
 
 const SYSTEM = `You turn one Persian voice note or message into a structured capture object.
 Reply with a JSON object only — no prose, no code fence.
@@ -84,10 +85,16 @@ async function structureTranscript(text) {
 
 /** One call: a multimodal model hears the audio and returns the structure directly. */
 async function captureInOneCall(buffer) {
+  const model = modelFor('capture');
+  // MixRoute's Gemini OpenAI-compatible route rejects Telegram's OGG/Opus even though
+  // Gemini's native API supports OGG. MP3 is accepted by that route and stays small.
+  const needsMp3 = /gemini/i.test(model);
+  const audio = needsMp3 ? await oggToMp3(buffer) : buffer;
   const { data, usage } = await chatJson({
-    model: modelFor('capture'),
+    model,
     system: SYSTEM,
-    content: [audioPart(buffer.toString('base64')), textPart('این ویس را به یک capture object تبدیل کن.')],
+    content: [audioPart(audio.toString('base64'), needsMp3 ? 'mp3' : 'ogg'),
+      textPart('این ویس را به یک capture object تبدیل کن.')],
   });
   return { capture: normalise(data), usage };
 }

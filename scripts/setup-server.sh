@@ -33,7 +33,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 # poppler-utils is what reads PDFs locally, for free, instead of paying a model to look
 # at every page. sqlite3 is for taking a backup by hand if the bot is ever unreachable.
-apt-get install -y -qq git curl ca-certificates poppler-utils sqlite3
+apt-get install -y -qq git curl ca-certificates poppler-utils sqlite3 ffmpeg
 
 say "node"
 if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
