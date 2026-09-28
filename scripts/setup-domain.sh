@@ -5,10 +5,10 @@
 #   bash scripts/setup-domain.sh router.alamornetwork.ir you@example.com
 #
 # 9router listens on 127.0.0.1:20128 and stays there. What this publishes is the
-# dashboard only — the part you need a browser for. The inference API is blocked at the
+# dashboard only — the part you need a browser for. Inference API paths are blocked at the
 # proxy and stays reachable only from the machine itself.
 #
-# That split is the point. /v1/ is where money is spent; nothing outside this server has
+# That split is the point. API paths are where money is spent; nothing outside this server has
 # any reason to reach it, and ASC talks to 127.0.0.1:20128 directly. The dashboard does
 # need to be reachable, and it has its own password — the running instance reports
 # {"requireLogin":true,"authMode":"password"} — so a public login page is the only
@@ -150,6 +150,11 @@ echo "  ${HOLDER:-nobody}"
 # if it is here there is nothing for certbot to do and two proxies fighting over the
 # port would be the only result.
 if systemctl is-active --quiet caddy 2>/dev/null; then
+  if [ "$HTTPS_PORT" != "443" ]; then
+    echo "  Caddy is active, but this install requires nginx on port $HTTPS_PORT."
+    echo "  Stop or reconfigure Caddy first; leaving its existing site untouched."
+    exit 1
+  fi
   say "caddy is already running — using it, no certbot needed"
   CADDYFILE=/etc/caddy/Caddyfile
   if grep -q "^$DOMAIN" "$CADDYFILE" 2>/dev/null; then
@@ -159,9 +164,9 @@ if systemctl is-active --quiet caddy 2>/dev/null; then
     cat >> "$CADDYFILE" <<EOF
 
 $DOMAIN {
-	# The dashboard, and nothing else. /v1/ is where spending happens and it has no
-	# business being reachable from outside this machine.
-	handle /v1/* {
+	# The dashboard, and nothing else. Keep every inference API local.
+	@inference path /v1 /v1/* /v1beta /v1beta/* /api/v1 /api/v1/* /api/v1beta /api/v1beta/* /codex /codex/*
+	handle @inference {
 		respond "not exposed — use 127.0.0.1:20128 from the server" 403
 	}
 	handle {
@@ -195,29 +200,46 @@ else
     ACCOUNT+=(--register-unsafely-without-email)
   fi
 
-  if [ -n "$CF_TOKEN" ]; then
-    # Written before it is used and only readable by root: certbot re-reads this file at
-    # every renewal, so the token lives here for as long as the certificate does.
-    install -d -m 0755 /etc/letsencrypt
-    umask 077
-    printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$CF_CREDS"
-    chmod 600 "$CF_CREDS"
-    umask 022
-    echo "  proving ownership through DNS, so port 80 is not involved and the proxy can stay on"
-    # Two authorities have to agree the record exists, and Cloudflare's own resolvers
-    # publish it before the rest of the world sees it. Waiting is cheaper than a failed
-    # issuance that counts against the rate limit.
-    certbot certonly --authenticator dns-cloudflare \
-      --dns-cloudflare-credentials "$CF_CREDS" \
-      --dns-cloudflare-propagation-seconds 30 \
-      -d "$DOMAIN" "${ACCOUNT[@]}"
+  if [ -f "$LIVE/fullchain.pem" ] && openssl x509 -in "$LIVE/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1; then
+    echo "  existing certificate is valid for at least seven more days; keeping it"
   else
-    # webroot rather than --nginx: the challenge file is served by the plain port 80
-    # block written below, so nothing has to rewrite configuration to prove ownership.
-    install -d /var/www/html
-    certbot certonly --webroot -w /var/www/html -d "$DOMAIN" "${ACCOUNT[@]}"
+    if [ -n "$CF_TOKEN" ]; then
+      # Written before it is used and only readable by root: certbot re-reads this file at
+      # every renewal, so the token lives here for as long as the certificate does.
+      install -d -m 0755 /etc/letsencrypt
+      umask 077
+      printf 'dns_cloudflare_api_token = %s\n' "$CF_TOKEN" > "$CF_CREDS"
+      chmod 600 "$CF_CREDS"
+      umask 022
+    fi
+    if [ -f "$LIVE/fullchain.pem" ]; then
+      echo "  renewing the existing certificate"
+      certbot renew --cert-name "$DOMAIN" --non-interactive
+    elif [ -n "$CF_TOKEN" ]; then
+      echo "  proving ownership through DNS, so port 80 is not involved and the proxy can stay on"
+      # Two authorities have to agree the record exists, and Cloudflare's own resolvers
+      # publish it before the rest of the world sees it. Waiting is cheaper than a failed
+      # issuance that counts against the rate limit.
+      certbot certonly --authenticator dns-cloudflare \
+        --dns-cloudflare-credentials "$CF_CREDS" \
+        --dns-cloudflare-propagation-seconds 30 \
+        -d "$DOMAIN" "${ACCOUNT[@]}"
+    else
+      # webroot rather than --nginx: the challenge file is served by the plain port 80
+      # block written below, so nothing has to rewrite configuration to prove ownership.
+      install -d /var/www/html
+      certbot certonly --webroot -w /var/www/html -d "$DOMAIN" "${ACCOUNT[@]}"
+    fi
+    [ -f "$LIVE/fullchain.pem" ] && openssl x509 -in "$LIVE/fullchain.pem" -noout -checkend 86400 >/dev/null 2>&1 \
+      || { echo "  certificate is missing or expires within a day"; exit 1; }
   fi
   systemctl enable certbot.timer >/dev/null 2>&1 || true
+  install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+  cat > /etc/letsencrypt/renewal-hooks/deploy/asc-reload-nginx.sh <<'HOOK'
+#!/bin/sh
+if systemctl is-active --quiet nginx; then systemctl reload nginx; fi
+HOOK
+  chmod 755 /etc/letsencrypt/renewal-hooks/deploy/asc-reload-nginx.sh
   echo "  renewal is handled by certbot.timer; check it with: systemctl list-timers certbot*"
 
   say "nginx"
@@ -245,12 +267,13 @@ server {
 
     ssl_certificate     $LIVE/fullchain.pem;
     ssl_certificate_key $LIVE/privkey.pem;
-    include /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    # certbot's DNS-only authenticator does not install nginx snippets.
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
 
-    # The dashboard, and nothing else. /v1/ is where spending happens and it has no
-    # business being reachable from outside this machine — ASC reaches it on localhost.
-    location /v1/ {
+    # The dashboard, and nothing else. Block every known inference entry point,
+    # including the /codex rewrite, before the request reaches 9router.
+    location ~ ^/(v1|v1beta|api/v1|api/v1beta|codex)(/|$) {
         return 403 "not exposed - use 127.0.0.1:20128 from the server\n";
     }
 
@@ -277,7 +300,7 @@ EOF
   # Writing the file is not the same as nginx reading it. Debian's package includes
   # sites-enabled and nginx.org's does not, so a symlink can sit in a directory nginx
   # never opens while `nginx -t` stays perfectly green.
-  if ! nginx -T 2>/dev/null | grep -q "server_name $DOMAIN"; then
+  if ! nginx -T 2>/dev/null | grep -F "server_name $DOMAIN" >/dev/null; then
     say "nginx is not reading sites-enabled — adding the include"
     printf 'include /etc/nginx/sites-enabled/*;\n' > /etc/nginx/conf.d/000-sites-enabled.conf
   fi
@@ -310,6 +333,7 @@ fi
 say "trying it, one layer at a time"
 sleep 2
 code() { curl -skS -m 15 -o /dev/null -w '%{http_code}' "$@" 2>/dev/null || echo 'failed'; }
+dashboard_ok() { case "$1" in 2??|301|302|303|307|308) return 0;; *) return 1;; esac; }
 
 UP=$(code "http://$UPSTREAM/v1/models")
 # Both the resolve and the URL have to carry the real port. Hardcoding 443 here sent the
@@ -319,14 +343,18 @@ UP=$(code "http://$UPSTREAM/v1/models")
 ORIGIN="$DOMAIN:$HTTPS_PORT"
 ORIGIN_ROOT=$(code --resolve "$ORIGIN:127.0.0.1" "https://$ORIGIN/")
 ORIGIN_API=$(code --resolve "$ORIGIN:127.0.0.1" "https://$ORIGIN/v1/models")
+ORIGIN_CODEX=$(code --resolve "$ORIGIN:127.0.0.1" "https://$ORIGIN/codex/x")
 EDGE_ROOT=$(code "https://$DOMAIN/")
 EDGE_API=$(code "https://$DOMAIN/v1/models")
+EDGE_CODEX=$(code "https://$DOMAIN/codex/x")
 
 echo "  1. 9router itself   http://$UPSTREAM/v1/models -> $UP   (want 200)"
-echo "  2. nginx, no CDN    https://$ORIGIN/           -> $ORIGIN_ROOT   (want 200)"
+echo "  2. nginx, no CDN    https://$ORIGIN/           -> $ORIGIN_ROOT   (want 2xx or login redirect)"
 echo "                      https://$ORIGIN/v1/models  -> $ORIGIN_API   (want 403)"
-echo "  3. through Cloudflare  https://$DOMAIN/        -> $EDGE_ROOT   (want 200)"
+echo "                      https://$ORIGIN/codex/x    -> $ORIGIN_CODEX   (want 403)"
+echo "  3. through Cloudflare  https://$DOMAIN/        -> $EDGE_ROOT   (want 2xx or login redirect)"
 echo "                         https://$DOMAIN/v1/models -> $EDGE_API   (want 403)"
+echo "                         https://$DOMAIN/codex/x   -> $EDGE_CODEX   (want 403)"
 
 if [ "$UP" != "200" ]; then
   echo "
@@ -340,15 +368,15 @@ elif [ "$ORIGIN_API" = "404" ] || [ "$ORIGIN_ROOT" = "404" ]; then
   so a 404 means another server block claimed the name. Find which:
       nginx -T | grep -n 'server_name\\|listen' | head -40
       ls -l /etc/nginx/sites-enabled/"
-elif [ "$ORIGIN_API" != "403" ] || [ "$ORIGIN_ROOT" != "200" ]; then
+elif [ "$ORIGIN_API" != "403" ] || [ "$ORIGIN_CODEX" != "403" ] || ! dashboard_ok "$ORIGIN_ROOT"; then
   echo "
   Layer 2. nginx is reachable but not saying what it should. Look at the block:
       cat /etc/nginx/sites-enabled/$DOMAIN"
-elif [ "$EDGE_API" = "200" ]; then
+elif dashboard_ok "$EDGE_ROOT" && { [ "$EDGE_API" != "403" ] || [ "$EDGE_CODEX" != "403" ]; }; then
   echo "
-  ⚠ The API answered over the domain. It should not. Right now anyone who finds the
-  name can spend your balance. Do not put a key in it until this is 403."
-elif [ "$ORIGIN_ROOT" = "200" ] && [ "$EDGE_ROOT" != "200" ]; then
+  ⚠ An inference path did not return 403 through Cloudflare. Do not put a key in
+  9router until both paths are blocked by the public nginx route."
+elif dashboard_ok "$ORIGIN_ROOT" && ! dashboard_ok "$EDGE_ROOT"; then
   echo "
   Layer 3. The origin is correct and Cloudflare is not passing it through, so the
   problem is in the dashboard, not on this machine:
@@ -369,7 +397,7 @@ elif [ "$ORIGIN_ROOT" = "200" ] && [ "$EDGE_ROOT" != "200" ]; then
       When  Hostname equals $DOMAIN
       Then  Rewrite to...  Destination Port  $HTTPS_PORT"
   fi
-elif [ "$EDGE_ROOT" = "200" ] && [ "$EDGE_API" = "403" ]; then
+elif dashboard_ok "$EDGE_ROOT" && [ "$EDGE_API" = "403" ] && [ "$EDGE_CODEX" = "403" ]; then
   echo "
   That is the shape you asked for: the settings page reachable, the spending
   endpoint not, and the bot still able to use it from here."

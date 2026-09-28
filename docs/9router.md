@@ -3,6 +3,34 @@
 9router runs on the server at `127.0.0.1:20128`. ASC talks to it over loopback; its
 dashboard is what you reach in a browser.
 
+## Adding MixRoute on the same server
+
+Dashboard → **Providers** → **Custom Providers** → **Add Custom Provider**
+
+| Field | Value |
+|---|---|
+| Type | `openai-compatible` |
+| Name | `MixRoute` |
+| Prefix | `mixroute` |
+| Base URL | `https://api.mixroute.ai/v1` |
+
+Add a connection under that provider with a **MixRoute** API key. Do not paste the
+9router API key there. A model such as `glm-5.3-flash` is then addressed through
+9router as `mixroute/glm-5.3-flash`. Use the exact model id shown by MixRoute.
+Both the upstream key and ASC's 9router key are separate from the dashboard password.
+
+The local `/v1/models` list is not an authentication test: 9router can return it even
+with a bad key. Try one short completion after connecting, then set roles from the bot
+with `/model structure mixroute/glm-5.3-flash` and
+`/model router mixroute/glm-5.3-flash`. Capture requires a model that accepts audio
+and images; web research requires a genuinely search-grounded route, not merely a
+chat model with a promising name. Check these roles with `/doctor` before a long run.
+
+The dashboard is served by nginx on port 8443 after `setup-server.sh` has a
+Cloudflare DNS token or an existing certificate. Cloudflare needs an Origin Rule
+for `router.alamornetwork.ir` that rewrites the destination port to 8443. Public
+`/v1/*` requests remain blocked; ASC uses `http://127.0.0.1:20128/v1`.
+
 ## Adding kiraai as a provider
 
 Dashboard → **Providers** → **Custom Providers** → **Add Custom Provider**

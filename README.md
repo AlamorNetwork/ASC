@@ -34,13 +34,14 @@ the text cannot assign or upgrade the label.
 
 ```bash
 cp .env.example .env      # then fill in Bot_Token and the model provider
-node scripts/check.js     # no Telegram, no model calls, no cost
+node scripts/check.js     # optional self-check; may call embedding/rerank endpoints
 node index.js
 ```
 
-`scripts/check.js` costs nothing and fails if it ever spends more than a few toman, so it
-is safe to run on every deploy. The checks that call a model for real are skipped there
-and run with `--paid` — worth doing before a release, and after changing a model.
+`scripts/check.js` skips chat-model checks unless `--paid` is passed, but its default
+run can still call embedding and rerank endpoints. The installer does not run it on
+deploy. Run it deliberately when checking a new provider. The chat-model checks run
+with `--paid` — worth doing before a release, and after changing a model.
 `--audio path/to/voice.ogg` adds a real voice note through the capture path.
 
 ```bash
@@ -57,9 +58,53 @@ node scripts/probe-network.js         # measure the route to the provider
 | `OWNER_CHAT_ID` | leave blank on first run; the first chat to message the bot claims it and the id is printed |
 | `ROUTER_KEY` / `ROUTER_BASE_URL` | any OpenAI-compatible endpoint |
 
-**Deployment note.** A local 9router at `127.0.0.1:20128` is not reachable from a server, so a
-deployed instance needs its own provider base URL and key. Nothing else changes — the code only
-ever speaks OpenAI-compatible HTTP.
+### Fresh server: bot, 9router and the dashboard on 8443
+
+On Ubuntu or Debian, clone the repo and run the installer as root. It installs Node 24,
+PDF tools and 9router, then creates systemd units for both 9router and ASC. 9router
+listens only on `127.0.0.1:20128`; nginx serves its dashboard with a certificate on
+port 8443. The public dashboard never forwards `/v1/*` inference requests. ASC talks
+to 9router on localhost.
+
+```bash
+git clone https://github.com/AlamorNetwork/ASC.git /root/ASC
+cd /root/ASC
+read -rsp 'Cloudflare DNS API token: ' CF_TOKEN; echo; export CF_TOKEN
+ASC_DOMAIN_EMAIL=you@example.com bash scripts/setup-server.sh
+unset CF_TOKEN
+```
+
+The DNS token needs DNS-edit permission for `alamornetwork.ir`. It is kept in
+`/etc/letsencrypt/cloudflare.ini` with root-only permissions for renewal. The installer
+prints a random initial 9router dashboard password once. It preserves an existing
+`.env`, database, 9router password and certificate on later runs. Without a DNS token
+or an existing certificate it still installs both services, but leaves HTTPS pending
+and prints the remaining command.
+
+On a server that already has 9router, confirm its dashboard password was changed
+from the bundled default and add `PASSWORD_CHANGED=1` to the installer command. This
+is required before an existing dashboard is published; a fresh install uses its
+newly generated random password.
+
+In Cloudflare, create an **Origin Rule** matching hostname `router.alamornetwork.ir`
+and rewrite the destination port to **8443**; keep the DNS record proxied and SSL/TLS
+mode at **Full (strict)**. The installer cannot create this rule with a DNS-edit token.
+Then visit the dashboard, change its initial password and add MixRoute as an
+OpenAI-compatible custom provider. [docs/9router.md](docs/9router.md) has the fields.
+
+Fill in `/root/ASC/.env` with `Bot_Token`, the API key generated **by 9router** for
+ASC, and `ROUTER_BASE_URL=http://127.0.0.1:20128/v1`. This is separate from the
+MixRoute key stored in 9router. Start and check the bot:
+
+```bash
+cd /root/ASC
+systemctl restart asc
+systemctl is-active asc 9router nginx
+```
+
+The installer checks JavaScript syntax without making model calls. The first install
+waits for `.env` to be filled before starting ASC. A DNS-only token cannot
+open port 8443 through a host firewall, so allow that port there if a firewall is on.
 
 ---
 

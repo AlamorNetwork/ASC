@@ -11,7 +11,8 @@
 # in git and cannot be recreated.
 #
 # Installs 9router alongside, bound to localhost, as a gateway to pool provider keys.
-# ASC_SKIP_9ROUTER=1 leaves it out.
+# With a Cloudflare DNS token, also provisions the dashboard certificate and nginx on
+# port 8443. ASC_SKIP_9ROUTER=1 leaves both out.
 #
 # It does not change the SSH port. That is what locked the last server, and a change
 # worth making is worth making deliberately, with the console open.
@@ -21,6 +22,9 @@ set -euo pipefail
 REPO="https://github.com/AlamorNetwork/ASC.git"
 DIR="${ASC_DIR:-/root/ASC}"
 SERVICE="/etc/systemd/system/asc.service"
+DOMAIN="${ASC_DOMAIN:-router.alamornetwork.ir}"
+DOMAIN_EMAIL="${ASC_DOMAIN_EMAIL:-}"
+DOMAIN_PORT="${HTTPS_PORT:-8443}"
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
@@ -55,11 +59,12 @@ if [ "${ASC_SKIP_9ROUTER:-0}" != "1" ]; then
   # In its own file at 600, not in the unit: /etc/systemd/system is world-readable, and
   # a password sitting in it would be readable by every account on the machine.
   if [ ! -f /etc/9router.env ]; then
-    PASS="${NINEROUTER_PASSWORD:-$(head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20)}"
+    PASS="${NINEROUTER_PASSWORD:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
     printf 'INITIAL_PASSWORD=%s\n' "$PASS" > /etc/9router.env
     chmod 600 /etc/9router.env
     NEW_PASS="$PASS"
   else
+    chmod 600 /etc/9router.env
     echo "  keeping the existing /etc/9router.env"
   fi
 
@@ -127,6 +132,44 @@ else
 fi
 mkdir -p "$DIR/data"
 
+# The domain installer lives in the repository, so cloning must happen first. A DNS
+# challenge is required while Cloudflare's orange proxy is on. An existing, valid
+# certificate is reused; no token is needed on subsequent installs.
+if [ "${ASC_SKIP_9ROUTER:-0}" != "1" ] && [ "${ASC_SETUP_DOMAIN:-1}" = "1" ]; then
+  if [ -z "${NEW_PASS:-}" ] && [ "${PASSWORD_CHANGED:-0}" != "1" ]; then
+    cat <<TEXT
+
+  Dashboard domain is pending: this 9router installation already existed.
+  First confirm that its dashboard password is not the bundled default, then run:
+    PASSWORD_CHANGED=1 bash $DIR/scripts/setup-server.sh
+TEXT
+  elif [ -n "${CF_TOKEN:-}" ] || [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+    say "9router dashboard: $DOMAIN on port $DOMAIN_PORT"
+    if [ -n "${NEW_PASS:-}" ]; then
+      # This install generated a random initial password rather than the bundled
+      # default. It is safe to expose its login page before the user changes it.
+      PASSWORD_CHANGED=1 HTTPS_PORT="$DOMAIN_PORT" \
+        bash "$DIR/scripts/setup-domain.sh" "$DOMAIN" "$DOMAIN_EMAIL"
+    else
+      # On an existing install we cannot infer whether the default dashboard
+      # password was changed. setup-domain.sh checks this explicitly.
+      HTTPS_PORT="$DOMAIN_PORT" \
+        bash "$DIR/scripts/setup-domain.sh" "$DOMAIN" "$DOMAIN_EMAIL"
+    fi
+  else
+    cat <<TEXT
+
+  Dashboard domain is pending: Cloudflare proxy is on, and no certificate or
+  CF_TOKEN was supplied. 9router itself is running privately on localhost.
+  To finish HTTPS without turning off the proxy:
+    read -rsp 'Cloudflare DNS token: ' CF_TOKEN; echo; export CF_TOKEN
+    ASC_DOMAIN_EMAIL=you@example.com bash $DIR/scripts/setup-server.sh
+    unset CF_TOKEN
+  Then add a Cloudflare Origin Rule for $DOMAIN: destination port $DOMAIN_PORT.
+TEXT
+  fi
+fi
+
 say "configuration"
 if [ ! -f "$DIR/.env" ]; then
   cp "$DIR/.env.example" "$DIR/.env"
@@ -180,7 +223,11 @@ the only thing that is not in git:
 TEXT
 else
   say "checking"
-  cd "$DIR" && node scripts/check.js
+  # The full self-check touches embedding and rerank endpoints. Even its default
+  # mode can incur small provider charges, so a deployment only checks syntax.
+  for source in "$DIR"/index.js "$DIR"/src/*.js "$DIR"/scripts/*.js; do
+    node --check "$source"
+  done
   systemctl restart asc
   sleep 2
   systemctl is-active asc && echo "running"
