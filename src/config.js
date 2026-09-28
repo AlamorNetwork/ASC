@@ -61,6 +61,8 @@ export const config = {
   // holding the user's actual work.
   dbPath: env.ASC_DB || path.join(ROOT, 'data', 'asc.db'),
   botToken,
+  telegramApiBaseUrl: (env.TELEGRAM_API_BASE_URL || 'https://api.telegram.org').replace(/\/+$/, ''),
+  telegramLocalFilesDir: env.TELEGRAM_LOCAL_FILES_DIR || '',
   router,
 
   /**

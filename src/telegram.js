@@ -1,7 +1,15 @@
 import { config } from './config.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { MAX_DOCUMENT_BYTES, HOSTED_TELEGRAM_BYTES } from './file-limits.js';
 
-const API = `https://api.telegram.org/bot${config.botToken}`;
-const FILE_API = `https://api.telegram.org/file/bot${config.botToken}`;
+const base = new URL(config.telegramApiBaseUrl);
+if (base.protocol !== 'https:' && !(base.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(base.hostname))) {
+  throw new Error('TELEGRAM_API_BASE_URL must use HTTPS or loopback HTTP');
+}
+const API = `${base.toString().replace(/\/+$/, '')}/bot${config.botToken}`;
+const FILE_API = `${base.toString().replace(/\/+$/, '')}/file/bot${config.botToken}`;
+const LOCAL = base.hostname === '127.0.0.1' || base.hostname === 'localhost' || base.hostname === '[::1]';
 
 async function call(method, payload) {
   const res = await fetch(`${API}/${method}`, {
@@ -35,11 +43,48 @@ export async function* updates({ timeout = 30 } = {}) {
   }
 }
 
-export async function downloadFile(fileId) {
-  const meta = await call('getFile', { file_id: fileId });
+export function checkDownloadSize(fileSize, { local = LOCAL } = {}) {
+  if (fileSize > MAX_DOCUMENT_BYTES) throw new Error(`فایل بیش از سقف ${MAX_DOCUMENT_BYTES / 1024 / 1024} مگابایت این ربات است.`);
+  if (!local && fileSize > HOSTED_TELEGRAM_BYTES) {
+    throw new Error('Bot API عمومی تلگرام فایل بالای ۲۰ مگابایت را دانلود نمی‌کند. سرور محلی Bot API را فعال کن یا فایل کوچک‌تری بفرست.');
+  }
+}
+
+/** A local Bot API returns an absolute on-disk path. Never trust it outside its data directory. */
+export async function readLocalFile(filePath, filesDir) {
+  if (!path.isAbsolute(filePath) || !filesDir) throw new Error('مسیر فایل محلی تلگرام نامعتبر است.');
+  const [root, target] = await Promise.all([fs.realpath(filesDir), fs.realpath(filePath)]);
+  if (!target.startsWith(root + path.sep)) throw new Error('مسیر فایل خارج از پوشهٔ Bot API است.');
+  const stat = await fs.stat(target);
+  checkDownloadSize(stat.size, { local: true });
+  return fs.readFile(target);
+}
+
+export async function downloadFile(fileId, fileSize) {
+  checkDownloadSize(fileSize);
+  let meta;
+  try { meta = await call('getFile', { file_id: fileId }); }
+  catch (err) {
+    if (!LOCAL && /file is too big/i.test(err.message)) checkDownloadSize(HOSTED_TELEGRAM_BYTES + 1);
+    throw err;
+  }
+  checkDownloadSize(meta.file_size);
+  if (LOCAL && path.isAbsolute(meta.file_path)) return readLocalFile(meta.file_path, config.telegramLocalFilesDir);
+  if (!meta.file_path || path.isAbsolute(meta.file_path)) throw new Error('مسیر فایل دریافتی از تلگرام نامعتبر است.');
   const res = await fetch(`${FILE_API}/${meta.file_path}`);
   if (!res.ok) throw new Error(`file download failed: HTTP ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
+  const length = Number(res.headers.get('content-length'));
+  checkDownloadSize(length);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of res.body) {
+    size += chunk.length;
+    if (size > MAX_DOCUMENT_BYTES || (!LOCAL && size > HOSTED_TELEGRAM_BYTES)) {
+      checkDownloadSize(size);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, size);
 }
 
 /**

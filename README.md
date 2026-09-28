@@ -105,6 +105,14 @@ vision call. If a model fails, send the **same PDF bytes** again to continue at 
 next unsaved page. Pages already stored are not sent to vision again. Keep `/backup`
 off the old server before moving the database; progress lives in SQLite.
 
+Telegram's hosted Bot API cannot download a document over 20 MB. For larger books,
+obtain `api_id` and `api_hash` from [my.telegram.org](https://my.telegram.org),
+then run `bash scripts/setup-telegram-local.sh` as root on the ASC server. The script
+builds Telegram's official local Bot API, binds it to `127.0.0.1:8082`, logs the bot
+out of the hosted API, updates `.env` and restarts ASC. It asks for the two values
+privately and keeps them in `/etc/asc-telegram-api.env`. The app accepts documents
+up to 100 MB; resend the PDF after the migration. This is separate from 9router.
+
 To choose a vision model, manually transcribe three representative pages into
 `truth.json`: one clear page, one ordinary page, and one difficult page with small
 print or a table. The page numbers are PDF page numbers, starting at 1:

@@ -613,7 +613,8 @@ async function handleMenu(chatId, principalId, { name, arg, isOwner, cb }) {
 const pendingScans = new Map();
 
 /** Read a supplied file into the active dossier, opening one if none is active. */
-async function handleDocument(chatId, principalId, { fileId, filename, mime, allowVision = false, dossierIdOverride = null, pageLimit = null, fromPage = null, resumeDocumentId = null }) {
+async function handleDocument(chatId, principalId, { fileId, fileSize, filename, mime, allowVision = false, dossierIdOverride = null, pageLimit = null, fromPage = null, resumeDocumentId = null }) {
+  tg.checkDownloadSize(fileSize);
   let dossierId = dossierIdOverride ?? settings.activeDossier(principalId);
   let opened = false;
 
@@ -630,7 +631,7 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
     `📎 <b>${esc(filename || 'سند')}</b>\n\n${opened ? `پرونده‌ی تازه #${dossierId}` : `به پرونده #${dossierId} — ${esc(d.topic)}`}\n\nدر حال خواندن…`);
 
   try {
-    const buffer = await tg.downloadFile(fileId);
+    const buffer = await tg.downloadFile(fileId, fileSize);
 
     // Same bytes, already partly read? Continue from where it stopped rather than
     // charging again for pages we already hold.
@@ -1897,6 +1898,7 @@ async function handleUpdate(update) {
       if (photo) {
         await handleDocument(chatId, principalId, {
           fileId: photo.file_id,
+          fileSize: photo.file_size,
           filename: msg.caption?.slice(0, 60) || 'تصویر.jpg',
           mime: 'image/jpeg',
         });
@@ -1906,6 +1908,7 @@ async function handleUpdate(update) {
       if (msg.document) {
         await handleDocument(chatId, principalId, {
           fileId: msg.document.file_id,
+          fileSize: msg.document.file_size,
           filename: msg.document.file_name || 'سند',
           mime: msg.document.mime_type || '',
         });
@@ -1915,7 +1918,7 @@ async function handleUpdate(update) {
       const voice = msg.voice ?? msg.audio ?? msg.video_note;
       if (voice) {
         await tg.typing(chatId);
-        const buf = await tg.downloadFile(voice.file_id);
+        const buf = await tg.downloadFile(voice.file_id, voice.file_size);
         keepLastVoice(principalId, buf);
         // Named apart from the imported route(): this one is which transcription path
         // was taken, not which procedure the user asked for.

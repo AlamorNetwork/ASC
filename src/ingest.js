@@ -17,8 +17,11 @@ import { gateClaims } from './support.js';
 import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages, scannedPages } from './pdf.js';
 import { chunkText, embedPending } from './chunks.js';
 import * as store from './db.js';
+import { MAX_DOCUMENT_BYTES } from './file-limits.js';
 
-export const MAX_BYTES = 18 * 1024 * 1024; // Telegram will not hand us more than ~20MB
+// The hosted Telegram API has its own 20 MB download ceiling. A local Bot API
+// server removes that limit; keep an application limit to bound memory use.
+export const MAX_BYTES = MAX_DOCUMENT_BYTES;
 
 const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|html?|xml|srt|vtt)$/i;
 const IMAGE_MIME = /^image\/(jpeg|png|webp|gif|heic|heif)$/i;

@@ -661,10 +661,46 @@ await check('oversized and unsupported files are refused', async () => {
   } catch (e) { if (!/پشتیبانی نمی‌شود/.test(e.message)) throw e; }
 
   try {
-    guard({ buffer: Buffer.alloc(MAX_BYTES + 1), filename: 'big.txt', mime: 'text/plain' });
+    guard({ buffer: { length: MAX_BYTES + 1 }, filename: 'big.txt', mime: 'text/plain' });
     throw new Error('an oversized file was accepted');
   } catch (e) { if (!/خیلی بزرگ/.test(e.message)) throw e; }
   return 'both refused before any model call';
+});
+
+await check('large Telegram files use only their configured local directory', async () => {
+  const os = await import('node:os');
+  const { checkDownloadSize, readLocalFile } = await import('../src/telegram.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'asc-telegram-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'asc-outside-'));
+  try {
+    const good = path.join(dir, 'book.pdf');
+    const bad = path.join(outside, 'secret');
+    fs.writeFileSync(good, 'PDF bytes');
+    fs.writeFileSync(bad, 'secret');
+    if ((await readLocalFile(good, dir)).toString() !== 'PDF bytes') throw new Error('local file not read');
+    await readLocalFile(bad, dir).then(() => { throw new Error('outside file allowed'); }, (e) => {
+      if (!/خارج از پوشه/.test(e.message)) throw e;
+    });
+    try { checkDownloadSize(101 * 1024 * 1024); throw new Error('oversized Telegram file accepted'); }
+    catch (e) { if (!/سقف/.test(e.message)) throw e; }
+    return 'local bytes read, escape and oversized file refused';
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+await check('a book above 20 MB needs local Telegram Bot API', async () => {
+  const { checkDownloadSize } = await import('../src/telegram.js');
+  const size = 21 * 1024 * 1024;
+  checkDownloadSize(size, { local: true });
+  try {
+    checkDownloadSize(size, { local: false });
+    throw new Error('hosted Bot API accepted the large book');
+  } catch (e) {
+    if (!/Bot API عمومی/.test(e.message)) throw e;
+  }
+  return 'hosted rejected with setup guidance, local accepted';
 });
 
 await check('a text file is read without a model call', async () => {
