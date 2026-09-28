@@ -690,6 +690,25 @@ await check('a document quote is verified against the document itself', async ()
   return 'exact matched, paraphrase demoted';
 });
 
+await check('an indirect document hint is searchable but never verified', async () => {
+  const { implicitLeadRows } = await import('../src/ingest.js');
+  const doc = 'در حاشیه آمده است که نشانه‌های آیینی در پادگان رومی دیده شده‌اند.';
+  const rows = implicitLeadRows([
+    { hypothesis: 'آیین از ایران مستقیماً به پادگان روم رسید',
+      cue_quote: 'نشانه‌های آیینی در پادگان رومی دیده شده‌اند' },
+    { hypothesis: 'ادعای ساخته‌شده', cue_quote: 'عبارتی که در سند نیست و نباید ثبت شود' },
+  ], { text: doc, kind: 'text', filename: 'hint.txt' });
+  if (rows.length !== 1 || rows[0].status !== 'found' ||
+      rows[0].verifyReason !== 'implicit_lead' || rows[0].status === 'verified')
+    throw new Error('implicit inference became proof or a fabricated cue was retained');
+  const scan = implicitLeadRows([{ hypothesis: 'احتمال ارتباط دو آیین',
+    cue_quote: 'نشانه‌های آیینی در پادگان رومی دیده شده‌اند' }],
+  { text: doc, kind: 'image', filename: 'scan.pdf' });
+  if (scan[0]?.verifyReason !== 'vision_cue_unverified' || scan[0].verifyMethod)
+    throw new Error('a vision transcript was treated as independent image verification');
+  return 'exact cue kept as a hypothesis; invented cue dropped';
+});
+
 await check('chunking splits on paragraphs and keeps overlap', async () => {
   const { chunkText } = await import('../src/chunks.js');
   const doc = Array.from({ length: 30 }, (_, i) =>
@@ -1306,6 +1325,21 @@ await check('a zero ceiling starts nothing at all', async () => {
   const actual = Math.round(spendSince(mark).toman);
   if (actual > 0) throw new Error(`reported nothing but really spent ${actual} toman`);
   return 'nothing begun, nothing spent — confirmed against the meter';
+});
+
+await check('deep research resumes from indirect document leads', async () => {
+  const { deepInvestigate } = await import('../src/deep.js');
+  const principalId = `implicit-deep-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'نشانه‌های ضمنی' });
+  store.insertClaim({ principalId, dossierId, text: 'پیوند احتمالی دو آیین',
+    quote: 'اشارهٔ غیرمستقیم', status: 'found', verifyReason: 'implicit_lead' });
+  const out = await deepInvestigate({ principalId, dossierId,
+    question: 'خاستگاه چیست؟', ceilingUsd: 0 });
+  const saved = store.getInvestigation(principalId, out.runId);
+  const leads = JSON.parse(saved.leads);
+  if (!leads.includes('پیوند احتمالی دو آیین') || out.rounds !== 0)
+    throw new Error('the indirect lead was not persisted before a model call');
+  return 'question and hint persisted as distinct resumable leads, with zero spend';
 });
 
 await check('a missing reranker costs precision, not the answer', async () => {

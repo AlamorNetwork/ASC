@@ -356,11 +356,11 @@ export const settledPredictions = (principalId, kind = null) => db.prepare(`
 
 // ------------------------------------------------------- deep investigations
 
-export const startInvestigation = ({ principalId, dossierId, question }) => db.prepare(`
+export const startInvestigation = ({ principalId, dossierId, question, leads = [question] }) => db.prepare(`
   INSERT INTO investigations (principal_id, dossier_id, question, state, leads,
                               seen_chunks, all_leads, started_at, updated_at)
   VALUES (?,?,?,'running',?,'[]','[]',?,?)
-`).run(principalId, dossierId, question, JSON.stringify([question]), now(), now()).lastInsertRowid;
+`).run(principalId, dossierId, question, JSON.stringify(leads), now(), now()).lastInsertRowid;
 
 export const getInvestigation = (principalId, id) =>
   db.prepare(`SELECT * FROM investigations WHERE principal_id = ? AND id = ?`)

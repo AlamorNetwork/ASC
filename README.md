@@ -32,6 +32,11 @@ Existing quote-only verdicts are downgraded once when the bot starts; run
 `/reverify DOSSIER_ID` to apply the new semantic check without repeating research.
 Claims extracted from scanned pages stay in FOUND because their quote only matches
 the model's OCR text, not the original image independently.
+An indirect hint in a document is stored separately as a FOUND hypothesis only if
+its cue is an exact span of the stored text. It cannot become VERIFIED merely by
+plausible interpretation. A user-approved deep investigation seeds its next searches
+with these hypotheses and can look for independent web evidence within its budget;
+the frontier is saved before the first round for stop and resume.
 
 Web research searches from the server (Bing RSS best effort, MediaWiki search and
 Crossref metadata), opens candidate pages, and gives only fetched page excerpts to

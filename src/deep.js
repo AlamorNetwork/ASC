@@ -47,6 +47,8 @@ const GAPS_SYSTEM = `تو در پایان یک تحقیق، تصمیم می‌گ
 - open فقط چیزهایی که واقعاً با جست‌وجوی بیشتر حل نمی‌شوند — نه هر سؤال باقی‌مانده.
 - needs باید مشخص باشد. «منابع بیشتر» جواب نیست؛ «متن اصلی کتاب فلان» جواب است.
 - اگر هنوز سرنخ قابل دنبال کردن هست، در next_leads بیاور و open را کوچک نگه دار.
+- سرنخ ضمنی یا ادعای تأییدنشده فقط فرضیه برای جست‌وجوست؛ در answered نیاور.
+- اگر نشانه‌ای غیرمستقیم است، یک عبارت جست‌وجوی مشخص برای یافتن پشتوانهٔ مستقل در وب بساز.
 - چیزی از خودت نساز. فقط از آنچه در تحقیق دیده شد نتیجه بگیر.`;
 
 const claimKey = (c) => normalise(c.text ?? '').split(' ').slice(0, 10).join(' ');
@@ -74,8 +76,14 @@ export async function deepInvestigate({
   const prior = runId ? store.getInvestigation(principalId, runId) : null;
   if (runId && !prior) throw new Error('این کاوش پیدا نشد');
 
+  const implicitLeads = store.dossierClaims(principalId, dossierId)
+    .filter((c) => c.verify_reason === 'implicit_lead' || c.verify_reason === 'vision_cue_unverified')
+    .map((c) => c.text).filter(Boolean).slice(0, 3);
+  const initialLeads = [...new Set([question, ...implicitLeads])];
+
   const id = prior?.id
-    ?? (persist ? store.startInvestigation({ principalId, dossierId, question }) : null);
+    ?? (persist ? store.startInvestigation({ principalId, dossierId, question,
+      leads: initialLeads }) : null);
   if (id) store.clearStop(id);
 
   const parse = (s, fallback) => { try { return JSON.parse(s) ?? fallback; } catch { return fallback; } };
@@ -90,7 +98,7 @@ export async function deepInvestigate({
   // last one stopped rather than starting the budget again.
   let costUsd = prior?.cost_usd ?? 0;
   let costToman = prior?.cost_toman ?? 0;
-  let leads = prior ? parse(prior.leads, [question]) : [question];
+  let leads = prior ? parse(prior.leads, [question]) : initialLeads;
   let round = prior?.rounds ?? 0;
   const roundsBefore = round;
   let stopped = 'exhausted';
@@ -181,10 +189,7 @@ export async function deepInvestigate({
       try {
         const online = await web({
           principalId, dossierId, topic: dossier.topic,
-          question: [
-            leads[0],
-            'روی چیزی تمرکز کن که هنوز روشن نشده. آنچه را قبلاً می‌دانیم تکرار نکن.',
-          ].join('\n'),
+          question: leads.slice(0, 3).join('؛ '),
         });
         costToman += online.costToman ?? 0;
         costUsd += online.costUsd ?? 0;
@@ -231,7 +236,8 @@ export async function deepInvestigate({
           allLeads.slice(-10).map((l) => `- ${l}`).join('\n') || '(هیچ)',
           '',
           'یافته‌های تازه‌ی این دور:',
-          newClaims.slice(-12).map((c) => `- ${c.text}`).join('\n') || '(هیچ)',
+          newClaims.slice(-12).map((c) =>
+            `- ${c.status === 'verified' ? 'تأییدشده' : 'فقط سرنخ'}: ${c.text}`).join('\n') || '(هیچ)',
         ].join('\n'),
         maxTokens: 1600,
         noThinking: false,
