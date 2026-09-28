@@ -8,7 +8,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -70,6 +70,26 @@ export async function extractPdf(buffer) {
 
 /** Rough cost signal for the scanned path, where every page must go through vision. */
 export const estimateVisionTokens = (pages) => pages * 1600;
+
+/** Keep only one rasterized page in memory while a book is read. */
+export async function* scannedPages(buffer, { from = 1, to, dpi = 150 } = {}) {
+  if (!await pdftotextAvailable()) throw new Error('poppler-utils نصب نیست.');
+  const dir = await mkdtemp(path.join(tmpdir(), 'asc-scan-'));
+  const file = path.join(dir, 'in.pdf');
+  const output = path.join(dir, 'page');
+  try {
+    await writeFile(file, buffer);
+    for (let page = from; page <= to; page++) {
+      await run('pdftoppm', ['-f', String(page), '-l', String(page),
+        '-singlefile', '-png', '-r', String(dpi), file, output],
+      { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+      yield { page, buffer: await readFile(`${output}.png`) };
+      await rm(`${output}.png`, { force: true });
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
 
 /**
  * Render pages to PNG so a scanned book can be read one page at a time.

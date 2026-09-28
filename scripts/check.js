@@ -28,6 +28,9 @@ const { verifyClaim, normalise } = await import('../src/verify.js');
 const { spendMark, spendSince } = await import('../src/llm.js');
 
 const PAID = process.argv.includes('--paid') || process.argv.includes('--audio');
+const onlyAt = process.argv.indexOf('--only');
+const ONLY = onlyAt >= 0 ? process.argv[onlyAt + 1] : null;
+if (onlyAt >= 0 && !ONLY) throw new Error('--only needs part of a check name');
 
 // Embedding a couple of short queries is the only spend the free run should ever see.
 const FREE_CEILING_TOMAN = 50;
@@ -75,6 +78,7 @@ const ok = (name, extra = '') => console.log(`  ok    ${name}${extra ? ' — ' +
 const bad = (name, err) => { failures++; console.log(`  FAIL  ${name} — ${err}`); };
 
 async function check(name, fn) {
+  if (ONLY && !name.includes(ONLY)) return;
   const mark = spendMark();
   try {
     const extra = await fn();
@@ -90,6 +94,7 @@ async function check(name, fn) {
  * spent, so the price of running the suite is never a surprise.
  */
 async function paid(name, fn) {
+  if (ONLY && !name.includes(ONLY)) return;
   if (!PAID) { skipped++; return; }
   const mark = spendMark();
   try {
@@ -441,7 +446,7 @@ await check('a document survives a failure in the step after it is stored', asyn
   if (from < 0) throw new Error('ingestToDossier moved; this check no longer looks at it');
   const src = whole.slice(from);
 
-  const call = src.indexOf('await claimsFrom(');
+  const call = src.lastIndexOf('await claimsFrom(');
   if (call < 0) throw new Error('claim extraction moved; this check no longer looks at it');
 
   // The try has to open after the chunks are stored, or it is guarding the wrong thing.
@@ -892,6 +897,43 @@ await check('a half-read document is recognised and resumed, not re-read', async
   if (after.char_count !== 9000) throw new Error(`char_count should accumulate, got ${after.char_count}`);
   if (after.cost_toman !== 37200) throw new Error(`cost should accumulate, got ${after.cost_toman}`);
   return 'recognised at 20/209, advanced to 40, counters accumulate';
+});
+
+await check('a vision failure keeps paid pages and resumes at the next page', async () => {
+  const { ingestScannedPages } = await import('../src/ingest.js');
+  const principalId = `scan-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'کتاب' });
+  const buffer = Buffer.from('fixed test pdf bytes');
+  const seen = [];
+  const pagesIterator = async function* (_bytes, { from, to }) {
+    for (let page = from; page <= to; page++) yield { page, buffer: Buffer.from('png') };
+  };
+  const args = { principalId, dossierId, buffer, filename: 'book.pdf', mime: 'application/pdf',
+    pages: 3, pagesIterator };
+  try {
+    await ingestScannedPages({ ...args, readPage: async (page) => {
+      seen.push(page);
+      if (page === 2) throw new Error('vision service failed');
+      return { text: `متن صفحه ${page} برای ذخیره و جست‌وجوی کتاب`, usage: { costToman: 7 } };
+    } });
+    throw new Error('the failure was swallowed');
+  } catch (err) {
+    if (!err.savedScan || err.savedScan.readPages !== 1) throw err;
+  }
+  const first = store.dossierDocuments(principalId, dossierId);
+  if (first.length !== 1 || first[0].read_pages !== 1 || first[0].cost_toman !== 7)
+    throw new Error('the first page or its price was lost');
+  const resumed = await ingestScannedPages({ ...args, resumeDocumentId: first[0].id,
+    readPage: async (page) => {
+      seen.push(page);
+      return { text: `متن صفحه ${page} برای ذخیره و جست‌وجوی کتاب`, usage: { costToman: 7 } };
+    } });
+  const done = store.getDocument(principalId, first[0].id);
+  if (seen.join(',') !== '1,2,2,3' || resumed.readPages !== 3 || done.cost_toman !== 21)
+    throw new Error(`resume reread a paid page or lost cost: ${seen}, ${done.cost_toman}`);
+  if (store.dossierChunks(principalId, dossierId).length !== 3)
+    throw new Error('saved chunks were lost or duplicated');
+  return 'page 1 durable, pages 2–3 resumed, no paid page repeated';
 });
 
 await check('a fully read document is not offered again', () => {

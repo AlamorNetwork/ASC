@@ -13,7 +13,7 @@ import { createHash } from 'node:crypto';
 import { chat, chatJson } from './llm.js';
 import { modelFor } from './settings.js';
 import { verifyAgainstText } from './verify.js';
-import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages } from './pdf.js';
+import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages, scannedPages } from './pdf.js';
 import { chunkText, embedPending } from './chunks.js';
 import * as store from './db.js';
 
@@ -233,6 +233,67 @@ export async function extractClaimsFor({ principalId, documentId, onProgress }) 
   };
 }
 
+/** Persist each paid vision result before requesting the next page. */
+export async function ingestScannedPages({
+  principalId, dossierId, buffer, filename, mime, pages, fromPage = 1,
+  pageLimit = null, resumeDocumentId = null, onProgress,
+  pagesIterator = scannedPages, readPage = null,
+}) {
+  const hash = sha256(buffer);
+  const prior = resumeDocumentId ? store.getDocument(principalId, resumeDocumentId)
+    : store.findDocumentByHash(principalId, dossierId, hash);
+  if (prior && (prior.dossier_id !== dossierId || prior.sha256 !== hash))
+    throw new Error('فایل با سند ذخیره‌شده مطابقت ندارد.');
+  const documentId = prior?.id ?? store.insertDocument({
+    principalId, dossierId, filename, mime, kind: 'pdf', pages,
+    charCount: 0, extraction: 'model_vision_pages', costToman: 0,
+    sha256: hash, readPages: 0,
+  });
+  const start = Math.max(fromPage, (prior?.read_pages ?? 0) + 1);
+  const last = Math.min(pages, pageLimit ? start + pageLimit - 1 : pages);
+  const perPage = [];
+  let costToman = 0;
+  let costKnown = true;
+  let chunks = 0;
+  let seq = store.maxChunkSeq(documentId) + 1;
+  try {
+    for await (const { page, buffer: png } of pagesIterator(buffer, { from: start, to: last })) {
+      const result = readPage ? await readPage(page, png) : await chat({
+        model: modelFor('capture'), system: PAGE_SYSTEM,
+        content: [
+          { type: 'image_url', image_url: { url: dataUrl('image/png', png) } },
+          { type: 'text', text: `صفحه ${page}` },
+        ],
+        maxTokens: 2500, noThinking: false,
+      });
+      const raw = String(result.text ?? '').trim();
+      if (!raw) throw new Error(`ویژن برای صفحه ${page} متن برنگرداند.`);
+      const text = raw === '[خالی]' ? '' : raw;
+      const price = result.usage?.costToman ?? 0;
+      if (!price && !result.usage?.costUsd) costKnown = false;
+      // A title page may contain fewer than chunkText's 40-character threshold.
+      const parts = chunkText(text);
+      if (text && !parts.length) parts.push(text);
+      const rows = parts.map((part) => ({ seq: seq++, page, text: part }));
+      store.saveScannedPage(principalId, dossierId, documentId, page, text, price, rows);
+      perPage.push(text);
+      chunks += rows.length;
+      costToman += price;
+      onProgress?.(`صفحه ${page} از ${last} ذخیره شد` +
+        (costKnown ? ` · ${Math.round(costToman).toLocaleString('fa-IR')} تومان` : ' · هزینه را از پنل ارائه‌دهنده ببین'));
+    }
+  } catch (err) {
+    const saved = store.getDocument(principalId, documentId)?.read_pages ?? 0;
+    err.savedScan = { documentId, readPages: saved, pages };
+    throw err;
+  }
+  return {
+    documentId, text: perPage.join('\n\n'), perPage, pages,
+    readPages: store.getDocument(principalId, documentId).read_pages,
+    chunks, costToman, costKnown, extraction: 'model_vision_pages',
+  };
+}
+
 /**
  * Read a file into a dossier: extract, chunk, embed, and record claims whose quotes
  * were matched against the document's own text.
@@ -250,6 +311,33 @@ export async function ingestToDossier({
   }
 
   onProgress?.('استخراج متن…');
+  if (kind === 'pdf' && allowVision) {
+    const pdf = await extractPdf(buffer);
+    if (pdf.scanned) {
+      const scan = await ingestScannedPages({
+        principalId, dossierId, buffer, filename, mime, pages: pdf.pages,
+        fromPage, pageLimit, resumeDocumentId, onProgress,
+      });
+      let costToman = scan.costToman;
+      let embedded = 0;
+      if (scan.chunks) {
+        try {
+          const e = await embedPending(principalId, dossierId,
+            (n) => onProgress?.(`بردار ${n} از ${scan.chunks}…`));
+          embedded = e.embedded;
+          costToman += e.costToman;
+        } catch (err) { console.warn('[ingest] embedding failed:', err.message); }
+      }
+      // The long structure call used to stall a successful scan at "extracting claims".
+      // Reading the book and producing claims are separate paid jobs; /claims runs later
+      // from the stored chunks without sending any page through vision again.
+      return { documentId: scan.documentId, kind, filename, summary: null,
+        verified: [], found: [], claimsDeferred: true, claimsFailed: null,
+        pages: scan.pages, readPages: scan.readPages, chunks: scan.chunks,
+        embedded, textLength: scan.text.length, extraction: scan.extraction,
+        hasTables: false, costToman, costKnown: scan.costKnown };
+    }
+  }
   const extracted = await extractText({
     buffer, filename, mime, kind, allowVision, pageLimit, fromPage, onProgress,
   });

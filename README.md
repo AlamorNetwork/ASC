@@ -50,6 +50,35 @@ node scripts/probe-voice.js           # compare voice models on your own note
 node scripts/probe-network.js         # measure the route to the provider
 ```
 
+### Scanned books and vision comparison
+
+Send a scanned PDF to the bot and approve 20 pages or the full book. Each page's
+transcription, chunks, cursor and reported cost are committed together before the next
+vision call. If a model fails, send the **same PDF bytes** again to continue at the
+next unsaved page. Pages already stored are not sent to vision again. Keep `/backup`
+off the old server before moving the database; progress lives in SQLite.
+
+To choose a vision model, manually transcribe three representative pages into
+`truth.json`: one clear page, one ordinary page, and one difficult page with small
+print or a table. The page numbers are PDF page numbers, starting at 1:
+
+```json
+{"2":"Exact text on PDF page 2", "19":"Exact text on PDF page 19", "37":"Exact text on PDF page 37"}
+```
+
+Run from the server with the same provider models configured in ASC:
+
+```bash
+node scripts/benchmark-vision.js book.pdf truth.json gemini-3.1-flash-lite@mixdirect MODEL_2@mixdirect
+node scripts/benchmark-vision.js book.pdf truth.json gemini-3.1-flash-lite@mixdirect MODEL_2@mixdirect --run
+```
+
+The first command makes no model calls. `--run` compares transcription character
+error rate (CER), completion rate, time and reported cost. A zero or missing provider
+cost is shown as unknown, so compare actual balance usage too. Pick the model that
+finishes every page with the fewest errors at an acceptable cost; a short picture
+recognition probe is insufficient for book OCR.
+
 ### Configuration
 
 | Variable | |

@@ -511,6 +511,25 @@ export function insertChunks(principalId, dossierId, documentId, rows) {
   return rows.length;
 }
 
+/** Commit a scanned page and its cursor together; a crash cannot leave one without the other. */
+export function saveScannedPage(principalId, dossierId, documentId, page, text, costToman, rows) {
+  const doc = getDocument(principalId, documentId);
+  if (!doc || doc.dossier_id !== dossierId) throw new Error('سند برای این کاربر پیدا نشد.');
+  if (page !== (doc.read_pages ?? 0) + 1) throw new Error(`صفحهٔ بعدی باید ${(doc.read_pages ?? 0) + 1} باشد.`);
+  const now = new Date().toISOString();
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) insertChunkStmt.run(principalId, dossierId, documentId,
+      r.seq, page, r.text, null, now);
+    advanceDocument(documentId, { readPages: page, addedChars: text.length, addedCost: costToman });
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return rows.length;
+}
+
 export const setChunkEmbedding = (id, blob) =>
   db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(blob, id);
 

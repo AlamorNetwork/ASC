@@ -663,17 +663,22 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
         'می‌توانی همین حالا ازش سؤال بپرسی — متن و بردارهایش سر جایشان است.',
         `برای تلاش دوباره فقط برای ادعاها: <code>/claims ${out.documentId}</code>`,
       ].join('\n'));
+    } else if (out.claimsDeferred) {
+      await tg.send(chatId,
+        `متن صفحه‌ها ذخیره و قابل جست‌وجو شد. استخراج ادعاها را هر وقت خواستی جداگانه اجرا کن: <code>/claims ${out.documentId}</code>`);
     } else if (!out.verified.length && !out.found.length) {
       await tg.send(chatId, '<i>ادعای مشخصی از این سند بیرون نیامد. متنش ذخیره شد.</i>');
     }
 
     await tg.send(chatId,
-      `💰 ${toman(out.costToman)} تومان · پرونده #${dossierId}`,
+      `${out.costKnown === false ? '💰 هزینهٔ ویژن از API گزارش نشد؛ موجودی MixRoute را ببین' : `💰 ${toman(out.costToman)} تومان`} · پرونده #${dossierId}`,
       { buttons: [[{ text: '💬 بحث کنیم', callback_data: `chat:${dossierId}` }]] });
   } catch (err) {
     console.error('[ingest] failed:', err);
+    const saved = err.savedScan;
     await tg.edit(chatId, status.message_id,
-      `📎 <b>${esc(filename || 'سند')}</b>\n\n❌ ${esc(String(err.message ?? err))}`);
+      `📎 <b>${esc(filename || 'سند')}</b>\n\n❌ ${esc(String(err.message ?? err))}` +
+      (saved ? `\n\n✅ تا صفحه ${saved.readPages} از ${saved.pages} ذخیره شده. همین فایل را دوباره بفرست تا از صفحه ${saved.readPages + 1} ادامه دهیم.` : ''));
   }
 }
 
