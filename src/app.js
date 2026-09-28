@@ -143,6 +143,24 @@ const SECTION = {
 
   unresolved: ({ unresolved }) =>
     ['❓ <b>حل‌نشده</b>', '', ...unresolved.map((q) => `• ${esc(q)}`)].join('\n'),
+
+  audit: ({ audit }) => {
+    const lines = ['🧭 <b>مسیر بررسی بعدی</b>', '<i>این موارد فرضیه و پرسش‌اند؛ هنوز داوری یا تأیید نشده‌اند.</i>'];
+    for (const h of audit.hypotheses ?? []) {
+      lines.push(`• فرضیه: ${esc(h.text)}`);
+      lines.push('   نقل‌قول‌های پیشنهادی مدل؛ نسبتشان با فرضیه هنوز داوری نشده:');
+      for (const [label, passages] of [['به نفع', h.supporting], ['در برابر', h.challenging]])
+        for (const passage of passages.slice(0, 1))
+          lines.push(`   ${label}: <a href="${esc(passage.url)}">${esc(passage.title || 'منبع')}</a> · «${esc(passage.quote.slice(0, 100))}»`);
+      if (h.missingEvidence) lines.push(`   باید بررسی شود: ${esc(h.missingEvidence)}`);
+    }
+    for (const p of audit.peopleToCheck ?? []) {
+      lines.push(`• شخصِ نام‌برده: ${esc(p.name)} · <a href="${esc(p.seenAt)}">متن خوانده‌شده</a>`);
+      lines.push('   نسبت، جایگاه و دیدگاهش نیازمند منبع مستقل است');
+      if (p.why) lines.push(`   علت بررسی: ${esc(p.why)}`);
+    }
+    return lines.join('\n');
+  },
 };
 
 /**

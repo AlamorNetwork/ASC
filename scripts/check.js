@@ -2223,6 +2223,87 @@ await check('server search supplies only fetched text and pins claims to its URL
   return 'fetched page text only; invented model URL ignored; both gates passed';
 });
 
+await check('rival hypotheses and person checks stay unverified leads with exact provenance', async () => {
+  const { buildResearchAudit, auditLeads } = await import('../src/research-audit.js');
+  const sources = [{ id: 0, url: 'https://example.org/history', title: 'History',
+    text: 'Herodotus described the Persian custom. Another account questions his description.' }];
+  const audit = buildResearchAudit({
+    hypotheses: [
+      { text: 'یک تفسیر', supporting: [{ source_id: 0, quote: 'Herodotus described the Persian custom.' }],
+        challenging: [{ source_id: 0, quote: 'Another account questions his description.' }],
+        missing_evidence: 'Persian primary account of the custom' },
+      { text: 'ساختگی', supporting: [{ source_id: 7, quote: 'invented text' }] },
+    ],
+    people_to_check: [
+      { name: 'Herodotus', source_id: 0, why: 'منشأ روایت', search_query: 'Herodotus Persian sources criticism' },
+      { name: 'Invented Author', source_id: 0, why: 'سوگیری' },
+    ],
+  }, sources);
+  if (audit.hypotheses.length !== 1 || audit.peopleToCheck.length !== 1 ||
+      audit.hypotheses[0].state !== 'hypothesis_not_verified' ||
+      audit.hypotheses[0].supporting[0].meaning !== 'not_yet_judged' ||
+      audit.peopleToCheck[0].state !== 'identity_and_perspective_unchecked')
+    throw new Error('a model promoted a theory or invented person to evidence');
+  const leads = auditLeads(audit);
+  if (leads.length !== 2 || !leads.includes('Herodotus Persian sources criticism'))
+    throw new Error('provenance questions were not available for a later round');
+  return 'exact source spans retained, invented provenance dropped, status remains open';
+});
+
+await check('web research returns and streams open hypotheses without claiming verification', async () => {
+  const { runResearch } = await import('../src/research.js');
+  const principalId = `audit-web-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'منشأ روایت' });
+  const quote = 'Herodotus gave one account of the event.';
+  const url = 'https://example.org/account';
+  const sections = [];
+  const result = await runResearch({ principalId, dossierId, question: 'چه روایتی درست است؟',
+    planner: async () => ({ data: { queries: [] }, usage: {} }),
+    search: async () => ({ results: [{ url, title: 'Account' }], errors: [] }),
+    open: async () => ({ ok: true, url, text: `${quote} `.repeat(10) }),
+    compose: async () => ({ data: {
+      claims: [], hypotheses: [{ text: 'روایت اول', supporting: [{ source_id: 0, quote }],
+        missing_evidence: 'independent account of the event' }],
+      people_to_check: [{ name: 'Herodotus', source_id: 0,
+        search_query: 'Herodotus independent account criticism' }],
+    }, usage: {} }),
+    onSection: async (name) => sections.push(name),
+  });
+  if (!sections.includes('audit') || result.output.audit.hypotheses.length !== 1 ||
+      result.output.verified.length !== 0 || result.output.audit.peopleToCheck.length !== 1)
+    throw new Error('unverified audit was lost or promoted into verified claims');
+  const saved = store.recentEpisodes(principalId, 1)[0];
+  if (!saved?.output_json?.includes('hypothesis_not_verified'))
+    throw new Error('audit was not saved in the episode');
+  return 'streamed and saved an open theory and person check, zero verified claims';
+});
+
+await check('deep research saves an attribution question and follows it after resume', async () => {
+  const { deepInvestigate } = await import('../src/deep.js');
+  const principalId = `provenance-deep-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'تاریخ' });
+  const query = 'Herodotus Persian sources criticism';
+  const asked = [];
+  const stubs = {
+    search: async ({ question }) => { asked.push(question); return {
+      passages: [], trail: [], costUsd: 0, costToman: 0,
+    }; },
+    web: async () => ({ costUsd: 0.01, costToman: 0,
+      output: { verified: [], found: [], audit: { peopleToCheck: [{ query }] } } }),
+    assess: async () => ({ data: { next_leads: [] }, usage: {} }),
+  };
+  const first = await deepInvestigate({ principalId, dossierId,
+    question: 'روایت چیست؟', ceilingUsd: 0.005, ...stubs });
+  if (first.stopped !== 'ceiling' || !first.nextLeads.includes(query))
+    throw new Error('attribution lead vanished at the cost ceiling');
+  const before = asked.length;
+  await deepInvestigate({ principalId, dossierId, question: 'روایت چیست؟',
+    ceilingUsd: 0.005, runId: first.runId, ...stubs });
+  if (!asked.slice(before).includes(query) || asked.slice(before).includes('روایت چیست؟'))
+    throw new Error('resumed research did not follow its saved attribution lead');
+  return 'question saved at ceiling and searched on resume';
+});
+
 await check('server search fallback returns readable leads without trusting snippets', async () => {
   const { searchWeb } = await import('../src/web-search.js');
   const fakeFetch = async (url) => {

@@ -51,6 +51,16 @@ model. Check outbound access without model charges with:
 node scripts/probe-web-search.js "Mithraism Roman Iranian origins"
 ```
 
+The web round also keeps a small audit of competing interpretations and people
+mentioned in fetched sources. Each cited passage in that audit must occur in a
+server-fetched excerpt. The passages, theories, and questions about a person's
+role or perspective remain **unverified leads**: finding their words does not
+establish the theory or prove bias. Deep investigation searches those questions
+in later rounds and saves the frontier when stopped or when the cost ceiling is
+reached. A claim about a person's motives needs independent sources and must be
+checked claim by claim. Search is bounded by accessible pages and the agreed
+budget; it cannot claim to have read every source or settled every hypothesis.
+
 ---
 
 ## Run it

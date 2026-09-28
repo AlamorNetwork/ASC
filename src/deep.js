@@ -16,6 +16,7 @@ import { chatJson } from './llm.js';
 import { modelFor } from './settings.js';
 import { investigate } from './investigate.js';
 import { runResearch } from './research.js';
+import { auditLeads } from './research-audit.js';
 import { normalise } from './verify.js';
 import { isWanted } from './cancel.js';
 import { assessEvidence, predictYield, worthSpending, predict, observe } from './metacognition.js';
@@ -161,6 +162,7 @@ export async function deepInvestigate({
 
     round++;
     let freshThisRound = 0;
+    const provenanceLeads = [];
 
     // --- the user's own documents, which cost almost nothing to search -----------
     for (const lead of leads.slice(0, 3)) {
@@ -198,6 +200,17 @@ export async function deepInvestigate({
           const k = claimKey(c);
           if (k && !seenClaims.has(k)) { seenClaims.add(k); newClaims.push(c); freshThisRound++; }
         }
+        // Questions about rival accounts and attribution become the next search frontier.
+        // They are counted as new only once, and are never counted as verified claims.
+        const known = new Set([...allLeads, ...leads].map(normalise));
+        for (const lead of auditLeads(online.output.audit)) {
+          const key = normalise(lead);
+          if (!key || known.has(key)) continue;
+          known.add(key);
+          allLeads.push(lead);
+          provenanceLeads.push(lead);
+          freshThisRound++;
+        }
       } catch (err) {
         await onNote?.({ round, kind: 'error', message: err.message });
       }
@@ -210,6 +223,8 @@ export async function deepInvestigate({
     roundLog.push({ round, fresh: freshThisRound });
     observe(forecastId, freshThisRound > 0);
 
+    if (provenanceLeads.length)
+      leads = provenanceLeads;
     save('running', null);
     await onRound?.({
       runId: id, round, fresh: freshThisRound, costToman, costUsd, claims: newClaims.length,
@@ -244,7 +259,10 @@ export async function deepInvestigate({
       });
     } catch (err) {
       console.warn('[deep] gap assessment unusable, stopping with what we have:', err.message);
-      return finish({}, 'exhausted');
+      if (!provenanceLeads.length) return finish({}, 'exhausted');
+      leads = provenanceLeads;
+      save('running', null);
+      continue;
     }
     costToman += gaps.usage?.costToman ?? 0;
     costUsd += gaps.usage?.costUsd ?? 0;
@@ -253,10 +271,13 @@ export async function deepInvestigate({
       ? gaps.data.next_leads.filter((l) => typeof l === 'string' && l.trim())
       : [];
 
-    if (!next.length) {
+    const pending = [...new Set([...provenanceLeads, ...next])].slice(0, 4);
+
+    if (!pending.length) {
       return finish(gaps.data ?? {}, 'exhausted');
     }
-    leads = next;
+    leads = pending;
+    save('running', null);
     await onNote?.({ round, kind: 'nextleads', leads });
   }
 
