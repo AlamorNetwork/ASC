@@ -17,9 +17,28 @@ import * as cancel from './cancel.js';
 import { route } from './router.js';
 import { calibration } from './metacognition.js';
 import { gateClaims } from './support.js';
+import { liveProgress } from './progress.js';
+import { refreshResearchLedger } from './research-ledger.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
+const RESEARCH_STAGES = ['طرح جست‌وجو', 'جست‌وجوی چندمسیره', 'خواندن منابع',
+  'مقایسهٔ روایت‌ها', 'بررسی نقل‌قول‌ها', 'داوری ادعاها', 'ثبت نتیجه'];
+const DEEP_STAGES = ['جست‌وجوی اسناد', 'جست‌وجوی وب', 'ارزیابی دور'];
+const activeProgress = new Map();
+
+function progressCard(chatId, messageId, title, stages, buttons) {
+  const card = liveProgress({ title, stages, buttons,
+    edit: (body, keys) => tg.edit(chatId, messageId, body, keys) });
+  activeProgress.set(`${chatId}:${messageId}`, card);
+  void card.start();
+  return card;
+}
+
+function finishProgress(chatId, messageId, card) {
+  const key = `${chatId}:${messageId}`;
+  if (activeProgress.get(key) === card) activeProgress.delete(key);
+}
 
 // The first chat to speak claims ownership, stored so a restart cannot hand the bot
 // to whoever messages next. Everyone else must be let in by the owner, and each
@@ -209,7 +228,10 @@ async function startResearch(chatId, principalId, captureId) {
     principalId, captureId, topic, question: cap.request || cap.transcript,
   });
 
-  const status = await tg.send(chatId, `🔎 <b>${esc(topic)}</b>\n\nشروع کردم…`);
+  const status = await tg.send(chatId, `🔎 <b>${esc(topic)}</b>\n\nشروع کردم…`,
+    { buttons: [[{ text: '⏹ نگه دار', callback_data: 'stop' }]] });
+  const card = progressCard(chatId, status.message_id, topic,
+    RESEARCH_STAGES, [[{ text: '⏹ نگه دار', callback_data: 'stop' }]]);
 
   try {
     const { output, costToman } = await cancel.underway(principalId,
@@ -217,13 +239,13 @@ async function startResearch(chatId, principalId, captureId) {
         principalId, dossierId,
         question: cap.request || cap.transcript,
         topic,
-        onProgress: (msg) => tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>\n\n${esc(msg)}`),
+        onProgress: ({ stage, detail }) => { void card.set(stage, detail); },
         onSection: async (name, payload) => {
           if (SECTION[name]) await tg.send(chatId, SECTION[name]({ topic, ...payload }));
         },
       }));
 
-    await tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>`);
+    await card.close(`✅ <b>${esc(topic)}</b>\n\nتحقیق این دور پایان یافت.`, []);
 
     if (!output.verified?.length) {
       await tg.send(chatId, '✅ <b>تأییدشده</b>\n\n<i>هیچ ادعایی تأیید نشد. این یک نتیجه‌ی صادقانه است، نه خطا.</i>');
@@ -246,8 +268,10 @@ async function startResearch(chatId, principalId, captureId) {
     });
   } catch (err) {
     console.error('[research] failed:', err);
-    await tg.edit(chatId, status.message_id,
+    await card.close(
       `🔎 <b>${esc(topic)}</b>\n\n❌ تحقیق شکست خورد: ${esc(String(err.message ?? err))}\n\n<i>ثبت اولیه‌ات سالم است و از دست نرفته.</i>`);
+  } finally {
+    finishProgress(chatId, status.message_id, card);
   }
 }
 
@@ -261,6 +285,8 @@ const pendingDeep = new Map();
 async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, resumeId = null) {
   const head = `🕳 <b>کاوش عمیق</b>\n«${esc(question.slice(0, 90))}»`;
   const status = await tg.send(chatId, `${head}\n\nشروع کردم…`);
+  const card = progressCard(chatId, status.message_id,
+    `کاوش عمیق: ${question.slice(0, 80)}`, DEEP_STAGES, []);
 
   // Opened before the work starts, not after. Without this, anything typed during or
   // after a deep run had no dossier open and fell through to capture — where "summarise
@@ -276,36 +302,37 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
     else await tg.edit(chatId, trailMsg.message_id, body);
   };
 
-  // The stop button needs the run id, which only exists once the run has begun, so the
-  // status message gains its button on the first round rather than up front.
-  let armed = false;
-  const arm = async (runId, text) => {
-    if (armed || !runId) return tg.edit(chatId, status.message_id, text);
-    armed = true;
-    return tg.edit(chatId, status.message_id, text,
-      [[{ text: '⏹ نگه دار', callback_data: `deepstop:${runId}` }]]);
-  };
-
   try {
     const out = await deepInvestigate({
       principalId, dossierId, question, ceilingUsd, runId: resumeId,
+      onStarted: (runId) => card.buttons([[{ text: '⏹ نگه دار', callback_data: `deepstop:${runId}` }]]),
       onNote: async (n) => {
         if (n.kind === 'resumed') {
+          void card.set('جست‌وجوی اسناد', `از دور ${n.rounds} و سرنخ‌های ذخیره‌شده ادامه می‌دهم`, n.rounds + 1);
           await note(`↩️ از دور ${n.rounds} ادامه می‌دهم — سرنخ‌های همان‌جا: ` +
             n.leads.slice(0, 3).map((l) => `«${esc(String(l).slice(0, 40))}»`).join('، '));
-        } else if (n.kind === 'searching') await note(`🔍 ${n.queries.map((q) => `«${esc(q)}»`).join(' ')}`);
+        } else if (n.kind === 'searching') {
+          void card.set('جست‌وجوی اسناد', `جست‌وجوی محلی، گام ${n.hop}: ${n.queries.join(' · ')}`, n.round);
+          await note(`🔍 ${n.queries.map((q) => `«${esc(q)}»`).join(' ')}`);
+        }
         else if (n.kind === 'lead' && n.lead) await note(`💡 ${esc(n.lead)}`);
-        else if (n.kind === 'web') await note(`🌐 وب — «${esc(String(n.lead).slice(0, 60))}»`);
-        else if (n.kind === 'nextleads') await note(`↪️ سرنخ‌های بعدی: ${n.leads.map((l) => esc(l)).join('، ')}`);
+        else if (n.kind === 'web') {
+          void card.set('جست‌وجوی وب', `در حال بررسی: ${n.lead}`, n.round);
+          await note(`🌐 وب — «${esc(String(n.lead).slice(0, 60))}»`);
+        }
+        else if (n.kind === 'nextleads') {
+          void card.set('ارزیابی دور', `${n.leads.length} سرنخ برای دور بعد`, n.round);
+          await note(`↪️ سرنخ‌های بعدی: ${n.leads.map((l) => esc(l)).join('، ')}`);
+        }
         else if (n.kind === 'notworth') await note(`🧮 ایستادم: ${esc(n.why)}`);
         else if (n.kind === 'elsewhere') {
           for (const e of n.elsewhere) await note(`📁 #${e.dossier.id} ${esc(e.dossier.topic)}`);
         } else if (n.kind === 'error') await note(`⚠️ ${esc(n.message)}`);
       },
       onRound: async (r) => {
-        await arm(r.runId,
-          `${head}\n\nدور ${r.round} · ${r.fresh ? `${r.fresh} چیز تازه` : 'چیز تازه‌ای نبود'} · ` +
-          `${r.claims} یافته · ${toman(r.costToman)} تومان`);
+        await card.set('ارزیابی دور',
+          `${r.fresh ? `${r.fresh} چیز تازه` : 'چیز تازه‌ای نبود'} · ${r.claims} یافته · ${toman(r.costToman)} تومان`,
+          r.round);
       },
     });
 
@@ -334,7 +361,7 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
     const spanned = out.resumedFrom
       ? `${out.roundsThisTime} دور تازه (رویِ ${out.resumedFrom} دورِ قبل)`
       : `${out.rounds} دور`;
-    await tg.edit(chatId, status.message_id,
+    await card.close(
       `${head}\n\n${spanned} · ${out.newClaims.length} یافته‌ی تازه · ` +
       `${toman(out.costToman)} تومان روی هم\n${why}${standing}`, []);
 
@@ -375,7 +402,9 @@ async function runDeep(chatId, principalId, dossierId, question, ceilingUsd, res
     }
   } catch (err) {
     console.error('[deep] failed:', err);
-    await tg.edit(chatId, status.message_id, `${head}\n\n❌ ${esc(String(err.message ?? err))}`);
+    await card.close(`${head}\n\n❌ ${esc(String(err.message ?? err))}`);
+  } finally {
+    finishProgress(chatId, status.message_id, card);
   }
 }
 
@@ -483,24 +512,28 @@ async function runWebResearch(chatId, principalId, dossierId, topic, question) {
   // immediately, so the moment you want to stop it is the moment it begins.
   const status = await tg.send(chatId, `🌐 <b>${esc(question.slice(0, 60))}</b>\n\nدر حال جست‌وجو در وب…`,
     { buttons: [[{ text: '⏹ نگه دار', callback_data: 'stop' }]] });
+  const card = progressCard(chatId, status.message_id, question.slice(0, 80),
+    RESEARCH_STAGES, [[{ text: '⏹ نگه دار', callback_data: 'stop' }]]);
   try {
-    return await cancel.underway(principalId, `تحقیق «${topic}»`, () => webResearchBody(chatId, principalId, dossierId, topic, question, status));
+    return await cancel.underway(principalId, `تحقیق «${topic}»`, () => webResearchBody(chatId, principalId, dossierId, topic, question, card));
   } catch (err) {
-    await tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>\n\n❌ ${esc(String(err.message ?? err))}`, []);
+    await card.close(`🌐 <b>${esc(topic)}</b>\n\n❌ ${esc(String(err.message ?? err))}`, []);
+  } finally {
+    finishProgress(chatId, status.message_id, card);
   }
 }
 
-async function webResearchBody(chatId, principalId, dossierId, topic, question, status) {
+async function webResearchBody(chatId, principalId, dossierId, topic, question, card) {
   {
     const { output, costToman } = await runResearch({
       principalId, dossierId, topic, question,
-      onProgress: (m) => tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>\n\n${esc(m)}`),
+      onProgress: ({ stage, detail }) => { void card.set(stage, detail); },
       onSection: async (name, payload) => {
         if (SECTION[name]) await tg.send(chatId, SECTION[name]({ topic, ...payload }));
       },
     });
     // The button goes once there is nothing left to stop.
-    await tg.edit(chatId, status.message_id, `🌐 <b>${esc(topic)}</b>`, []);
+    await card.close(`✅ <b>${esc(topic)}</b>\n\nتحقیق این دور پایان یافت.`, []);
     if (!output.verified?.length) {
       await tg.send(chatId, '✅ <b>تأییدشده</b>\n\n<i>هیچ ادعایی تأیید نشد.</i>');
     }
@@ -659,6 +692,8 @@ async function handleDocument(chatId, principalId, { fileId, filename, mime, all
       return;
     }
 
+    try { refreshResearchLedger(principalId, dossierId); }
+    catch (err) { console.warn('[ingest] could not write ledger:', err.message); }
     const head = [`📎 <b>${esc(out.filename || 'سند')}</b> · ${KINDS[out.kind] ?? out.kind}`];
     if (out.pages) {
       head.push(out.readPages && out.readPages < out.pages
@@ -855,6 +890,7 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
        '/use — پرونده‌ها · /close — خروج از گفتگو',
        '/watch — پیگیری خودکار · /intentions · /unwatch',
        '/link · /unlink · /related — پیوند پرونده‌ها',
+       '/ledger — دفترچهٔ تحقیق پرونده',
        '/model · /models · /budget',
        '/cost · /recent · /db'].join('\n'));
     return true;
@@ -902,6 +938,19 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
   if (text.startsWith('/close')) {
     settings.setActiveDossier(principalId, null);
     await tg.send(chatId, 'از گفتگو خارج شدم. حالا هر پیام دوباره یک ثبت جدید است.');
+    return true;
+  }
+
+  if (/^\/ledger(?:\s|$)/.test(text)) {
+    const arg = text.slice('/ledger'.length).trim();
+    const dossierId = arg ? Number(arg) : settings.activeDossier(principalId);
+    if (!Number.isInteger(dossierId) || !store.getDossier(principalId, dossierId)) {
+      await tg.send(chatId, 'پرونده‌ای باز نیست. <code>/ledger ID</code> را بزن.');
+      return true;
+    }
+    const { markdown } = refreshResearchLedger(principalId, dossierId);
+    await tg.sendDocument(chatId, Buffer.from(markdown, 'utf8'),
+      `asc-research-${dossierId}.md`, '📓 دفترچهٔ فعلی تحقیق؛ از داده‌های پرونده ساخته شد.');
     return true;
   }
 
@@ -1238,6 +1287,11 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
         principalId, documentId: id,
         onProgress: (m) => tg.edit(chatId, status.message_id, `📎 سند #${id} — ${esc(m)}`).catch(() => {}),
       });
+      const document = store.getDocument(principalId, id);
+      if (document) {
+        try { refreshResearchLedger(principalId, document.dossier_id); }
+        catch (err) { console.warn('[claims] could not write ledger:', err.message); }
+      }
       await tg.edit(chatId, status.message_id,
         `📎 <b>${esc(out.filename || 'سند')}</b> · ${out.verified.length + out.found.length} ادعا · ${toman(out.costToman)} تومان`);
       if (out.summary) await tg.send(chatId, esc(out.summary));
@@ -1629,8 +1683,8 @@ async function handleUpdate(update) {
       // A read-only status/menu visit must not undo a stop that a running job has not
       // observed yet. A new work request clears that stop so the next job can start.
       const isStopRequest = cb && /^(stop|deepstop)\b/.test(String(cb.data));
-      const readOnly = cb && String(cb.data).startsWith('m:') || msg &&
-        /^\/(status|doctor|menu|cost|spend|recent|models|db|eps|d|c)(?:\s|$)/.test(String(msg.text ?? ''));
+      const readOnly = cb && /^(m:|ledger:)/.test(String(cb.data)) || msg &&
+        /^\/(status|ledger|doctor|menu|cost|spend|recent|models|db|eps|d|c)(?:\s|$)/.test(String(msg.text ?? ''));
       if (!isStopRequest && !readOnly) cancel.newInstruction(principalId);
 
       if (cb) {
@@ -1657,6 +1711,12 @@ async function handleUpdate(update) {
           const d = store.getDossier(principalId, id);
           await tg.send(chatId,
             `💬 روی پرونده #${id} — ${esc(d?.topic ?? '')}\n\nبپرس. <code>/close</code> برای خروج.`);
+        } else if (action === 'ledger') {
+          await tg.answerCallback(cb.id, 'دفترچه را می‌فرستم');
+          if (!store.getDossier(principalId, id)) return;
+          const { markdown } = refreshResearchLedger(principalId, id);
+          await tg.sendDocument(chatId, Buffer.from(markdown, 'utf8'),
+            `asc-research-${id}.md`, '📓 دفترچهٔ فعلی تحقیق');
         } else if (action === 'scan' || action === 'scan20') {
           const job = pendingScans.get(idStr);
           await tg.answerCallback(cb.id, job ? 'شروع کردم' : 'منقضی شده');
@@ -1688,7 +1748,9 @@ async function handleUpdate(update) {
           const label = cancel.request(principalId);
           await tg.answerCallback(cb.id, label ? 'نگه می‌دارم' : 'چیزی در حال اجرا نبود');
           if (label) {
-            await tg.edit(chatId, cb.message.message_id,
+            const card = activeProgress.get(`${chatId}:${cb.message.message_id}`);
+            if (card) await card.stopping();
+            else await tg.edit(chatId, cb.message.message_id,
               `${cb.message.text ?? ''}\n\n⏹ <i>نگه می‌دارم. آنچه تا اینجا شده می‌ماند.</i>`, []);
           }
         } else if (action === 'deepstop') {
@@ -1697,7 +1759,9 @@ async function handleUpdate(update) {
           const changed = store.requestStop(principalId, id);
           await tg.answerCallback(cb.id, changed ? 'باشد، سر همین دور نگه می‌دارم' : 'تمام شده بود');
           if (changed) {
-            await tg.edit(chatId, cb.message.message_id,
+            const card = activeProgress.get(`${chatId}:${cb.message.message_id}`);
+            if (card) await card.stopping();
+            else await tg.edit(chatId, cb.message.message_id,
               `${cb.message.text ?? ''}\n\n⏹ <i>گفتی نگه دارم — همین دور را تمام می‌کنم و می‌ایستم.</i>`, []);
           }
         } else if (action === 'deep' || action === 'deepmore') {

@@ -27,17 +27,27 @@ const SCREENS = {
   root(principalId) {
     const active = settings.activeDossier(principalId);
     const d = active ? store.getDossier(principalId, active) : null;
+    const running = statusOf(principalId);
+    const open = store.openInvestigations(principalId);
+    const deep = open.find((r) => r.state === 'running');
+    const paused = open.filter((r) => r.state === 'paused').length;
     return {
       text: [
-        '🧠 <b>ASC</b>',
+        '🧭 <b>ASC · دستیار پژوهش</b>',
         '',
-        d ? `پرونده‌ی باز: <b>#${d.id}</b> — ${esc(d.topic)}` : 'پرونده‌ای باز نیست.',
+        running ? `🔄 <b>در حال انجام:</b> ${esc(running.label)} · ${running.seconds} ثانیه`
+          : deep ? `🔄 <b>کاوش عمیق #${deep.id}</b> · دور ${deep.rounds}`
+          : '○ کار فعالی در جریان نیست.',
+        paused ? `⏸ ${paused} کاوش قابل ادامه` : null,
         '',
-        '<i>ویس بفرست یا بنویس — هر چیزی ثبت می‌شود.</i>',
-      ].join('\n'),
+        d ? `📁 <b>پروندهٔ باز #${d.id}</b>\n${esc(d.topic)}` : '📁 پرونده‌ای باز نیست.',
+        '',
+        '<i>سؤال بپرس، سند بفرست، یا برای تحقیق دستور بده.</i>',
+      ].filter((x) => x !== null).join('\n'),
       buttons: [
-        [btn('⏳ وضعیت کارها', 'm:status')],
-        [btn('📁 پرونده‌ها', 'm:dossiers'), btn('👁 پیگیری‌ها', 'm:watches')],
+        ...(d ? [[btn('💬 گفتگوی پرونده', `m:open:${d.id}`), btn('📓 دفترچه', `ledger:${d.id}`)]] : []),
+        [btn('🔄 وضعیت و ادامه', 'm:status'), btn('📁 پرونده‌ها', 'm:dossiers')],
+        [btn('👁 پیگیری‌ها', 'm:watches')],
         [btn('💰 هزینه', 'm:cost'), btn('🗄 داده‌ها', 'm:data')],
         [btn('⚙️ تنظیمات', 'm:settings'), btn('❓ راهنما', 'm:help')],
       ],
@@ -46,16 +56,19 @@ const SCREENS = {
 
   status(principalId) {
     const now = statusOf(principalId);
-    const paused = store.openInvestigations(principalId).filter((r) => r.state === 'paused');
+    const open = store.openInvestigations(principalId);
+    const deep = open.find((r) => r.state === 'running');
+    const paused = open.filter((r) => r.state === 'paused');
     return {
       text: [
         '⏳ <b>وضعیت کارها</b>', '',
-        now ? `🔄 ${esc(now.label)} · ${now.seconds} ثانیه` : 'کاری اکنون در جریان نیست.',
+        now ? `🔄 ${esc(now.label)} · ${now.seconds} ثانیه`
+          : deep ? `🔄 کاوش عمیق #${deep.id} · دور ${deep.rounds}` : 'کاری اکنون در جریان نیست.',
         paused.length ? `\n${paused.length} کاوش قابل ادامه است.` : '',
         '<i>برای جزئیات بیشتر /status را بزن.</i>',
       ].join('\n'),
       buttons: [
-        ...(now ? [[btn('⏹ نگه دار', 'stop')]] : []),
+        ...(now ? [[btn('⏹ نگه دار', 'stop')]] : deep ? [[btn('⏹ نگه دار', `deepstop:${deep.id}`)]] : []),
         ...paused.slice(0, 3).map((r) => [btn(`▶️ ادامهٔ #${r.id}`, `deepmore:${r.id}`)]),
         [back()],
       ],
@@ -100,6 +113,7 @@ const SCREENS = {
       ].filter((x) => x !== null).join('\n'),
       buttons: [
         [active ? btn('✔️ باز است', 'm:noop') : btn('💬 باز کن و بحث کن', `m:open:${d.id}`)],
+        [btn('📓 دفترچهٔ تحقیق', `ledger:${d.id}`)],
         [btn('👁 پیگیری کن', `m:watch:${d.id}`), btn('🔗 مرتبط‌ها', `m:rel:${d.id}`)],
         [back('dossiers')],
       ],
@@ -215,6 +229,8 @@ const SCREENS = {
         '<b>سند بفرست</b> — PDF، تصویر یا متن. وارد پرونده‌ی باز می‌شود.',
         '',
         'وقتی تحقیقی تمام شد، دکمه‌ی «بحث کنیم» گفتگو را روی همان پرونده باز می‌کند.',
+        'کارت تحقیق مرحلهٔ فعلی و زمان سپری‌شده را زنده نشان می‌دهد؛ از همان‌جا می‌توانی نگهش داری.',
+        'برای دیدن کارهای انجام‌شده و سرنخ بعدی: <code>/ledger</code>',
         '',
         '<b>چهار ستون نتیجه</b>',
         '✅ نقل‌قول در منبع بود و ادعا را پشتیبانی کرد',

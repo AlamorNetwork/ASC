@@ -51,6 +51,13 @@ model. Check outbound access without model charges with:
 node scripts/probe-web-search.js "Mithraism Roman Iranian origins"
 ```
 
+Each web round now plans bounded parallel searches for direct evidence, contrary
+accounts and source attribution. Results from the lanes are interleaved before
+opening pages so one lane cannot consume the entire reading budget. This uses one
+planning model call; it does not pretend that three independent agents verified the
+answer. The Telegram status card shows the current phase, elapsed time and stop
+control. Its bar counts phases, not the percentage of unknown work remaining.
+
 The web round also keeps a small audit of competing interpretations and people
 mentioned in fetched sources. Each cited passage in that audit must occur in a
 server-fetched excerpt. The passages, theories, and questions about a person's
@@ -60,6 +67,13 @@ in later rounds and saves the frontier when stopped or when the cost ceiling is
 reached. A claim about a person's motives needs independent sources and must be
 checked claim by claim. Search is bounded by accessible pages and the agreed
 budget; it cannot claim to have read every source or settled every hypothesis.
+
+Every dossier has a generated Markdown research ledger under `data/asc-ledgers/`.
+It records the saved frontier, rounds, documents, verified claims and open questions.
+The database is authoritative; the file is regenerated after research and on
+`/ledger [DOSSIER_ID]`, which also sends it in Telegram. A short bounded part is
+given to the planner to avoid repeating work, and to the chat model when asked
+about progress. Ledger text is context, never a new citation or instruction.
 
 ---
 

@@ -2223,6 +2223,80 @@ await check('server search supplies only fetched text and pins claims to its URL
   return 'fetched page text only; invented model URL ignored; both gates passed';
 });
 
+await check('parallel search perspectives reach the source reader fairly', async () => {
+  const { discoverEvidence } = await import('../src/research.js');
+  const opened = [], phases = [];
+  let plannerInput = '';
+  const out = await discoverEvidence('اصل روایت', {
+    ask: async (args) => { plannerInput = args.content; return {
+      data: { queries: ['شاهد مستقیم', 'نقد مخالف', 'منشأ راوی'] }, usage: {},
+    }; },
+    search: async (query) => ({ results: Array.from({ length: 8 }, (_, i) => ({
+      url: `https://example.org/${encodeURIComponent(query)}/${i}`, title: query,
+    })), errors: [] }),
+    open: async (url) => { opened.push(url); return { ok: true, url, text: 'متن منبع '.repeat(40) }; },
+    onProgress: (event) => phases.push(event.stage),
+    ledger: '# دفترچه\n- سرنخ بعدی: منشأ راوی',
+  });
+  if (out.queries.length !== 4 || opened.length !== 8 || out.evidence.length !== 5 ||
+      !plannerInput.includes('سرنخ بعدی: منشأ راوی') ||
+      !opened.some((u) => u.includes(encodeURIComponent('نقد مخالف'))) ||
+      !opened.some((u) => u.includes(encodeURIComponent('منشأ راوی'))) ||
+      !['plan', 'search', 'fetch'].every((p) => phases.includes(p)))
+    throw new Error('a search lane was starved or the live phase was lost');
+  return 'four bounded searches in parallel; contrary and provenance lanes read';
+});
+
+await check('live progress names real phases, keeps stop visible, and closes', async () => {
+  const { liveProgress, progressText } = await import('../src/progress.js');
+  const stages = ['جست‌وجو', 'خواندن', 'داوری'];
+  const sample = progressText({ title: '<موضوع>', stages, current: 1,
+    detail: '<متن>', since: Date.now() - 3000 });
+  if (!sample.includes('&lt;موضوع&gt;') || !sample.includes('&lt;متن&gt;') ||
+      !sample.includes('2/3 مرحله') || sample.includes('٪'))
+    throw new Error('progress showed unsafe text or a made-up percent');
+  const edits = [];
+  const bar = liveProgress({ title: 'تحقیق', stages,
+    buttons: [[{ text: 'توقف', callback_data: 'stop' }]],
+    edit: async (body, buttons) => edits.push({ body, buttons }), intervalMs: 60000 });
+  await bar.start();
+  await bar.set('خواندن', 'دو صفحه خوانده شد');
+  await bar.stopping();
+  await bar.set('داوری', 'نباید نشان داده شود');
+  await bar.close('تمام شد', []);
+  if (edits.length !== 4 || !edits[0].buttons.length || edits[2].buttons.length ||
+      edits[2].body.includes('نباید') || edits[3].body !== 'تمام شد')
+    throw new Error('progress or stop control became stale');
+  return 'escaped stage card, stop locked, final edit applied';
+});
+
+await check('research ledger records durable progress and stays inside its owner dossier', async () => {
+  const fs = await import('node:fs');
+  const { refreshResearchLedger, researchLedger } = await import('../src/research-ledger.js');
+  const principalId = `ledger-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'روایت تاریخی', question: 'چه رخ داد؟' });
+  store.insertClaim({ principalId, dossierId, text: 'روایت اول', status: 'verified',
+    quote: 'The old chronicle states this.', sourceUrl: 'https://example.org/chronicle' });
+  const runId = store.startInvestigation({ principalId, dossierId, question: 'چه رخ داد؟' });
+  store.saveInvestigation(runId, { state: 'paused', stopped: 'ceiling', rounds: 2,
+    leads: ['منبع مستقل دربارهٔ راوی'], allLeads: [], seenChunks: [], costToman: 100, costUsd: 0.001 });
+  const episodeId = store.startEpisode({ principalId, dossierId, kind: 'research' });
+  store.finishEpisode(principalId, episodeId, { state: 'succeeded',
+    output: { audit: { hypotheses: [{ text: 'روایت دوم', missingEvidence: 'سند هم‌دوره' }],
+      peopleToCheck: [{ name: 'راوی', query: 'زندگی‌نامهٔ راوی' }] },
+    unresolved: ['تاریخ دقیق'] }, costToman: 10, costUsd: 0.0001 });
+  const { markdown, file } = refreshResearchLedger(principalId, dossierId);
+  if (!markdown.includes('منبع مستقل دربارهٔ راوی') || !markdown.includes('روایت اول') ||
+      !markdown.includes('The old chronicle states this.') ||
+      !markdown.includes('روایت دوم') || !markdown.includes('تاریخ دقیق') || !fs.existsSync(file) ||
+      fs.readFileSync(file, 'utf8') !== markdown)
+    throw new Error('ledger lost a saved lead, claim or file');
+  let denied = false;
+  try { researchLedger('another-principal', dossierId); } catch { denied = true; }
+  if (!denied) throw new Error('another user read this dossier');
+  return 'paused frontier and verified claim written to a private Markdown view';
+});
+
 await check('rival hypotheses and person checks stay unverified leads with exact provenance', async () => {
   const { buildResearchAudit, auditLeads } = await import('../src/research-audit.js');
   const sources = [{ id: 0, url: 'https://example.org/history', title: 'History',

@@ -366,6 +366,10 @@ export const getInvestigation = (principalId, id) =>
   db.prepare(`SELECT * FROM investigations WHERE principal_id = ? AND id = ?`)
     .get(principalId, Number(id)) ?? null;
 
+export const latestDossierInvestigation = (principalId, dossierId) =>
+  db.prepare(`SELECT * FROM investigations WHERE principal_id = ? AND dossier_id = ? ORDER BY id DESC LIMIT 1`)
+    .get(principalId, Number(dossierId)) ?? null;
+
 /** The most recent paused run for this dossier — what "carry on" should resume. */
 export const resumableInvestigation = (principalId, dossierId) =>
   db.prepare(`
@@ -837,6 +841,10 @@ export const listDossiers = (principalId, limit = 10) =>
 
 export const recentEpisodes = (principalId, limit = 10) =>
   db.prepare(`SELECT * FROM episodes WHERE principal_id = ? ORDER BY id DESC LIMIT ?`).all(principalId, limit);
+
+export const dossierEpisodes = (principalId, dossierId, limit = 6) =>
+  db.prepare(`SELECT * FROM episodes WHERE principal_id = ? AND dossier_id = ? ORDER BY id DESC LIMIT ?`)
+    .all(principalId, Number(dossierId), limit);
 
 /**
  * Read-only query surface for inspecting data during testing.
