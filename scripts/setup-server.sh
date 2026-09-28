@@ -91,12 +91,23 @@ WantedBy=multi-user.target
 UNIT
   systemctl daemon-reload
   systemctl enable --now 9router >/dev/null
-  sleep 3
-  if curl -fsS -m 5 http://127.0.0.1:20128/api/health >/dev/null 2>&1 \
-     || curl -fsS -m 5 http://127.0.0.1:20128/ >/dev/null 2>&1; then
+  # Next.js needs time to start after systemd reports the process as active.
+  # A fixed three-second sleep raced startup on a fresh server, so the domain
+  # installer ran before 9router had bound its port and aborted the install.
+  ROUTER_READY=0
+  for ((attempt = 1; attempt <= 30; attempt++)); do
+    if curl -fsS --max-time 2 http://127.0.0.1:20128/v1/models >/dev/null 2>&1; then
+      ROUTER_READY=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "$ROUTER_READY" = "1" ]; then
     echo "9router is up on 127.0.0.1:20128"
   else
-    echo "9router did not answer yet — check: journalctl -u 9router -n 30"
+    echo "9router did not answer after 60 seconds. Recent service output:"
+    journalctl -u 9router -n 30 --no-pager || true
+    exit 1
   fi
 
   if [ -n "${NEW_PASS:-}" ]; then
@@ -212,7 +223,7 @@ if [ "${NEEDS_ENV:-0}" = "1" ]; then
 Not started: .env still needs filling in.
 
   nano $DIR/.env
-  cd $DIR && node scripts/check.js && systemctl start asc
+  cd $DIR && node --check index.js && systemctl start asc
 
 If you are moving from another machine, put its backup in place first — that file is
 the only thing that is not in git:
