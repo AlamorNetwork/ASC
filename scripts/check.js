@@ -24,7 +24,7 @@ process.env.ASC_DB ??= path.join(ROOT, 'data', 'check.db');
 const { config } = await import('../src/config.js');
 const store = await import('../src/db.js');
 const { captureFromText, captureFromAudio, transcriptionModel } = await import('../src/capture.js');
-const { verifyClaim, normalise } = await import('../src/verify.js');
+const { verifyClaim, verifyAgainstText, normalise } = await import('../src/verify.js');
 const { spendMark, spendSince } = await import('../src/llm.js');
 
 const PAID = process.argv.includes('--paid') || process.argv.includes('--audio');
@@ -1112,7 +1112,7 @@ await check('every menu screen renders without throwing', async () => {
   const id = store.insertDossier({ principalId: p, topic: '<b>عنوان & خطرناک</b>' });
   store.upsertUser({ principalId: p, name: '<script>', role: 'owner', state: 'active' });
 
-  for (const name of ['root', 'dossiers', 'watches', 'cost', 'data', 'settings', 'users', 'help']) {
+  for (const name of ['root', 'status', 'dossiers', 'watches', 'cost', 'data', 'settings', 'users', 'help']) {
     const view = menu.screen(name, p, undefined, { isOwner: true });
     if (!view?.text) throw new Error(`${name} produced no text`);
     if (/<b>عنوان & خطرناک<\/b>/.test(view.text)) throw new Error(`${name} did not escape a dossier title`);
@@ -1128,7 +1128,14 @@ await check('every menu screen renders without throwing', async () => {
   if (!one.text.includes('&lt;b&gt;')) throw new Error('the dossier screen did not escape its title');
   const missing = menu.screen('d', p, 999999, { isOwner: true });
   if (!missing.text.includes('پیدا نشد')) throw new Error('a missing dossier was not handled');
-  return '8 screens + detail, escaped, callback_data within limits';
+  const cancel = await import('../src/cancel.js');
+  await cancel.underway(p, 'تحقیق', async () => {
+    const active = menu.screen('status', p);
+    if (!active.text.includes('تحقیق') ||
+        !active.buttons.some((row) => row.some((b) => b.callback_data === 'stop')))
+      throw new Error('the active job has no visible stop button');
+  });
+  return '9 screens + detail, escaped, callback_data within limits';
 });
 
 await paid('deep investigation names the source it still needs', async () => {
@@ -1480,7 +1487,7 @@ await check('a catalogue served in slices is read whole', async () => {
     if (before === null) store.clearSetting('model.embed');
     else store.setSetting('model.embed', before);
     cfg.providers.delete('sliced');
-    server.close();
+    await new Promise((resolve) => server.close(resolve));
   }
   return 'extra views merged, duplicates absorbed';
 });
@@ -1969,6 +1976,7 @@ const fixtureUrl = `http://127.0.0.1:${server.address().port}/`;
 await check('a source we cannot open is not the same as a claim that is wrong', async () => {
   const blocked = await verifyClaim({
     sourceUrl: `${fixtureUrl}blocked`,
+    allowPrivate: true,
     quote: 'هر نقل‌قولی، چون صفحه اصلاً باز نمی‌شود',
   });
   if (blocked.reason !== 'unreachable') throw new Error(`a 403 was scored as ${blocked.reason}`);
@@ -1976,6 +1984,7 @@ await check('a source we cannot open is not the same as a claim that is wrong', 
 
   const wrong = await verifyClaim({
     sourceUrl: fixtureUrl,
+    allowPrivate: true,
     quote: 'این جمله قطعاً در این صفحه نیست و باید رد شود چون واقعاً نیست',
   });
   if (wrong.reason !== 'quote_absent') throw new Error(`a missing quote was scored as ${wrong.reason}`);
@@ -1992,6 +2001,7 @@ await check('a source we cannot open is not the same as a claim that is wrong', 
 
   const gone = await verifyClaim({
     sourceUrl: `${fixtureUrl}nothing-here-404`,
+    allowPrivate: true,
     quote: 'هر نقل‌قولی، چون این صفحه وجود ندارد',
   });
   if (gone.reason !== 'fabricated_url') throw new Error(`a 404 was scored as ${gone.reason}`);
@@ -2002,6 +2012,7 @@ await check('a source we cannot open is not the same as a claim that is wrong', 
 await check('verify rejects an unsupported quote', async () => {
   const r = await verifyClaim({
     sourceUrl: fixtureUrl,
+    allowPrivate: true,
     quote: 'این جمله قطعاً در این صفحه وجود ندارد و باید رد شود',
   });
   if (r.status !== 'found') throw new Error('a missing quote was marked verified');
@@ -2011,6 +2022,7 @@ await check('verify rejects an unsupported quote', async () => {
 await check('verify accepts a quote that is really there', async () => {
   const r = await verifyClaim({
     sourceUrl: fixtureUrl,
+    allowPrivate: true,
     quote: 'میترائیسم رومی پدیده‌ای عمدتاً رومی بود',
   });
   if (r.status !== 'verified') throw new Error(`expected verified, got ${r.status} (${r.note})`);
@@ -2020,10 +2032,224 @@ await check('verify accepts a quote that is really there', async () => {
 await check('verify rejects a paraphrase', async () => {
   const r = await verifyClaim({
     sourceUrl: fixtureUrl,
+    allowPrivate: true,
     quote: 'میترائیسم رومی بیشتر یک پدیده رومی بوده است',  // same meaning, different words
   });
   if (r.status !== 'found') throw new Error('a paraphrase was accepted as verified');
   return r.note;
+});
+
+await check('a real quotation must support the whole claim before verification', async () => {
+  const { gateClaims } = await import('../src/support.js');
+  const quote = 'The cult flourished in the Roman Empire between the first and fourth centuries.';
+  const base = verifyAgainstText(`Article: ${quote}`, quote);
+  if (base.status !== 'verified') throw new Error('the exact quotation was not found');
+  const rows = [
+    { text: 'این آیین در امپراتوری روم میان سده‌های اول و چهارم رواج داشت', quote,
+      status: base.status, verifyMethod: base.method },
+    { text: 'این آیین در ایران در سدهٔ پنجم بنیان گذاشته شد', quote,
+      status: base.status, verifyMethod: base.method },
+    { text: 'این آیین هرگز در امپراتوری روم رواج نداشت', quote,
+      status: base.status, verifyMethod: base.method },
+  ];
+  const ask = async () => ({ data: { verdicts: [
+    { id: 0, verdict: 'supports', basis: 'flourished in the Roman Empire' },
+    { id: 1, verdict: 'insufficient', basis: 'Roman Empire' },
+    { id: 2, verdict: 'contradicts', basis: 'flourished in the Roman Empire' },
+  ] }, usage: {} });
+  const out = (await gateClaims(rows, { ask })).rows;
+  if (out[0].status !== 'verified' || out[0].verifyReason !== 'quote_supports_claim')
+    throw new Error('supported claim was not verified');
+  if (out[1].status !== 'found' || out[1].verifyReason !== 'quote_does_not_support_claim')
+    throw new Error('extra unsupported detail was verified');
+  if (out[2].status !== 'found' || out[2].verifyReason !== 'quote_contradicts_claim')
+    throw new Error('contradicted claim was verified');
+  const inventedBasis = (await gateClaims(rows.slice(0, 1), {
+    ask: async () => ({ data: { verdicts: [
+      { id: 0, verdict: 'supports', basis: 'a phrase not present in the quotation' },
+    ] }, usage: {} }),
+  })).rows[0];
+  if (inventedBasis.status !== 'found') throw new Error('invented supporting phrase was accepted');
+  if (inventedBasis.verifyReason !== 'support_unchecked')
+    throw new Error('an invalid judgment cannot be retried');
+  const missingVerdict = (await gateClaims(rows.slice(0, 1), {
+    ask: async () => ({ data: { verdicts: [] }, usage: {} }),
+  })).rows[0];
+  if (missingVerdict.verifyReason !== 'support_unchecked')
+    throw new Error('a missing judgment was treated as a completed check');
+  const failed = (await gateClaims(rows.slice(0, 1), {
+    ask: async () => { throw new Error('judge offline'); },
+  })).rows[0];
+  if (failed.status !== 'found' || failed.verifyReason !== 'support_unchecked')
+    throw new Error('judge failure upgraded a claim');
+  const absent = (await gateClaims([{ text: 'ادعا', quote: 'متن ناموجود', status: 'found',
+    verifyReason: 'quote_absent' }], { ask: async () => {
+    throw new Error('an unmatched quote should never cost a semantic call');
+  } })).rows[0];
+  if (absent.verifyReason !== 'quote_absent') throw new Error('the original quote failure was lost');
+  return 'direct support passes; overclaim, contradiction, invented basis and outage stay unverified';
+});
+
+await check('old quote-only verdicts no longer count as semantic verification', () => {
+  const principalId = `old-verdict-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'historical' });
+  store.insertClaim({ principalId, dossierId, text: 'ادعای قدیمی', status: 'verified',
+    quote: 'exact old quote', verifyMethod: 'source_fetched_quote_matched' });
+  store.insertDocument({ principalId, dossierId, filename: 'scan.pdf', kind: 'pdf',
+    extraction: 'model_vision_pages' });
+  store.insertClaim({ principalId, dossierId, text: 'ادعای تصویر', sourceTitle: 'scan.pdf',
+    status: 'verified', quote: 'OCR copy', verifyMethod: 'document_quote_matched' });
+  if (store.downgradeLegacyVerifications() < 2) throw new Error('migration changed too little');
+  const row = store.dossierClaims(principalId, dossierId)[0];
+  if (row.status !== 'found' || row.verify_reason !== 'support_unchecked' ||
+      row.verify_method !== 'source_fetched_quote_matched')
+    throw new Error('old row was not downgraded with its provenance intact');
+  if (store.downgradeLegacyVerifications() !== 0) throw new Error('migration is not repeatable');
+  const scan = store.dossierClaims(principalId, dossierId)[1];
+  if (scan.status !== 'found' || scan.verify_reason !== 'vision_unverified')
+    throw new Error('OCR text was treated as independent confirmation of the image');
+  return 'legacy verdict demoted, OCR kept unverified, quote provenance preserved';
+});
+
+await check('a provisional claim survives and only its owner can finalize it', () => {
+  const principalId = `provisional-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'منبع' });
+  const id = store.insertClaim({ principalId, dossierId, text: 'ادعا', quote: 'متن منبع',
+    status: 'found', verifyMethod: 'source_fetched_quote_matched',
+    verifyReason: 'support_unchecked' });
+  const verdict = { status: 'verified', verifyMethod: 'source_fetched_quote_matched+semantic_support',
+    verifyReason: 'quote_supports_claim', verifyNote: 'پشتیبانی شد' };
+  if (store.updateClaimVerdict('somebody-else', id, verdict) !== 0)
+    throw new Error('another user could rewrite the verdict');
+  if (store.dossierClaims(principalId, dossierId)[0].status !== 'found')
+    throw new Error('the provisional result was prematurely verified');
+  if (store.updateClaimVerdict(principalId, id, verdict) !== 1)
+    throw new Error('the semantic result was not saved');
+  if (store.dossierClaims(principalId, dossierId)[0].verify_reason !== 'quote_supports_claim')
+    throw new Error('the new reason was not saved');
+  return 'stored as found, principal-scoped update, then semantic verdict';
+});
+
+await check('research publishes only claims that pass both verification gates', async () => {
+  const { runResearch } = await import('../src/research.js');
+  const { gateClaims } = await import('../src/support.js');
+  const principalId = `research-gate-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'میترائیسم' });
+  const quote = 'میترائیسم رومی پدیده‌ای عمدتاً رومی بود';
+  const gather = async () => ({ data: { summary: 'خلاصهٔ اولیه', claims: [
+    { text: 'میترائیسم رومی عمدتاً پدیده‌ای رومی بود', source_url: fixtureUrl, quote },
+    { text: 'این آیین در سال ۲۰۰۰ تأسیس شد', source_url: fixtureUrl, quote },
+  ] }, usage: {} });
+  const judge = (rows) => gateClaims(rows, { ask: async () => ({ data: { verdicts: [
+    { id: 0, verdict: 'supports', basis: 'پدیده‌ای عمدتاً رومی بود' },
+    { id: 1, verdict: 'insufficient', basis: 'پدیده‌ای عمدتاً رومی بود' },
+  ] }, usage: {} }) });
+  const result = await runResearch({ principalId, dossierId, topic: 'میترائیسم',
+    question: 'خاستگاه چیست؟', gather, judge,
+    verify: (args) => verifyClaim({ ...args, allowPrivate: true }) });
+  if (result.output.verified.length !== 1 || result.output.found.length !== 1)
+    throw new Error('the result columns ignored semantic support');
+  const saved = store.dossierClaims(principalId, dossierId);
+  if (saved.length !== 2 || saved[0].verify_reason !== 'quote_supports_claim' ||
+      saved[1].verify_reason !== 'quote_does_not_support_claim')
+    throw new Error('the two-gate verdicts did not reach the durable claim rows');
+  return 'one supported claim verified, one overclaim kept as found';
+});
+
+await check('server search supplies only fetched text and pins claims to its URLs', async () => {
+  const { runResearch } = await import('../src/research.js');
+  const { gateClaims } = await import('../src/support.js');
+  const principalId = `server-search-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'موضوع' });
+  const url = 'https://example.org/source';
+  const quote = 'The primary source explicitly states that the event happened in 1969.';
+  let packet;
+  const result = await runResearch({ principalId, dossierId,
+    question: 'این رویداد چه زمانی بود؟', topic: 'رویداد',
+    planner: async () => ({ data: { queries: ['event 1969'] }, usage: {} }),
+    search: async () => ({ results: [{ url, title: 'Primary source',
+      snippet: 'FAKE SNIPPET SHOULD NOT ENTER EVIDENCE', engine: 'test' }], errors: [] }),
+    open: async () => ({ ok: true, url, text: `${quote} `.repeat(8) }),
+    compose: async (args) => {
+      packet = JSON.parse(args.content);
+      return { data: { claims: [{ text: 'این رویداد در ۱۹۶۹ رخ داد', source_id: 0,
+        source_url: 'https://invented.example/', quote }] }, usage: {} };
+    },
+    verify: async ({ sourceUrl, quote: q }) => sourceUrl === url && q === quote
+      ? { status: 'verified', method: 'source_fetched_quote_matched', reason: 'matched', note: 'matched' }
+      : { status: 'found', method: null, reason: 'no_source', note: 'bad source' },
+    judge: (rows) => gateClaims(rows, { ask: async () => ({ data: { verdicts: [
+      { id: 0, verdict: 'supports', basis: 'event happened in 1969' },
+    ] }, usage: {} }) }),
+  });
+  if (packet.sources.length !== 1 || packet.sources[0].text.includes('FAKE SNIPPET'))
+    throw new Error('a search snippet entered the evidence packet');
+  if (result.output.verified.length !== 1 || result.output.verified[0].sourceUrl !== url)
+    throw new Error('the model chose its own URL instead of the server-fetched one');
+  return 'fetched page text only; invented model URL ignored; both gates passed';
+});
+
+await check('server search fallback returns readable leads without trusting snippets', async () => {
+  const { searchWeb } = await import('../src/web-search.js');
+  const fakeFetch = async (url) => {
+    const name = String(url);
+    if (name.includes('bing.com')) return new Response('<rss><channel><item><title>Irrelevant</title><link>https://example.org/no</link><description>other topic</description></item></channel></rss>');
+    if (name.includes('wikipedia.org')) return Response.json({ query: { search: [
+      { title: 'Mithraism', snippet: 'Roman mystery religion' },
+    ] } });
+    if (name.includes('crossref.org')) return Response.json({ message: { items: [
+      { URL: 'https://doi.org/10.1234/example', title: ['Mithraism and Rome'] },
+    ] } });
+    throw new Error('unexpected search endpoint');
+  };
+  const { results, errors } = await searchWeb('Mithraism Rome', { fetcher: fakeFetch });
+  if (errors.length || results.length !== 2 || results[0].engine !== 'wikipedia' ||
+      results[1].engine !== 'crossref' || results.some((r) => r.engine === 'bing-rss'))
+    throw new Error(`unexpected fallback: ${JSON.stringify({ results, errors })}`);
+  return 'irrelevant RSS filtered; MediaWiki and Crossref leads retained';
+});
+
+await check('no readable web page means no model-generated claims', async () => {
+  const { runResearch } = await import('../src/research.js');
+  const principalId = `no-web-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'موضوع' });
+  const result = await runResearch({ principalId, dossierId, question: 'پرسش',
+    planner: async () => ({ data: { queries: ['query'] }, usage: {} }),
+    search: async () => ({ results: [{ url: 'https://example.org/closed', title: 'Closed' }], errors: [] }),
+    open: async () => ({ ok: false, error: 'HTTP 403' }),
+    compose: async () => { throw new Error('model called with no fetched source'); },
+  });
+  if (result.output.verified.length || result.output.found.length ||
+      !result.output.unresolved.length) throw new Error('no-source run invented evidence');
+  return 'reported the missing source without a synthesis call';
+});
+
+await check('zero research ceiling makes no search or model call', async () => {
+  const { runResearch } = await import('../src/research.js');
+  const settings = await import('../src/settings.js');
+  const principalId = `zero-web-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'no spend' });
+  const before = store.getSetting('budget.per_research');
+  try {
+    settings.setBudget(0);
+    const out = await runResearch({ principalId, dossierId, question: 'question',
+      planner: async () => { throw new Error('planner was called'); },
+      search: async () => { throw new Error('search was called'); },
+      compose: async () => { throw new Error('composer was called'); } });
+    if (!out.output.budgetExceeded || out.costUsd || out.costToman)
+      throw new Error('zero ceiling did not stop before spending');
+  } finally {
+    if (before === null) store.clearSetting('budget.per_research');
+    else store.setSetting('budget.per_research', before);
+  }
+  return 'blocked before planning, search or synthesis';
+});
+
+await check('private URLs cannot become web evidence', async () => {
+  const { fetchSourceText } = await import('../src/verify.js');
+  const r = await fetchSourceText(`http://127.0.0.1:${server.address().port}/`);
+  if (r.ok || !/private/.test(r.error ?? '')) throw new Error('loopback source was fetched');
+  return 'loopback rejected before a fetch';
 });
 
 server.close();
@@ -2155,4 +2381,4 @@ if (degraded.size) {
 console.log(failures ? `\n${failures} check(s) failed\n`
   : degraded.size ? '\nchecks passed — read the degraded list above\n'
     : '\nall checks passed\n');
-process.exit(failures ? 1 : 0);
+process.exitCode = failures ? 1 : 0;

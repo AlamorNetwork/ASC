@@ -34,6 +34,9 @@ export function assessEvidence(claims) {
   const disputed = claims.filter((c) => c.status === 'disputed');
   const fabricated = claims.filter((c) => reasonOf(c) === 'fabricated_url');
   const wrongQuote = claims.filter((c) => reasonOf(c) === 'quote_absent');
+  const unsupportedQuote = claims.filter((c) => ['quote_does_not_support_claim', 'quote_contradicts_claim'].includes(reasonOf(c)));
+  const uncheckedSupport = claims.filter((c) => reasonOf(c) === 'support_unchecked');
+  const visionUnverified = claims.filter((c) => reasonOf(c) === 'vision_unverified');
   const unreachable = claims.filter((c) => reasonOf(c) === 'unreachable');
   const unsourced = claims.filter((c) => ['no_source', 'no_quote'].includes(reasonOf(c)));
 
@@ -44,6 +47,9 @@ export function assessEvidence(claims) {
   if (!claims.length) signals.push('هیچ ادعایی جمع نشده');
   if (fabricated.length) signals.push(`${fabricated.length} منبع ساختگی`);
   if (wrongQuote.length) signals.push(`${wrongQuote.length} نقل‌قول در منبع نبود`);
+  if (unsupportedQuote.length) signals.push(`${unsupportedQuote.length} نقل‌قول ادعا را پشتیبانی نکرد`);
+  if (uncheckedSupport.length) signals.push(`${uncheckedSupport.length} ادعا هنوز از نظر معنایی بررسی نشده`);
+  if (visionUnverified.length) signals.push(`${visionUnverified.length} ادعا فقط به متنِ خوانده‌شده با ویژن تکیه دارد`);
   if (unreachable.length) signals.push(`${unreachable.length} منبع باز نشد (تقصیر ما)`);
   if (unsourced.length) signals.push(`${unsourced.length} ادعای بی‌منبع`);
   if (disputed.length) signals.push(`${disputed.length} مورد اختلاف بین منابع`);

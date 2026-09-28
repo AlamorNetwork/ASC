@@ -18,7 +18,7 @@ import { allModels } from './settings.js';
 const CONSEQUENCE = {
   capture: 'ویس و صفحه‌های اسکن‌شده خوانده نمی‌شوند',
   transcribe: 'مسیر ارزان پیاده‌سازی ویس کار نمی‌کند',
-  research: 'تحقیق وب اجرا نمی‌شود',
+  research: 'تحلیل منابع وب به مدل ساختاردهی دسترسی ندارد',
   structure: 'برنامه‌ریزی و ارزیابی کار نمی‌کند — بیشتر بات می‌ایستد',
   router: 'تشخیص منظور پیام کار نمی‌کند',
   embed: 'جست‌وجوی معنایی خاموش است؛ فقط کلیدواژه‌ای',
@@ -130,6 +130,10 @@ export async function diagnose({ timeoutMs = 20000 } = {}) {
 
   const roles = [];
   for (const [role, spec] of Object.entries(allModels())) {
+    // The production research path searches and fetches on the server, then uses
+    // structure to read the fetched evidence. MODEL_RESEARCH remains only for the
+    // explicitly injected legacy/benchmark path.
+    if (role === 'research') continue;
     if (!spec || spec === 'none') { roles.push({ role, spec, state: 'off' }); continue; }
 
     const plan = planFor(spec, config.providers);
@@ -160,6 +164,13 @@ export async function diagnose({ timeoutMs = 20000 } = {}) {
       detail: working ? null : 'هیچ‌کدام از حلقه‌ها روی اندپوینت نیست',
     });
   }
+
+  const structure = roles.find((r) => r.role === 'structure');
+  roles.splice(roles.findIndex((r) => r.role === 'structure'), 0, {
+    role: 'research', spec: 'server-search + structure',
+    state: structure?.state ?? 'unknown', working: structure?.working ?? null,
+    detail: 'جست‌وجو و بازکردن صفحه روی سرور؛ دسترسی وب را جداگانه امتحان کن',
+  });
 
   // Naming a model that is actually there turns "none of these exist" into something
   // to type. The catalogues are already in hand; not using them made the report a

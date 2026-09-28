@@ -11,6 +11,7 @@
 import { esc } from './telegram.js';
 import * as store from './db.js';
 import * as settings from './settings.js';
+import { statusOf } from './cancel.js';
 
 const toman = (n) => Math.round(n || 0).toLocaleString('fa-IR');
 const btn = (text, data) => ({ text, callback_data: data });
@@ -35,9 +36,28 @@ const SCREENS = {
         '<i>ویس بفرست یا بنویس — هر چیزی ثبت می‌شود.</i>',
       ].join('\n'),
       buttons: [
+        [btn('⏳ وضعیت کارها', 'm:status')],
         [btn('📁 پرونده‌ها', 'm:dossiers'), btn('👁 پیگیری‌ها', 'm:watches')],
         [btn('💰 هزینه', 'm:cost'), btn('🗄 داده‌ها', 'm:data')],
         [btn('⚙️ تنظیمات', 'm:settings'), btn('❓ راهنما', 'm:help')],
+      ],
+    };
+  },
+
+  status(principalId) {
+    const now = statusOf(principalId);
+    const paused = store.openInvestigations(principalId).filter((r) => r.state === 'paused');
+    return {
+      text: [
+        '⏳ <b>وضعیت کارها</b>', '',
+        now ? `🔄 ${esc(now.label)} · ${now.seconds} ثانیه` : 'کاری اکنون در جریان نیست.',
+        paused.length ? `\n${paused.length} کاوش قابل ادامه است.` : '',
+        '<i>برای جزئیات بیشتر /status را بزن.</i>',
+      ].join('\n'),
+      buttons: [
+        ...(now ? [[btn('⏹ نگه دار', 'stop')]] : []),
+        ...paused.slice(0, 3).map((r) => [btn(`▶️ ادامهٔ #${r.id}`, `deepmore:${r.id}`)]),
+        [back()],
       ],
     };
   },
@@ -151,7 +171,7 @@ const SCREENS = {
         '',
         '<b>مدل‌ها</b>',
         `ثبت: <code>${esc(m.capture)}</code>`,
-        `تحقیق: <code>${esc(m.research)}</code>`,
+        'تحقیق: جست‌وجوی سرور + مدل گفتگو',
         `گفتگو: <code>${esc(m.structure)}</code>`,
         '',
         '<i>با /model و /budget قابل تغییرند.</i>',
@@ -197,12 +217,13 @@ const SCREENS = {
         'وقتی تحقیقی تمام شد، دکمه‌ی «بحث کنیم» گفتگو را روی همان پرونده باز می‌کند.',
         '',
         '<b>چهار ستون نتیجه</b>',
-        '✅ منبع را باز کردم و این جمله در آن بود',
+        '✅ نقل‌قول در منبع بود و ادعا را پشتیبانی کرد',
         '⚠️ منابع معتبر با هم مخالف‌اند',
         '📄 خواندم ولی تأیید نشد',
         '❓ حل نشد',
         '',
-        '<i>«تأییدشده» یعنی این منبع واقعاً این را گفته — نه اینکه حقیقت دارد.</i>',
+        '<i>«تأییدشده» یعنی نقل‌قول در منبع پیدا شد و داوری معنایی پشتیبانی ادعا را تشخیص داد؛ داوری مدل ممکن است خطا کند و این برچسب اثبات حقیقت نیست.</i>',
+        'برای بازسنجی ادعاهای قدیمی: <code>/reverify شماره‌پرونده</code>',
       ].join('\n'),
       buttons: [[back()]],
     };

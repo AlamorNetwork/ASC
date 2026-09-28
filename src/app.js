@@ -16,6 +16,7 @@ import { deepInvestigate } from './deep.js';
 import * as cancel from './cancel.js';
 import { route } from './router.js';
 import { calibration } from './metacognition.js';
+import { gateClaims } from './support.js';
 
 const esc = tg.esc;
 const toman = (n) => Math.round(n).toLocaleString('fa-IR');
@@ -106,13 +107,15 @@ function captureCard(id, c, costToman, route) {
 // Each column renders on its own, so it can be sent the moment it is ready
 // instead of arriving as one wall of text at the end.
 const SECTION = {
-  summary: ({ topic, summary }) => [`🔎 <b>${esc(topic)}</b>`, '', esc(summary)].join('\n'),
+  summary: ({ topic, summary }) => [`🔎 <b>${esc(topic)}</b>`, '<i>خلاصهٔ مدل؛ ادعاهای تأییدشده جدا آمده‌اند.</i>', '', esc(summary)].join('\n'),
 
   verified: ({ verified }) => {
-    const L = ['✅ <b>تأییدشده</b> <i>— منبع را باز کردم و این جمله در آن بود</i>', ''];
+    const L = ['✅ <b>تأییدشده</b> <i>— نقل‌قول در منبع بود و معنایش از ادعا پشتیبانی کرد</i>', ''];
     for (const c of verified) {
       L.push(`• ${esc(c.text)}`);
       if (c.sourceUrl) L.push(`   ↳ <a href="${esc(c.sourceUrl)}">${esc(c.sourceTitle || c.sourceUrl)}</a>`);
+      else if (c.sourceTitle) L.push(`   ↳ ${esc(c.sourceTitle)}`);
+      if (c.quote) L.push(`   «${esc(String(c.quote).slice(0, 240))}»`);
     }
     return L.join('\n');
   },
@@ -191,15 +194,16 @@ async function startResearch(chatId, principalId, captureId) {
   const status = await tg.send(chatId, `🔎 <b>${esc(topic)}</b>\n\nشروع کردم…`);
 
   try {
-    const { output, costToman } = await runResearch({
-      principalId, dossierId,
-      question: cap.request || cap.transcript,
-      topic,
-      onProgress: (msg) => tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>\n\n${esc(msg)}`),
-      onSection: async (name, payload) => {
-        if (SECTION[name]) await tg.send(chatId, SECTION[name]({ topic, ...payload }));
-      },
-    });
+    const { output, costToman } = await cancel.underway(principalId,
+      `تحقیق «${topic}»`, () => runResearch({
+        principalId, dossierId,
+        question: cap.request || cap.transcript,
+        topic,
+        onProgress: (msg) => tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>\n\n${esc(msg)}`),
+        onSection: async (name, payload) => {
+          if (SECTION[name]) await tg.send(chatId, SECTION[name]({ topic, ...payload }));
+        },
+      }));
 
     await tg.edit(chatId, status.message_id, `🔎 <b>${esc(topic)}</b>`);
 
@@ -907,10 +911,10 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
         `transcribe <code>${esc(stt ?? '—')}</code> <i>${stt
           ? 'ویس با این پیاده می‌شود، ارزان‌تر'
           : 'خاموش؛ ویس را همان مدل capture می‌شنود'}</i>`,
-        `research  <code>${esc(m.research)}</code> <i>(باید جست‌وجوگر باشد)</i>`,
+        'research  <i>جست‌وجو و خواندن صفحه روی سرور؛ تحلیل با structure</i>',
         `structure <code>${esc(m.structure)}</code> <i>(گفتگو و ساختاردهی)</i>`,
         `router    <code>${esc(m.router)}</code> <i>(تشخیص می‌دهد چه می‌خواهی — ارزان‌ترین کافی است)</i>`, '',
-        '<code>/model research openai/gpt-…</code>',
+        '<code>/model structure MODEL@PROVIDER</code> برای تحلیل منابع',
         '<code>/model transcribe none</code> خاموش کردن',
         '<code>/models</code> فهرست کامل'].join('\n'));
       return true;
@@ -1004,6 +1008,12 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
       L.push('');
 
       for (const r of d.roles) {
+        if (r.role === 'research') {
+          L.push(`${r.state === 'ok' ? '✅' : r.state === 'unknown' ? '❔' : '❌'} ` +
+            '<b>research</b> — جست‌وجو و دریافت صفحه روی سرور؛ تحلیل با structure',
+            '   <i>فهرست مدل‌ها دسترسی واقعی وب را ثابت نمی‌کند؛ برای آن probe-web-search.js را اجرا کن.</i>');
+          continue;
+        }
         if (r.state === 'off') { L.push(`➖ <b>${r.role}</b> خاموش`); continue; }
         if (r.state === 'ok') {
           const via = r.working.provider === 'default' ? '' : `@${r.working.provider}`;
@@ -1027,10 +1037,8 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
         }
       }
 
-      // A role with no candidate anywhere is a different problem from one pointed at
-      // the wrong name, and needs a different action: no chat gateway carries embedding
-      // or reranking models, so no amount of renaming will find one.
-      const homeless = d.broken.filter((r) => !r.suggestion?.length);
+      // A role with no candidate anywhere needs an explicit setup action.
+      const homeless = d.broken.filter((r) => r.role !== 'research' && !r.suggestion?.length);
       if (homeless.length) {
         L.push('', `<b>${homeless.map((r) => r.role).join('، ')}</b>: روی هیچ‌کدام از ارائه‌دهنده‌های فعلی ` +
           'مدلی برای این کار وجود ندارد — نه اینکه اسمش عوض شده باشد.');
@@ -1158,6 +1166,41 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
     } catch (err) {
       await tg.edit(chatId, status.message_id, `❌ ${esc(String(err.message ?? err))}`);
     }
+    return true;
+  }
+
+  if (text.startsWith('/reverify')) {
+    const dossierId = Number(text.split(/\s+/)[1]) || settings.activeDossier(principalId);
+    if (!dossierId || !store.getDossier(principalId, dossierId)) {
+      await tg.send(chatId, 'پرونده را مشخص کن: <code>/reverify 12</code>');
+      return true;
+    }
+    const pending = store.dossierClaims(principalId, dossierId)
+      .filter((c) => c.status === 'found' && c.verify_reason === 'support_unchecked' &&
+        c.quote && /quote_matched$/.test(c.verify_method ?? ''));
+    if (!pending.length) {
+      await tg.send(chatId, 'ادعای قدیمیِ منتظر داوری معنایی در این پرونده نیست.');
+      return true;
+    }
+    const status = await tg.send(chatId, `🔎 بازسنجی معنایی ${pending.length} ادعا…`);
+    let accepted = 0;
+    let checked = 0;
+    let cost = 0;
+    for (let i = 0; i < pending.length; i += 12) {
+      const batch = pending.slice(i, i + 12);
+      const { rows, usage } = await gateClaims(batch.map((c) => ({
+        text: c.text, quote: c.quote, status: 'verified', verifyMethod: c.verify_method,
+      })));
+      cost += usage.costToman ?? 0;
+      for (let j = 0; j < batch.length; j++) {
+        store.updateClaimVerdict(principalId, batch[j].id, rows[j]);
+        if (rows[j].verifyReason !== 'support_unchecked') checked++;
+        if (rows[j].status === 'verified') accepted++;
+      }
+    }
+    await tg.edit(chatId, status.message_id,
+      `🔎 ${checked} از ${pending.length} ادعا داوری شد · ${accepted} تأییدشده · ` +
+      (cost ? `${toman(cost)} تومان گزارش‌شده` : 'هزینه در پاسخ API گزارش نشد'));
     return true;
   }
 
@@ -1565,11 +1608,12 @@ async function handleUpdate(update) {
       const principalId = String(chatId);
       const isOwner = access === 'owner';
 
-      // Anything the user asks for clears a stop left over from before — except a stop
-      // itself. Without this a single press of the button poisoned every later search:
-      // it died at its first hop, forever, and the bot appeared to do nothing at all.
+      // A read-only status/menu visit must not undo a stop that a running job has not
+      // observed yet. A new work request clears that stop so the next job can start.
       const isStopRequest = cb && /^(stop|deepstop)\b/.test(String(cb.data));
-      if (!isStopRequest) cancel.newInstruction(principalId);
+      const readOnly = cb && String(cb.data).startsWith('m:') || msg &&
+        /^\/(status|doctor|menu|cost|spend|recent|models|db|eps|d|c)(?:\s|$)/.test(String(msg.text ?? ''));
+      if (!isStopRequest && !readOnly) cancel.newInstruction(principalId);
 
       if (cb) {
         // Menu callbacks are `m:<screen>[:<arg>]` and all render in place.

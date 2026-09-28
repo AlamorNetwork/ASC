@@ -9,6 +9,7 @@ const SYSTEM = `تو دستیار پژوهشی کاربر هستی و دارید
 قواعدی که رعایتشان از کامل بودن جواب مهم‌تر است:
 - فقط بر پایه‌ی پرونده حرف بزن. اگر چیزی در پرونده نیست، بگو «در پرونده نیست» — از خودت پر نکن.
 - تفکیک ✅ و 📄 را نگه دار. ادعایی که تأیید نشده را با لحن قطعی نگو.
+- ✅ فقط یعنی نقل‌قول در منبع بود و داوری معنایی پشتیبانی ادعا را تشخیص داد؛ اثبات حقیقت نیست. 📄 را پشتوانهٔ پاسخ قرار نده.
 - وقتی منابع اختلاف دارند، طرف یکی را نگیر؛ اختلاف را نشان بده.
 - کوتاه و مستقیم. این گفتگوست، نه گزارش. اگر جواب یک خطی است، یک خط بنویس.
 - اگر کاربر چیزی می‌پرسد که تحقیق تازه لازم دارد، بگو و پیشنهاد بده دوباره تحقیق کنیم.
@@ -47,7 +48,7 @@ export function dossierContextFor(principalId, dossierId) {
 
   const verified = by('verified');
   if (verified.length) {
-    L.push('', 'تأییدشده (منبع باز شد و نقل‌قول در آن پیدا شد):');
+    L.push('', 'تأییدشده (نقل‌قول در منبع بود و داوری معنایی پشتیبانی ادعا را تأیید کرد):');
     for (const c of verified) L.push(`- ${c.text}${c.source_url ? ` [${c.source_url}]` : ''}`);
   }
 
@@ -61,17 +62,20 @@ export function dossierContextFor(principalId, dossierId) {
   // and handing it back as "unverified, use with care" is how one invented citation
   // becomes the context every later answer is built on. It is recorded in the dossier
   // so the failure is visible, and kept out of the model's evidence entirely.
-  const found = by('found').filter((c) => c.verify_reason !== 'fabricated_url');
+  const unsupported = new Set(['fabricated_url', 'quote_contradicts_claim', 'quote_does_not_support_claim']);
+  const found = by('found').filter((c) => !unsupported.has(c.verify_reason));
   const invented = by('found').filter((c) => c.verify_reason === 'fabricated_url');
+  const rejected = by('found').filter((c) => ['quote_contradicts_claim', 'quote_does_not_support_claim'].includes(c.verify_reason));
 
   if (found.length) {
-    L.push('', 'پیدا شده ولی تأیید نشده (با احتیاط استفاده کن):');
+    L.push('', 'سرنخ‌های تأییدنشده (برای جست‌وجوی بعدی؛ به‌عنوان پشتوانهٔ پاسخ استفاده نکن):');
     for (const c of found) L.push(`- ${c.text}${c.verify_note ? ` (${c.verify_note})` : ''}`);
   }
   if (invented.length) {
     L.push('', `هشدار: ${invented.length} ادعا با منبع ساختگی کنار گذاشته شد. ` +
       'درباره‌ی این پرونده محتاط باش و چیزی را که در بالا نیست نگو.');
   }
+  if (rejected.length) L.push('', `${rejected.length} ادعا به‌دلیل ناسازگاری یا پشتیبانی‌نشدن با نقل‌قول کنار گذاشته شد.`);
 
   const last = store.recentEpisodes(principalId, 1).find((e) => e.dossier_id === dossierId);
   if (last?.output_json) {
@@ -92,7 +96,7 @@ const PLAIN_SYSTEM = `تو دستیار پژوهشی کاربر هستی و دا
 این گفتگوی معمولی است، نه گزارش تحقیق. کوتاه و طبیعی جواب بده.
 
 کارهایی که می‌توانی انجام بدهی، اگر پرسید:
-- تحقیق در وب: منابع را باز می‌کنم، نقل‌قول‌ها را در خود صفحه می‌سنجم، و فقط چیزی را «تأییدشده» می‌گویم که واقعاً در منبع پیدا کرده باشم.
+- تحقیق در وب: منابع را باز می‌کنم، نقل‌قول‌ها را در خود صفحه می‌سنجم و پشتیبانی معناییِ ادعا را جدا بررسی می‌کنم.
 - خواندن سند: PDF، عکس، متن. بعدش می‌شود درباره‌اش سؤال پرسید.
 - کاوش عمیق: دور به دور دنبال سرنخ می‌روم تا سرنخی نماند، با سقف هزینه‌ای که تو تعیین می‌کنی.
 - نیت ماندگار: چیزی را زیر نظر بگیرم و وقتی تازه شد خبر بدهم.

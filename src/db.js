@@ -729,6 +729,24 @@ addColumn('documents', 'read_pages', 'INTEGER');
 addColumn('intentions', 'question', 'TEXT');
 // Why a claim is not verified: the model's fault or ours. See verify.js.
 addColumn('claims', 'verify_reason', 'TEXT');
+// Old VERIFIED rows passed only the literal quote test. Under the new two-gate
+// definition they must not remain in the verified column without semantic review.
+export function downgradeLegacyVerifications() {
+  const changed = db.prepare(`UPDATE claims SET status = 'found',
+    verify_reason = 'support_unchecked',
+    verify_note = COALESCE(verify_note, '') || ' · پشتیبانی معنایی طبق معیار جدید هنوز بررسی نشده'
+    WHERE status = 'verified' AND verify_method IN
+      ('document_quote_matched', 'source_fetched_quote_matched', 'archived_copy_quote_matched')`).run().changes;
+  db.prepare(`UPDATE claims SET verify_reason = 'vision_unverified',
+    verify_note = 'متن از تصویر با ویژن خوانده شد؛ تأیید مستقل از روی تصویر انجام نشده'
+    WHERE verify_reason = 'support_unchecked' AND EXISTS (
+      SELECT 1 FROM documents d WHERE d.principal_id = claims.principal_id
+      AND d.dossier_id = claims.dossier_id AND d.filename = claims.source_title
+      AND d.extraction = 'model_vision_pages'
+    )`).run();
+  return changed;
+}
+downgradeLegacyVerifications();
 db.exec(`CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(principal_id, dossier_id, sha256)`);
 
 const now = () => new Date().toISOString();
@@ -774,6 +792,12 @@ export const insertClaim = (c) => db.prepare(`
 `).run(c.principalId, c.dossierId, c.episodeId ?? null, c.text, c.sourceUrl ?? null,
        c.sourceTitle ?? null, c.quote ?? null, c.status, c.verifyMethod ?? null,
        c.verifyNote ?? null, c.verifyReason ?? null, now()).lastInsertRowid;
+
+export const updateClaimVerdict = (principalId, id, row) => db.prepare(`
+  UPDATE claims SET status = ?, verify_method = ?, verify_note = ?, verify_reason = ?
+  WHERE principal_id = ? AND id = ?
+`).run(row.status, row.verifyMethod ?? null, row.verifyNote ?? null,
+       row.verifyReason ?? null, principalId, id).changes;
 
 export const dossierClaims = (principalId, dossierId) =>
   db.prepare(`SELECT * FROM claims WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)

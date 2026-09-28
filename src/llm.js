@@ -361,7 +361,9 @@ export async function chatJson(opts) {   // budgetMs and onAttempt ride along in
     if (m) {
       try { return { data: JSON.parse(m[0]), usage }; } catch { /* fall through */ }
     }
-    throw new Error(`model did not return JSON: ${cleaned.slice(0, 200)}`);
+    const err = new Error(`model did not return JSON: ${cleaned.slice(0, 200)}`);
+    err.usage = usage; // malformed output was still billed
+    throw err;
   }
 }
 

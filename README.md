@@ -18,15 +18,33 @@ knows**:
 
 | | |
 |---|---|
-| ✅ **تأییدشده** | The source was fetched and the quoted span was found in it. Assigned by code, not by a model |
+| ✅ **تأییدشده** | The source was fetched, the quoted span was found, and a separate semantic judge found that the quotation supports the entire claim |
 | ⚠️ **مورد اختلاف** | Reputable sources genuinely disagree, and both sides are shown |
 | 📄 **پیدا شده** | Encountered but not verified — with the reason (paraphrased quote, source did not load) |
 | ❓ **حل‌نشده** | What could not be settled, and what would settle it |
 
-VERIFIED means *this source really says this*, never *this is true*. For a contested historical
-subject almost nothing can be verified as true, and an honest empty ✅ column beats a confident
-summary. `src/verify.js` fetches each cited page and string-matches the quote; the model that wrote
-the text cannot assign or upgrade the label.
+VERIFIED means *this source says this*, never *this is true*. `src/verify.js`
+string-matches the quote against the fetched page; `src/support.js` then checks whether
+the quote supports the whole claim. A missing, malformed, contradictory, or ambiguous
+judgment stays in FOUND. The semantic check uses a model and can be wrong; the label
+describes the procedure that ran, not certainty about historical truth.
+Existing quote-only verdicts are downgraded once when the bot starts; run
+`/reverify DOSSIER_ID` to apply the new semantic check without repeating research.
+Claims extracted from scanned pages stay in FOUND because their quote only matches
+the model's OCR text, not the original image independently.
+
+Web research searches from the server (Bing RSS best effort, MediaWiki search and
+Crossref metadata), opens candidate pages, and gives only fetched page excerpts to
+`MODEL_STRUCTURE`. Search snippets and DOI metadata are leads, not evidence. Claims
+are tied to a fetched source ID, rechecked against the page, then assessed for
+semantic support. Some sites block fetching or expose only an abstract; these stay
+unresolved rather than becoming verified. `MODEL_RESEARCH` is retained for the
+legacy model comparison script; ordinary bot research does not need an `:online`
+model. Check outbound access without model charges with:
+
+```
+node scripts/probe-web-search.js "Mithraism Roman Iranian origins"
+```
 
 ---
 

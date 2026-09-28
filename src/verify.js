@@ -3,6 +3,8 @@
  * A claim is VERIFIED only when a declared procedure succeeds — here, when the
  * quoted span is actually present in the fetched source.
  */
+import dns from 'node:dns/promises';
+import net from 'node:net';
 
 const ZWNJ = /‌/g;
 
@@ -61,17 +63,73 @@ function fabricated(status, err) {
   return /Failed to parse URL|Invalid URL|ENOTFOUND|EAI_AGAIN|ERR_INVALID_URL/i.test(m);
 }
 
-async function get(url, timeoutMs) {
+function publicAddress(address) {
+  const ip = address.replace(/^\[|\]$/g, '').toLowerCase();
+  if (net.isIP(ip) === 4) {
+    const [a, b] = ip.split('.').map(Number);
+    return !(a === 0 || a === 10 || a === 127 || a >= 224 ||
+      a === 169 && b === 254 || a === 172 && b >= 16 && b <= 31 ||
+      a === 192 && b === 168 || a === 100 && b >= 64 && b <= 127 ||
+      a === 198 && (b === 18 || b === 19));
+  }
+  if (net.isIP(ip) === 6) return !(ip === '::1' || ip === '::' ||
+    /^[fd]/.test(ip) || /^fc/.test(ip) || /^fe[89ab]/.test(ip) ||
+    ip.startsWith('::ffff:'));
+  return false;
+}
+
+async function checkUrl(url, allowPrivate) {
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('unsupported URL protocol');
+  if (parsed.username || parsed.password) throw new Error('URL credentials are not allowed');
+  if (allowPrivate) return;
+  const host = parsed.hostname.replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal'))
+    throw new Error('private host is not a web source');
+  const addresses = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true });
+  if (!addresses.length || addresses.some((a) => !publicAddress(a.address)))
+    throw new Error('private address is not a web source');
+}
+
+async function get(url, timeoutMs, allowPrivate = false) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', headers: BROWSER_HEADERS });
-    if (!res.ok) {
-      return { ok: false, error: `HTTP ${res.status}`, missing: fabricated(res.status) };
+    let current = url;
+    for (let hop = 0; hop < 6; hop++) {
+      await checkUrl(current, allowPrivate);
+      const res = await fetch(current, { signal: ctrl.signal, redirect: 'manual', headers: BROWSER_HEADERS });
+      if ([301, 302, 303, 307, 308].includes(res.status)) {
+        const location = res.headers.get('location');
+        if (!location) return { ok: false, error: 'redirect without location' };
+        current = new URL(location, current).href;
+        await res.body?.cancel();
+        continue;
+      }
+      if (!res.ok) {
+        return { ok: false, error: `HTTP ${res.status}`, missing: fabricated(res.status) };
+      }
+      const ct = res.headers.get('content-type') ?? '';
+      if (!/(html|text|json|xml)/i.test(ct)) return { ok: false, error: `unsupported content type: ${ct}` };
+      const reader = res.body?.getReader();
+      if (!reader) return { ok: false, error: 'empty response' };
+      const chunks = [];
+      let bytes = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > 2 * 1024 * 1024) {
+          await reader.cancel();
+          return { ok: false, error: 'page exceeds 2 MB limit' };
+        }
+        chunks.push(value);
+      }
+      const body = Buffer.concat(chunks).toString('utf8');
+      return { ok: true, text: ct.includes('html') ? htmlToText(body) : body,
+        url: current };
     }
-    const ct = res.headers.get('content-type') ?? '';
-    const body = await res.text();
-    return { ok: true, text: ct.includes('html') ? htmlToText(body) : body };
+    return { ok: false, error: 'too many redirects' };
   } catch (err) {
     const error = err.name === 'AbortError' ? 'timeout' : (err.cause?.code ?? err.message);
     return { ok: false, error, missing: fabricated(null, `${error} ${err.message}`) };
@@ -102,11 +160,12 @@ async function fromArchive(url, timeoutMs = 12000) {
   }
 }
 
-async function fetchText(url, timeoutMs = 15000) {
-  if (pageCache.has(url)) return pageCache.get(url);
+async function fetchText(url, timeoutMs = 15000, allowPrivate = false) {
+  const cacheKey = `${allowPrivate ? 'test' : 'public'}:${url}`;
+  if (pageCache.has(cacheKey)) return pageCache.get(cacheKey);
 
-  let result = await get(url, timeoutMs);
-  if (!result.ok) {
+  let result = await get(url, timeoutMs, allowPrivate);
+  if (!result.ok && !/private|unsupported URL|URL credentials/i.test(String(result.error))) {
     const { error: live, missing } = result;
     const archived = await fromArchive(url);
     // Named so a quote matched against a years-old snapshot is never passed off as a
@@ -117,7 +176,9 @@ async function fetchText(url, timeoutMs = 15000) {
       : { ok: false, error: live, missing };
   }
 
-  pageCache.set(url, result);
+  pageCache.set(cacheKey, result);
+  if (result.ok && result.url && result.url !== url)
+    pageCache.set(`${allowPrivate ? 'test' : 'public'}:${result.url}`, result);
   return result;
 }
 
@@ -157,13 +218,13 @@ export function verifyAgainstText(text, quote, method = 'source_fetched_quote_ma
  * @returns {{status:'verified'|'found', method:string|null, note:string, reason:string}}
  *   reason: matched | quote_absent | unreachable | no_source | no_quote
  */
-export async function verifyClaim({ sourceUrl, quote }) {
+export async function verifyClaim({ sourceUrl, quote, allowPrivate = false }) {
   if (!sourceUrl) return { status: 'found', method: null, note: 'بدون منبع', reason: 'no_source' };
   if (!quote || normalise(quote).length < 12) {
     return { status: 'found', method: null, note: 'نقل‌قول دقیقی ارائه نشد', reason: 'no_quote' };
   }
 
-  const page = await fetchText(sourceUrl);
+  const page = await fetchText(sourceUrl, 15000, allowPrivate);
   if (!page.ok) {
     // A page that does not exist is a fabricated citation, and worse than no citation:
     // it looks like evidence. A page that exists but will not let us in is our limit.
@@ -183,4 +244,11 @@ export async function verifyClaim({ sourceUrl, quote }) {
     page.archived ? 'archived_copy_quote_matched' : 'source_fetched_quote_matched');
   // Where the text came from belongs in the record, not just in the score.
   return page.note ? { ...out, note: `${out.note} · ${page.note}` } : out;
+}
+
+/** Fetch an actual public page before asking any model to make claims about it. */
+export async function fetchSourceText(url) {
+  const page = await fetchText(url);
+  return page.ok ? { ok: true, url: page.url ?? url, text: page.text,
+    archived: page.archived ?? null } : { ok: false, error: page.error, missing: page.missing };
 }
