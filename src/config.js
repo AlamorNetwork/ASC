@@ -92,8 +92,12 @@ export const config = {
     research: env.MODEL_RESEARCH || 'openai/gpt-6-astra:online',
     // Cheap text work.
     structure: env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
+    // Conversational mother agent and synthesis; workers stay on structure.
+    coordinator: env.MODEL_COORDINATOR || env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
     // Reasoning pass over every stored document section and its cross-section synthesis.
     analysis: env.MODEL_ANALYSIS || env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
+    // Optional OpenRouter model used once as a source-finding consultant.
+    consult: env.MODEL_CONSULT || '',
     // One small classification per message: which procedure the user is asking for.
     // The cheapest thing that can follow instructions is the right model here — put a
     // free one first and something dependable behind it.

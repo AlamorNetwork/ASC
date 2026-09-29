@@ -292,6 +292,48 @@ CREATE TABLE IF NOT EXISTS dossier_links (
   PRIMARY KEY (principal_id, a_id, b_id),
   CHECK (a_id < b_id)
 );
+
+CREATE TABLE IF NOT EXISTS research_nodes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id TEXT NOT NULL,
+  dossier_id INTEGER NOT NULL REFERENCES dossiers(id),
+  parent_id INTEGER REFERENCES research_nodes(id),
+  title TEXT NOT NULL,
+  open_question TEXT,
+  assigned_role TEXT NOT NULL DEFAULT 'local',
+  status TEXT NOT NULL DEFAULT 'pending',
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS research_nodes_dossier ON research_nodes(principal_id,dossier_id,parent_id,id);
+
+CREATE TABLE IF NOT EXISTS source_library (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id TEXT NOT NULL,
+  dossier_id INTEGER NOT NULL REFERENCES dossiers(id),
+  document_id INTEGER REFERENCES documents(id),
+  url TEXT,
+  title TEXT NOT NULL,
+  summary TEXT,
+  source_kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'collected',
+  created_at TEXT NOT NULL,
+  UNIQUE(principal_id,dossier_id,url)
+);
+CREATE INDEX IF NOT EXISTS source_library_dossier ON source_library(principal_id,dossier_id,id);
+
+CREATE TABLE IF NOT EXISTS site_crawls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id TEXT NOT NULL,
+  dossier_id INTEGER NOT NULL REFERENCES dossiers(id),
+  seed_url TEXT NOT NULL,
+  checkpoint_json TEXT NOT NULL DEFAULT '{}',
+  state TEXT NOT NULL DEFAULT 'paused',
+  pages_saved INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  UNIQUE(principal_id,dossier_id,seed_url)
+);
 `);
 
 /**
@@ -528,9 +570,135 @@ export const maxChunkSeq = (documentId) =>
 export const getDocument = (principalId, id) =>
   db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND id = ?`).get(principalId, id);
 
+export function createResearchNode({ principalId, dossierId, parentId = null, title,
+  openQuestion = null, assignedRole = 'local' }) {
+  if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
+  const count = db.prepare(`SELECT COUNT(*) AS n FROM research_nodes WHERE principal_id=? AND dossier_id=?`)
+    .get(principalId, dossierId).n;
+  if (count >= 100) throw new Error('سقف ۱۰۰ نیت برای این پرونده پر شده است.');
+  if (parentId) {
+    const parent = getResearchNode(principalId, parentId);
+    if (!parent || parent.dossier_id !== dossierId) throw new Error('نیت مادر در این پرونده پیدا نشد.');
+    let depth = 1, cursor = parent;
+    while (cursor.parent_id && depth < 8) { depth++; cursor = getResearchNode(principalId, cursor.parent_id); }
+    if (depth >= 6) throw new Error('عمق نیت‌ها حداکثر شش سطح است.');
+  }
+  const now = new Date().toISOString();
+  const id = Number(db.prepare(`INSERT INTO research_nodes
+    (principal_id,dossier_id,parent_id,title,open_question,assigned_role,status,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,'pending',?,?)`).run(principalId, dossierId, parentId,
+      String(title).trim().slice(0, 500), openQuestion?.slice(0, 1000) ?? null,
+      assignedRole, now, now).lastInsertRowid);
+  if (parentId) {
+    let ancestor = getResearchNode(principalId, parentId);
+    while (ancestor?.parent_id) ancestor = getResearchNode(principalId, ancestor.parent_id);
+    if (ancestor?.status === 'done') db.prepare(`UPDATE research_nodes SET status='paused',updated_at=?
+      WHERE principal_id=? AND id=?`).run(now, principalId, ancestor.id);
+  }
+  return id;
+}
+
+export const getResearchNode = (principalId, id) => db.prepare(`SELECT * FROM research_nodes
+  WHERE principal_id=? AND id=?`).get(principalId, id);
+
+export const dossierResearchNodes = (principalId, dossierId) => db.prepare(`SELECT * FROM research_nodes
+  WHERE principal_id=? AND dossier_id=? ORDER BY id`).all(principalId, dossierId);
+
+export function updateResearchNode(principalId, id, { status, openQuestion, result }) {
+  if (!['pending','running','paused','done','failed'].includes(status)) throw new Error('وضعیت نیت نامعتبر است.');
+  return db.prepare(`UPDATE research_nodes SET status=?,open_question=?,result_json=?,updated_at=?
+    WHERE principal_id=? AND id=?`).run(status, openQuestion?.slice(0, 1000) ?? null,
+      result == null ? null : JSON.stringify(result), new Date().toISOString(), principalId, id).changes;
+}
+
+export const pauseInterruptedResearchNodes = () => db.prepare(`UPDATE research_nodes
+  SET status='paused', updated_at=? WHERE status='running'`).run(new Date().toISOString()).changes;
+
 export const dossierDocuments = (principalId, dossierId) =>
   db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)
     .all(principalId, dossierId);
+
+export function sourceCatalogue(principalId, dossierId) {
+  const docs = db.prepare(`SELECT d.*, a.result_json AS analysis_json,
+    s.url AS source_url, s.summary AS source_summary FROM documents d
+    LEFT JOIN document_analysis_synthesis a ON a.principal_id=d.principal_id AND a.document_id=d.id
+    LEFT JOIN source_library s ON s.principal_id=d.principal_id AND s.dossier_id=d.dossier_id AND s.document_id=d.id
+    WHERE d.principal_id=? AND d.dossier_id=? ORDER BY d.id`).all(principalId, dossierId);
+  const sites = db.prepare(`SELECT * FROM source_library WHERE principal_id=? AND dossier_id=?
+    AND document_id IS NULL ORDER BY id`).all(principalId, dossierId);
+  return [...docs.map((d) => {
+    let analysis = null;
+    try { analysis = JSON.parse(d.analysis_json); } catch { /* incomplete analysis */ }
+    return { id: `document-${d.id}`, type: d.source_url ? 'site' : 'document', documentId: d.id, title: d.filename,
+      summary: analysis?.overview ?? d.source_summary ?? '', url: d.source_url ?? null,
+      readPages: d.read_pages ?? d.pages,
+      pages: d.pages, analysisStatus: analysis ? 'done' : 'pending',
+      relations: Array.isArray(analysis?.structure) ? analysis.structure.slice(0, 8) : [],
+      openQuestions: Array.isArray(analysis?.openQuestions) ? analysis.openQuestions.slice(0, 8) : [] };
+  }), ...sites.map((s) => ({ id: `site-${s.id}`, type: s.source_kind, title: s.title,
+    summary: s.summary ?? '', url: s.url, analysisStatus: s.status }))];
+}
+
+export function addSourcePage({ principalId, dossierId, url, title, summary }) {
+  if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO source_library(principal_id,dossier_id,url,title,summary,source_kind,created_at)
+    VALUES(?,?,?,?,?,'site',?) ON CONFLICT(principal_id,dossier_id,url)
+    DO UPDATE SET title=excluded.title, summary=excluded.summary`)
+    .run(principalId, dossierId, url, title, summary, now);
+  return db.prepare(`SELECT * FROM source_library WHERE principal_id=? AND dossier_id=? AND url=?`)
+    .get(principalId, dossierId, url);
+}
+
+export function addSourceCandidate({ principalId, dossierId, url, title, why }) {
+  if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
+  db.prepare(`INSERT INTO source_library(principal_id,dossier_id,url,title,summary,source_kind,status,created_at)
+    VALUES(?,?,?,?,?,'web_lead','candidate',?) ON CONFLICT(principal_id,dossier_id,url) DO NOTHING`)
+    .run(principalId, dossierId, url, title || url, why || '', new Date().toISOString());
+}
+
+export function saveCrawledPage({ principalId, dossierId, url, title, text, chunks }) {
+  if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
+  title = String(title || url).slice(0, 200);
+  const existing = db.prepare(`SELECT * FROM source_library WHERE principal_id=? AND dossier_id=? AND url=?`)
+    .get(principalId, dossierId, url);
+  if (existing?.document_id) return { documentId: existing.document_id, created: false };
+  const now = new Date().toISOString();
+  db.exec('BEGIN');
+  try {
+    const documentId = Number(insertDocument({ principalId, dossierId, filename: title,
+      mime: 'text/html', kind: 'text', charCount: text.length, extraction: 'site_crawl' }));
+    for (let i = 0; i < chunks.length; i++) insertChunkStmt.run(principalId, dossierId,
+      documentId, i, null, chunks[i], null, now);
+    db.prepare(`INSERT INTO source_library(principal_id,dossier_id,document_id,url,title,summary,source_kind,status,created_at)
+      VALUES(?,?,?,?,?,?,'site','collected',?) ON CONFLICT(principal_id,dossier_id,url)
+      DO UPDATE SET document_id=excluded.document_id,title=excluded.title,summary=excluded.summary`)
+      .run(principalId, dossierId, documentId, url, title, text.slice(0, 500), now);
+    db.exec('COMMIT');
+    return { documentId, created: true };
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
+}
+
+export function getOrCreateSiteCrawl(principalId, dossierId, seedUrl) {
+  if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
+  db.prepare(`INSERT OR IGNORE INTO site_crawls(principal_id,dossier_id,seed_url,updated_at)
+    VALUES(?,?,?,?)`).run(principalId, dossierId, seedUrl, new Date().toISOString());
+  return db.prepare(`SELECT * FROM site_crawls WHERE principal_id=? AND dossier_id=? AND seed_url=?`)
+    .get(principalId, dossierId, seedUrl);
+}
+
+export const dossierSiteCrawls = (principalId, dossierId) => db.prepare(`SELECT * FROM site_crawls
+  WHERE principal_id=? AND dossier_id=? ORDER BY id DESC`).all(principalId, dossierId);
+
+export function saveSiteCrawl(principalId, id, { checkpoint, state, pagesSaved }) {
+  if (!['running','paused','done','failed'].includes(state)) throw new Error('وضعیت خزنده نامعتبر است.');
+  return db.prepare(`UPDATE site_crawls SET checkpoint_json=?,state=?,pages_saved=?,updated_at=?
+    WHERE principal_id=? AND id=?`).run(JSON.stringify(checkpoint), state, pagesSaved,
+      new Date().toISOString(), principalId, id).changes;
+}
+
+export const pauseInterruptedSiteCrawls = () => db.prepare(`UPDATE site_crawls
+  SET state='paused', updated_at=? WHERE state='running'`).run(new Date().toISOString()).changes;
 
 const insertChunkStmt = db.prepare(`
   INSERT INTO chunks (principal_id, dossier_id, document_id, seq, page, text, embedding, created_at)

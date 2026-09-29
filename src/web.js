@@ -14,6 +14,9 @@ import { ingestToDossier, extractClaimsFor, sha256 } from './ingest.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
 import { researchLedger } from './research-ledger.js';
 import { analyzeDocument, documentAnalysisPath } from './document-analysis.js';
+import { runResearchTeam } from './research-team.js';
+import { collectSite } from './site-library.js';
+import { consultSources } from './source-consult.js';
 import * as cancel from './cancel.js';
 
 const publicDir = path.join(config.root, 'web', 'public');
@@ -233,6 +236,9 @@ function state(pid, dossierId, fresh = false) {
     ? store.resumableInvestigation(pid, chosen.id) ?? latest : null;
   return { dossiers, selected: chosen, investigation: investigationView(investigation),
     documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
+    researchNodes: chosen ? store.dossierResearchNodes(pid, chosen.id) : [],
+    sources: chosen ? store.sourceCatalogue(pid, chosen.id) : [],
+    siteCrawls: chosen ? store.dossierSiteCrawls(pid, chosen.id) : [],
     claims: chosen ? store.dossierClaims(pid, chosen.id) : [],
     episodes: chosen ? store.dossierEpisodes(pid, chosen.id, 8) : [],
     messages: store.conversation(pid, chosen?.id ?? null, 30),
@@ -283,6 +289,50 @@ async function route(req, res) {
   }
   if (url.pathname === '/api/state' && req.method === 'GET')
     return response(res, 200, state(pid, url.searchParams.get('dossierId'), url.searchParams.get('fresh') === '1'));
+  if (url.pathname === '/api/research-nodes' && req.method === 'POST') {
+    const input = await readJson(req);
+    const dossier = requireDossier(pid, input.dossierId);
+    const title = String(input.title ?? '').trim();
+    if (!title || title.length > 500) throw new Error('عنوان نیت لازم یا بیش از حد بلند است.');
+    const parentId = input.parentId ? Number(input.parentId) : null;
+    if (parentId && (!Number.isSafeInteger(parentId) || parentId < 1)) throw new Error('نیت مادر نامعتبر است.');
+    const id = store.createResearchNode({ principalId: pid, dossierId: dossier.id, parentId,
+      title, openQuestion: String(input.openQuestion ?? title).slice(0, 1000) });
+    return response(res, 201, { id });
+  }
+  if (url.pathname === '/api/research-nodes/run' && req.method === 'POST') {
+    const input = await readJson(req);
+    const node = store.getResearchNode(pid, Number(input.nodeId));
+    if (!node || node.parent_id) throw new Error('نیت اصلی پیدا نشد.');
+    if (!['pending','paused','failed'].includes(node.status)) throw new Error('این نیت آمادهٔ اجرا نیست.');
+    return response(res, 202, startJob('team', (progress) =>
+      runResearchTeam({ principalId: pid, dossierId: node.dossier_id, nodeId: node.id, onProgress: progress })));
+  }
+  if (url.pathname === '/api/site-crawl' && req.method === 'POST') {
+    const input = await readJson(req);
+    const dossier = requireDossier(pid, input.dossierId);
+    let siteUrl;
+    try { siteUrl = new URL(String(input.url ?? '')); }
+    catch { throw new Error('نشانی سایت نامعتبر است.'); }
+    if (!['http:', 'https:'].includes(siteUrl.protocol)) throw new Error('نشانی سایت نامعتبر است.');
+    return response(res, 202, startJob('site', (progress) =>
+      collectSite({ principalId: pid, dossierId: dossier.id, url: siteUrl.href,
+        maxPages: 10, onProgress: progress })));
+  }
+  if (url.pathname === '/api/source-consult' && req.method === 'POST') {
+    const input = await readJson(req);
+    const dossier = requireDossier(pid, input.dossierId);
+    const question = String(input.question ?? '').trim().slice(0, 1000);
+    if (!question) throw new Error('پرسش مشاور منابع لازم است.');
+    return response(res, 202, startJob('consult', async (progress) => {
+      progress('مشاور منابع: یک درخواست OpenRouter');
+      const found = await consultSources(question);
+      for (const candidate of found.sources) store.addSourceCandidate({ principalId: pid,
+        dossierId: dossier.id, url: candidate.url, title: candidate.title, why: candidate.why });
+      progress(`${found.sources.length} نشانی پیشنهادی؛ هنوز بررسی نشده‌اند`);
+      return found;
+    }));
+  }
   if (url.pathname === '/api/active-job' && req.method === 'GET')
     return response(res, 200, { job: [...jobs.values()].find((j) => j.state === 'running') ?? null });
   if (url.pathname === '/api/uploads' && req.method === 'GET') {
@@ -427,6 +477,8 @@ export function createWebServer() {
 
 export function runWeb() {
   const pid = principal();
+  store.pauseInterruptedResearchNodes();
+  store.pauseInterruptedSiteCrawls();
   const activeKey = `web.deep.active_run.${pid}`;
   const interrupted = store.getSetting(activeKey);
   if (interrupted) {

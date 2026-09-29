@@ -136,6 +136,38 @@ The existing Telegram service keeps running during migration. To run the web smo
 test without model spend: `node scripts/check-web.js` and
 `node scripts/check-document-analysis.js`.
 
+#### Research team and source library
+
+In a selected dossier, add a root research question (and optionally child questions),
+then press **Run research**. ASC saves the plan before model work, runs up to three
+local-source analysts in parallel through `MODEL_STRUCTURE`, checks their quotations
+against stored passages, and lets `MODEL_COORDINATOR` summarize their reports and
+handle conversation. It follows the current structure setting until explicitly set
+with `/model coordinator MODEL@PROVIDER`.
+Agent reports are leads; the usual claim verification gate is still separate. Stop
+and run the root again to continue unfinished children. A restart pauses running
+nodes in SQLite. The dossier's Markdown ledger lists node status and open questions.
+
+The source library lists documents, analysis overviews and cross-section links.
+Submit a site URL to read up to 10 same-origin HTML pages per run; submit the same URL
+again to continue. Pages and the crawl cursor are stored after each page. The crawler
+rejects private destinations and observes `robots.txt` where available. It cannot
+read sign-in pages, JavaScript-only pages, PDFs, or an unlimited site. An existing
+document's **Deep analysis** button analyzes all its stored text; this is separate
+from crawling and can incur model charges.
+
+Optional source consultation uses one OpenRouter completion with the Perplexity web
+search tool. Add OpenRouter as a direct provider, then set
+`/model consult MODEL@openrouter` in Telegram. The web button asks before the call.
+Its URLs are stored as *unverified candidates*; the research team can crawl one
+candidate in parallel with local analysts. OpenRouter may perform more than one search
+inside that completion, so this is a bounded workflow call, not a guaranteed dollar
+ceiling. Check reported usage before routine use.
+
+Free local checks: `node scripts/check-research-team.js`,
+`node scripts/check-site-crawl.js`, `node scripts/check-site-library.js`, and
+`node scripts/check-source-consult.js`.
+
 ### Scanned books and vision comparison
 
 Send a scanned PDF to the bot and approve 20 pages or the full book. Each page's

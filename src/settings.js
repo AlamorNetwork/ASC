@@ -6,10 +6,11 @@
 import { config } from './config.js';
 import * as store from './db.js';
 
-const ROLES = ['capture', 'transcribe', 'research', 'structure', 'analysis', 'router', 'embed', 'rerank'];
+const ROLES = ['capture', 'transcribe', 'research', 'structure', 'coordinator', 'analysis', 'consult', 'router', 'embed', 'rerank'];
 
 export const modelFor = (role) =>
-  store.getSetting(`model.${role}`) ?? config.models[role];
+  store.getSetting(`model.${role}`) ??
+  (role === 'coordinator' ? store.getSetting('model.structure') : null) ?? config.models[role];
 
 export const setModel = (role, id) => {
   if (!ROLES.includes(role)) throw new Error(`نقش نامعتبر: ${role} (${ROLES.join(' | ')})`);

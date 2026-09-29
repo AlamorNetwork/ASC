@@ -74,6 +74,28 @@
           <div class="inspector-title"><span class="eyebrow">THE DOSSIER</span><h3>دفتر پرونده</h3><p id="inspector-subtitle">پرسش‌ها و شاهدها، کنار هم.</p></div>
           <div class="inspector-stat"><div><strong id="stat-cases">۰</strong><span>پرونده</span></div><div><strong id="stat-verified">۰</strong><span>تأییدشده</span></div><div><strong id="stat-claims">۰</strong><span>ادعا</span></div></div>
           <div class="inspector-section"><div class="section-heading"><span>کاوش عمیق</span><small>INVESTIGATION</small></div><div id="investigation-status" class="investigation-status" aria-live="polite"><p class="muted">برای دیدن وضعیت کاوش، پرونده‌ای انتخاب کن.</p></div><div id="resume-options" class="resume-options" hidden><label for="resume-ceiling">سقف توقف نوبت بعد (دلار آمریکا)</label><input id="resume-ceiling" type="number" min="0" max="20" step="any" value="0.16" inputmode="decimal"><button id="resume-deep" class="small-action" type="button">ادامهٔ کاوش</button></div></div>
+          <section class="inspector-section" aria-labelledby="research-heading"><div class="section-heading"><span id="research-heading">درخت نیت پژوهش</span><small>RESEARCH INTENT</small></div>
+            <div id="research-tree" class="research-tree"><p class="muted">برای دیدن پرسش‌ها، پرونده‌ای انتخاب کن.</p></div>
+            <form id="research-node-form" class="inspector-form" hidden>
+              <label for="research-parent">جایگاه پرسش</label><select id="research-parent" name="parentId"></select>
+              <label for="research-title">عنوان پرسش</label><input id="research-title" name="title" required maxlength="200" autocomplete="off">
+              <label for="research-question">پرسش باز (اختیاری)</label><textarea id="research-question" name="openQuestion" rows="2" maxlength="2000"></textarea>
+              <button class="small-action" type="submit">افزودن پرسش</button><p id="research-form-status" class="form-feedback" role="status"></p>
+            </form>
+          </section>
+          <section class="inspector-section" aria-labelledby="sources-heading"><div class="section-heading"><span id="sources-heading">فهرست منابع</span><small>LOCAL SOURCES</small></div>
+            <div id="source-list" class="source-list"><p class="muted">برای دیدن منابع، پرونده‌ای انتخاب کن.</p></div>
+            <form id="site-form" class="inspector-form" hidden>
+              <label for="site-url">افزودن نشانی وب</label><input id="site-url" name="url" type="url" inputmode="url" dir="ltr" placeholder="https://example.org" required>
+              <button class="small-action" type="submit">خواندن وب‌سایت</button><p id="site-form-status" class="form-feedback" role="status"></p>
+            </form>
+            <form id="consult-form" class="inspector-form" hidden>
+              <label for="consult-question">پرسش برای مشاور منابع (اختیاری و هزینه‌دار)</label>
+              <input id="consult-question" maxlength="1000" autocomplete="off" placeholder="مثلاً منشأ روایت این نویسنده چیست؟">
+              <button class="small-action" type="submit">پیشنهاد منبع با Perplexity</button>
+              <p id="consult-form-status" class="form-feedback" role="status"></p>
+            </form>
+          </section>
           <div class="inspector-section"><div class="section-heading"><span>اسناد</span><small>DOCUMENTS</small></div>
             <div id="upload-target" class="upload-target">مقصد فایل بعدی: پروندهٔ تازه</div>
             <label id="drop-zone" class="drop-zone" for="file-input"><input id="file-input" type="file" accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp" hidden><span class="drop-icon">⌁</span><strong>کتاب یا سندت را اینجا بگذار</strong><small>PDF، متن یا تصویر · تا ۱۰۰ مگابایت</small></label>

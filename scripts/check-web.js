@@ -41,6 +41,16 @@ try {
   const state = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
   if (state.status !== 200 || !(await state.json()).messages.some((m) => m.text === 'سلام'))
     throw new Error('ordinary chat history disappeared after refresh');
+  const planCase = Number(store.insertDossier({ principalId: 'test-web-owner', topic: 'پرسش پژوهشی' }));
+  const newNode = await fetch(`${url}/api/research-nodes`, { method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dossierId: planCase, title: 'چه شواهدی داریم؟' }) });
+  if (newNode.status !== 201) throw new Error(`research node ${newNode.status}`);
+  const nodeId = (await newNode.json()).id;
+  const planState = await fetch(`${url}/api/state?dossierId=${planCase}`, { headers: { Cookie: cookie } });
+  const planData = await planState.json();
+  if (!planData.researchNodes?.some((n) => n.id === nodeId) || !Array.isArray(planData.sources))
+    throw new Error('research tree or source catalogue not returned');
   const active = await fetch(`${url}/api/active-job`, { headers: { Cookie: cookie } });
   if (active.status !== 200 || (await active.json()).job !== null) throw new Error('idle status failed');
   const missingDocument = await fetch(`${url}/api/analyze-document`, { method: 'POST',
