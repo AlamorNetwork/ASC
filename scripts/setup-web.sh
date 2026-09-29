@@ -60,6 +60,12 @@ if (!existing) console.log(`Web password (shown once): ${password}`);
 NODE
 chmod 600 "$DIR/.env"
 
+echo '==> checking ASC web configuration'
+if ! (cd "$DIR" && NODE_ENV=production node --input-type=module -e "import('./src/web.js').then(m => m.createWebServer())"); then
+  echo 'Fix the setting named in the error above in /root/ASC/.env, then rerun this command.' >&2
+  exit 1
+fi
+
 cat > /etc/systemd/system/asc-web.service <<UNIT
 [Unit]
 Description=ASC Web Workspace
@@ -82,7 +88,8 @@ systemctl enable asc-web
 systemctl restart asc-web
 sleep 2
 if ! systemctl is-active --quiet asc-web; then
-  echo 'asc-web failed; check journalctl -u asc-web -n 40. Set WEB_PRINCIPAL_ID if Telegram owner id is not in the database.' >&2
+  echo 'asc-web failed; recent service errors:' >&2
+  journalctl -u asc-web -n 20 --no-pager -o cat >&2 || true
   exit 1
 fi
 

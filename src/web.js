@@ -30,8 +30,8 @@ function response(res, status, data, extra = {}) {
 }
 function error(res, status, message) { response(res, status, { error: message }); }
 function principal() {
-  const id = config.web.principalId || store.getSetting('owner_chat_id');
-  if (!id) throw new Error('WEB_PRINCIPAL_ID is not set and the Telegram owner is unknown.');
+  const id = config.web.principalId || store.getSetting('owner_chat_id') || config.ownerChatId;
+  if (!id) throw new Error('WEB_PRINCIPAL_ID is not set and the Telegram owner is unknown. Add WEB_PRINCIPAL_ID to .env.');
   return String(id);
 }
 function readJson(req, limit = 16384) {
