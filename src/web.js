@@ -75,8 +75,11 @@ function uploadPaths(id) {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error('شناسهٔ فایل نامعتبر است.');
   return { data: path.join(uploadDir, `${id}.bin`), meta: path.join(uploadDir, `${id}.json`) };
 }
-async function upload(req, res, name) {
+async function upload(req, res, name, pid, targetId, newDossier) {
   name = cleanName(name);
+  const target = newDossier ? null : targetId
+    ? requireDossier(pid, targetId)
+    : store.getDossier(pid, settings.activeDossier(pid)) ?? store.listDossiers(pid, 1)[0] ?? null;
   if (Number(req.headers['content-length']) > MAX_DOCUMENT_BYTES) return error(res, 413, 'سقف فایل ۱۰۰ مگابایت است.');
   await fsp.mkdir(uploadDir, { recursive: true, mode: 0o700 });
   const id = randomUUID();
@@ -91,7 +94,12 @@ async function upload(req, res, name) {
     }
     await new Promise((resolve, reject) => out.end((err) => err ? reject(err) : resolve()));
     if (!size) throw new Error('فایل خالی است.');
+    const dossierId = newDossier
+      ? Number(store.insertDossier({ principalId: pid, topic: name, state: 'open' }))
+      : target?.id ?? null;
+    if (newDossier) settings.setActiveDossier(pid, dossierId);
     const meta = { id, name, size, createdAt: new Date().toISOString(),
+      dossierId, newDossier: false,
       mime: /\.pdf$/i.test(name) ? 'application/pdf'
         : /\.png$/i.test(name) ? 'image/png'
           : /\.webp$/i.test(name) ? 'image/webp'
@@ -109,6 +117,15 @@ async function uploaded(id) {
   const files = uploadPaths(id);
   const meta = JSON.parse(await fsp.readFile(files.meta, 'utf8'));
   return { ...meta, file: files.data };
+}
+async function bindUpload(meta, dossierId, documentId = null) {
+  const updated = { ...meta, dossierId, newDossier: false,
+    documentId: documentId ?? meta.documentId ?? null };
+  const files = uploadPaths(meta.id);
+  const temp = `${files.meta}.tmp`;
+  await fsp.writeFile(temp, JSON.stringify(updated), { mode: 0o600 });
+  await fsp.rename(temp, files.meta);
+  return updated;
 }
 function startJob(kind, work) {
   if (running) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
@@ -133,31 +150,47 @@ function requireDossier(pid, id) {
   if (!d) throw new Error('پرونده پیدا نشد.');
   return d;
 }
+export function visionPlan(input) {
+  const batch = input.visionMode === 'batch' || input.visionPages === 20;
+  return { allowVision: input.visionMode === 'all' || batch,
+    pageLimit: batch ? 20 : null };
+}
 async function importFile(pid, input, progress) {
   const meta = await uploaded(input.uploadId);
   const buffer = await fsp.readFile(meta.file);
   if (buffer.length > MAX_DOCUMENT_BYTES) throw new Error('سقف فایل ۱۰۰ مگابایت است.');
-  const dossierId = input.dossierId ? Number(requireDossier(pid, input.dossierId).id)
-    : Number(store.insertDossier({ principalId: pid, topic: meta.name, state: 'open' }));
+  const previousCopy = meta.newDossier ? null : store.findDocumentAnywhere(pid, sha256(buffer));
+  const target = meta.newDossier ? null : meta.dossierId
+    ? requireDossier(pid, meta.dossierId) : previousCopy
+      ? requireDossier(pid, previousCopy.dossier_id)
+      : input.dossierId ? requireDossier(pid, input.dossierId)
+      : store.getDossier(pid, settings.activeDossier(pid)) ?? store.listDossiers(pid, 1)[0] ?? null;
+  const dossierId = target?.id ?? Number(store.insertDossier({ principalId: pid, topic: meta.name, state: 'open' }));
+  await bindUpload(meta, dossierId);
   settings.setActiveDossier(pid, dossierId);
   const prior = store.findDocumentByHash(pid, dossierId, sha256(buffer));
-  if (prior && (!prior.pages || prior.read_pages >= prior.pages))
+  if (prior && (!prior.pages || prior.read_pages >= prior.pages)) {
+    await bindUpload(meta, dossierId, prior.id);
     return { dossierId, documentId: prior.id, alreadyRead: true };
+  }
+  const vision = visionPlan(input);
   try {
     const out = await ingestToDossier({ principalId: pid, dossierId, buffer,
-      filename: meta.name, mime: meta.mime, allowVision: input.visionPages === 20,
-      pageLimit: input.visionPages === 20 ? 20 : null,
+      filename: meta.name, mime: meta.mime, ...vision,
       resumeDocumentId: prior?.id ?? null, onProgress: progress });
+    await bindUpload(meta, dossierId, out.documentId);
     return { dossierId, ...out };
   } catch (err) {
+    if (err.savedScan?.documentId) await bindUpload(meta, dossierId, err.savedScan.documentId);
     if (err.scanned) return { dossierId, needsVision: true, pages: err.scanned.pages,
       uploadId: meta.id, readPages: prior?.read_pages ?? 0 };
     throw err;
   }
 }
-function state(pid, dossierId) {
+function state(pid, dossierId, fresh = false) {
   const dossiers = store.listDossiers(pid, 50);
-  const chosen = dossierId ? requireDossier(pid, dossierId) : null;
+  const chosen = fresh ? null : dossierId ? requireDossier(pid, dossierId)
+    : store.getDossier(pid, settings.activeDossier(pid)) ?? dossiers[0] ?? null;
   return { dossiers, selected: chosen, documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
     claims: chosen ? store.dossierClaims(pid, chosen.id) : [],
     episodes: chosen ? store.dossierEpisodes(pid, chosen.id, 8) : [],
@@ -208,7 +241,7 @@ async function route(req, res) {
     return response(res, 200, { ok: true }, { 'Set-Cookie': `asc_session=; HttpOnly;${secureCookie} SameSite=Strict; Path=/; Max-Age=0` });
   }
   if (url.pathname === '/api/state' && req.method === 'GET')
-    return response(res, 200, state(pid, url.searchParams.get('dossierId')));
+    return response(res, 200, state(pid, url.searchParams.get('dossierId'), url.searchParams.get('fresh') === '1'));
   if (url.pathname === '/api/active-job' && req.method === 'GET')
     return response(res, 200, { job: [...jobs.values()].find((j) => j.state === 'running') ?? null });
   if (url.pathname === '/api/uploads' && req.method === 'GET') {
@@ -217,13 +250,25 @@ async function route(req, res) {
       try { return JSON.parse(await fsp.readFile(path.join(uploadDir, x), 'utf8')); }
       catch { return null; }
     }));
-    return response(res, 200, list.filter(Boolean).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30));
+    return response(res, 200, list.filter(Boolean).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30)
+      .map((meta) => {
+        const doc = meta.documentId && store.getDocument(pid, meta.documentId);
+        return { ...meta, pages: doc?.pages ?? null, readPages: doc?.read_pages ?? null };
+      }));
+  }
+  if (url.pathname === '/api/select-dossier' && req.method === 'POST') {
+    const { dossierId } = await readJson(req);
+    const dossier = requireDossier(pid, dossierId);
+    settings.setActiveDossier(pid, dossier.id);
+    return response(res, 200, { dossierId: dossier.id });
   }
   if (url.pathname === '/api/upload' && req.method === 'POST')
-    return upload(req, res, url.searchParams.get('name'));
+    return upload(req, res, url.searchParams.get('name'), pid,
+      url.searchParams.get('dossierId'), url.searchParams.get('newDossier') === '1');
   if (url.pathname === '/api/import' && req.method === 'POST') {
     const input = await readJson(req);
     if (!input.uploadId) throw new Error('فایل انتخاب نشده است.');
+    if (input.visionMode && !['all', 'batch'].includes(input.visionMode)) throw new Error('حالت خواندن نامعتبر است.');
     await uploaded(input.uploadId);
     return response(res, 202, startJob('import', (progress) => importFile(pid, input, progress)));
   }
