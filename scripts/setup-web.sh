@@ -129,4 +129,9 @@ if ! ss -tlnpH "sport = :$PORT" 2>/dev/null | grep -q nginx; then
   echo "nginx did not bind port $PORT; see journalctl -u nginx -n 30" >&2; exit 1
 fi
 curl -fkS --resolve "$DOMAIN:$PORT:127.0.0.1" "https://$DOMAIN:$PORT/" -o /dev/null
-if [ "$PUBLIC_PORT" = 443 ]; then echo "ASC Web is on https://$DOMAIN"; else echo "ASC Web is on https://$DOMAIN:$PUBLIC_PORT"; fi
+echo "ASC Web origin is healthy on local HTTPS port $PORT."
+if [ "$PORT" != "$PUBLIC_PORT" ]; then
+  echo "For the public URL, proxy $DOMAIN in Cloudflare and set an Origin Rule rewriting its destination port to $PORT."
+  echo "The public route has not been verified by this local check."
+fi
+if [ "$PUBLIC_PORT" = 443 ]; then echo "Intended public URL: https://$DOMAIN"; else echo "Intended public URL: https://$DOMAIN:$PUBLIC_PORT"; fi
