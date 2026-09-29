@@ -28,6 +28,11 @@ try {
   if (page.status !== 200 || !markup.includes('تالار پژوهش') ||
       !markup.includes('id="tab-deep"') || !markup.includes('id="investigation-status"'))
     throw new Error('web research controls are missing');
+  const script = fs.readFileSync(path.join(import.meta.dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  const htmlIds = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
+  const referencedIds = new Set([...script.matchAll(/\$\('([^']+)'\)/g)].map((match) => match[1]));
+  const absent = [...referencedIds].filter((id) => !htmlIds.has(id));
+  if (absent.length) throw new Error(`web script refers to missing DOM ids: ${absent.join(', ')}`);
   const denied = await fetch(`${url}/api/state`);
   if (denied.status !== 401) throw new Error('unauthenticated state was exposed');
   const privateReport = await fetch(`${url}/api/document-analysis?documentId=1`);
