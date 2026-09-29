@@ -63,6 +63,12 @@ export const config = {
   botToken,
   telegramApiBaseUrl: (env.TELEGRAM_API_BASE_URL || 'https://api.telegram.org').replace(/\/+$/, ''),
   telegramLocalFilesDir: env.TELEGRAM_LOCAL_FILES_DIR || '',
+  web: {
+    password: env.WEB_PASSWORD || '',
+    origin: env.WEB_ORIGIN || '',
+    port: Number(env.WEB_PORT || 3000),
+    principalId: env.WEB_PRINCIPAL_ID || '',
+  },
   router,
 
   /**
@@ -86,6 +92,8 @@ export const config = {
     research: env.MODEL_RESEARCH || 'openai/gpt-6-astra:online',
     // Cheap text work.
     structure: env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
+    // Reasoning pass over every stored document section and its cross-section synthesis.
+    analysis: env.MODEL_ANALYSIS || env.MODEL_STRUCTURE || 'google/gemini-3.7-flash',
     // One small classification per message: which procedure the user is asking for.
     // The cheapest thing that can follow instructions is the right model here — put a
     // free one first and something dependable behind it.

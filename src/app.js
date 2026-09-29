@@ -981,6 +981,7 @@ async function handleCommand(chatId, principalId, text, isOwner, messageId = nul
           : 'خاموش؛ ویس را همان مدل capture می‌شنود'}</i>`,
         'research  <i>جست‌وجو و خواندن صفحه روی سرور؛ تحلیل با structure</i>',
         `structure <code>${esc(m.structure)}</code> <i>(گفتگو و ساختاردهی)</i>`,
+        `analysis  <code>${esc(m.analysis)}</code> <i>(تحلیل عمیق تمام سند در وب‌اپ)</i>`,
         `router    <code>${esc(m.router)}</code> <i>(تشخیص می‌دهد چه می‌خواهی — ارزان‌ترین کافی است)</i>`, '',
         '<code>/model structure MODEL@PROVIDER</code> برای تحلیل منابع',
         '<code>/model transcribe none</code> خاموش کردن',

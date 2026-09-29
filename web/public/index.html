@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07140f">
+  <title>ASC · تالار پژوهش</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+  <section id="login" class="login-shell">
+    <div class="login-card">
+      <div class="seal" aria-hidden="true"><span>✦</span></div>
+      <div class="eyebrow">ALAMOR NETWORK · RESEARCH ATELIER</div>
+      <h1>تالار پژوهش <em>ASC</em></h1>
+      <p>اسناد، سرنخ‌ها و نتیجهٔ هر تحقیق در یک جا. برای ورود، رمز پنل را وارد کن.</p>
+      <form id="login-form">
+        <label for="password">رمز ورود</label>
+        <input id="password" type="password" autocomplete="current-password" minlength="16" required placeholder="••••••••••••••••">
+        <button class="primary" type="submit">ورود به تالار <span>←</span></button>
+      </form>
+      <div id="login-error" class="form-error" role="alert"></div>
+      <div class="login-footer">PRIVATE RESEARCH SPACE <span>✧</span> 2026</div>
+    </div>
+  </section>
+
+  <div id="app" class="app-shell" hidden>
+    <aside class="rail">
+      <div class="rail-brand"><div class="mini-seal">✦</div><div><strong>ASC</strong><small>THE RESEARCH CHAMBER</small></div></div>
+      <div class="rail-label">فضای کار</div>
+      <button id="new-case" class="rail-action active">＋ <span>گفت‌وگوی تازه</span></button>
+      <div class="rail-divider"></div>
+      <div class="rail-heading"><span>پرونده‌ها</span><span id="case-count">۰</span></div>
+      <div id="case-list" class="case-list"></div>
+      <div class="rail-bottom"><div class="signal"><i></i> سامانه آمادهٔ پژوهش</div><button id="logout" class="text-button">خروج امن ↗</button></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button id="mobile-menu" class="icon-button" aria-label="فهرست">☰</button>
+        <div><div class="eyebrow">RESEARCH WORKSPACE / ASC</div><div id="breadcrumb" class="breadcrumb">گفت‌وگوی تازه</div></div>
+        <div class="top-actions"><span class="top-mark">✦ &nbsp; دقت، پیش از ادعا</span><button id="refresh" class="icon-button" title="تازه‌سازی">↻</button></div>
+      </header>
+
+      <div class="workspace">
+        <section class="conversation">
+          <div class="hero">
+            <div class="hero-ornament">✦</div>
+            <p class="eyebrow">YOUR RESEARCH COMPANION</p>
+            <h2>از پرسش تا <em>شاهد.</em></h2>
+            <p>با مدل گفت‌وگو کن، کتاب بده یا یک تحقیق را آغاز کن. هر ادعای تأییدشده باید پشتوانه‌ای قابل بررسی داشته باشد.</p>
+            <div class="hero-line"></div>
+          </div>
+
+          <div id="messages" class="messages" aria-live="polite"></div>
+
+          <div id="progress" class="progress-card" hidden>
+            <div class="progress-head"><span class="pulse"></span><strong id="progress-title">در حال کار</strong><span id="progress-time">۰ ثانیه</span></div>
+            <div class="progress-track"><i id="progress-fill"></i></div>
+            <p id="progress-detail">در حال آماده‌سازی…</p>
+            <button id="stop-job" class="text-button">■ نگه دار</button>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer-tabs"><button id="tab-chat" class="selected">گفت‌وگو</button><button id="tab-research">تحقیق وب</button></div>
+            <form id="compose-form" class="composer"><textarea id="prompt" rows="2" placeholder="پرسش یا ایده‌ات را بنویس…" required></textarea><button class="send-button" type="submit" aria-label="ارسال">↑</button></form>
+            <div id="compose-hint" class="compose-hint">برای تحقیق وب، تب «تحقیق وب» را انتخاب کن؛ جست‌وجو خودکار شروع نمی‌شود.</div>
+          </div>
+        </section>
+
+        <aside class="inspector">
+          <div class="inspector-title"><span class="eyebrow">THE DOSSIER</span><h3>دفتر پرونده</h3><p id="inspector-subtitle">پرسش‌ها و شاهدها، کنار هم.</p></div>
+          <div class="inspector-stat"><div><strong id="stat-cases">۰</strong><span>پرونده</span></div><div><strong id="stat-verified">۰</strong><span>تأییدشده</span></div><div><strong id="stat-claims">۰</strong><span>ادعا</span></div></div>
+          <div class="inspector-section"><div class="section-heading"><span>اسناد</span><small>DOCUMENTS</small></div>
+            <label id="drop-zone" class="drop-zone" for="file-input"><input id="file-input" type="file" accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp" hidden><span class="drop-icon">⌁</span><strong>کتاب یا سندت را اینجا بگذار</strong><small>PDF، متن یا تصویر · تا ۱۰۰ مگابایت</small></label>
+            <div class="upload-status">آپلود رایگان است. خواندن و نمایه‌سازی فقط با دکمهٔ «خواندن» آغاز می‌شود و ممکن است هزینهٔ مدل داشته باشد.</div>
+            <div id="upload-status" class="upload-status"></div><div id="upload-list" class="upload-list"></div><div id="document-list" class="document-list"></div>
+          </div>
+          <div class="inspector-section"><div class="section-heading"><span>یافته‌ها</span><small>EVIDENCE</small></div><div id="claims-list" class="claims-list"><p class="muted">هنوز شاهدی ثبت نشده است.</p></div></div>
+          <button id="ledger" class="ledger-button" disabled><span>↧</span> دریافت دفترچهٔ پژوهش <small>MARKDOWN</small></button>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

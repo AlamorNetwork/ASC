@@ -18,6 +18,7 @@ import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages, scan
 import { chunkText, embedPending } from './chunks.js';
 import * as store from './db.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
+import { checkpoint } from './cancel.js';
 
 // The hosted Telegram API has its own 20 MB download ceiling. A local Bot API
 // server removes that limit; keep an application limit to bound memory use.
@@ -301,6 +302,7 @@ export async function ingestScannedPages({
   let seq = store.maxChunkSeq(documentId) + 1;
   try {
     for await (const { page, buffer: png } of pagesIterator(buffer, { from: start, to: last })) {
+      checkpoint(principalId, `پیش از صفحه ${page}`);
       const result = readPage ? await readPage(page, png) : await chat({
         model: modelFor('capture'), system: PAGE_SYSTEM,
         content: [

@@ -97,6 +97,38 @@ node scripts/probe-voice.js           # compare voice models on your own note
 node scripts/probe-network.js         # measure the route to the provider
 ```
 
+### Private web workspace
+
+The web workspace uses the same SQLite dossiers and research engine as the Telegram bot.
+It uploads PDFs directly from the browser, up to the app's 100 MB limit; it does not
+pass them through Telegram's hosted Bot API. The upload itself never calls a model.
+Select **Read** after upload to extract and index the file. A scanned book asks
+separately before reading the next 20 pages with vision. Chat, web research, claims,
+evidence status and a Markdown research ledger are available in the same interface.
+After a file has been read, **Deep analysis** walks every stored section, checks each
+quoted detail against that section, and writes a resumable `document-N-analysis.md`
+beside the dossier ledger. It describes topics, events, people, concepts, links between
+sections and unresolved questions. For scanned PDFs, coverage explicitly says how many
+pages were read; a quote match against OCR does not verify the image itself. The
+analysis runs only when requested and may cost model credits. Set `MODEL_ANALYSIS` to
+a reasoning-capable model chain, or use `/model analysis MODEL@PROVIDER`; its default
+is `MODEL_STRUCTURE`. The Jev Decisions model is unsuitable for this prose/JSON role.
+
+On the server, point `asc.alamornetwork.ir` at it in Cloudflare. Then run:
+
+```bash
+cd /root/ASC && git pull
+bash scripts/setup-web.sh asc.alamornetwork.ir you@example.com
+```
+
+The installer generates a long password and shows it once, then puts the app behind
+nginx and a certificate. It binds Node to `127.0.0.1:3000`. If another service owns
+443, run with `WEB_HTTPS_PORT=2053` and route this hostname's origin port to 2053
+in Cloudflare; the public URL can still be `https://asc.alamornetwork.ir`.
+The existing Telegram service keeps running during migration. To run the web smoke
+test without model spend: `node scripts/check-web.js` and
+`node scripts/check-document-analysis.js`.
+
 ### Scanned books and vision comparison
 
 Send a scanned PDF to the bot and approve 20 pages or the full book. Each page's

@@ -114,6 +114,38 @@ CREATE TABLE IF NOT EXISTS chunks (
   created_at    TEXT    NOT NULL
 );
 
+-- Each section is committed after its model call. A stopped analysis can resume
+-- without buying the same section again; changed OCR text invalidates that section.
+CREATE TABLE IF NOT EXISTS document_analysis_sections (
+  principal_id TEXT NOT NULL,
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  section_no INTEGER NOT NULL,
+  source_hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (principal_id, document_id, section_no)
+);
+CREATE TABLE IF NOT EXISTS document_analysis_synthesis (
+  principal_id TEXT NOT NULL,
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  source_hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (principal_id, document_id)
+);
+CREATE TABLE IF NOT EXISTS document_analysis_batches (
+  principal_id TEXT NOT NULL,
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  level INTEGER NOT NULL,
+  batch_no INTEGER NOT NULL,
+  source_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (principal_id, document_id, level, batch_no)
+);
+
 CREATE INDEX IF NOT EXISTS idx_chunks_dossier ON chunks(principal_id, dossier_id, id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc     ON chunks(document_id, seq);
 
@@ -695,6 +727,43 @@ export function searchChunks(principalId, dossierId, query, limit = 20) {
 export const documentText = (principalId, documentId) =>
   db.prepare(`SELECT text FROM chunks WHERE principal_id = ? AND document_id = ? ORDER BY seq`)
     .all(principalId, documentId).map((r) => r.text).join('\n');
+
+export const documentChunks = (principalId, documentId) =>
+  db.prepare(`SELECT id, seq, page, text FROM chunks WHERE principal_id = ? AND document_id = ? ORDER BY seq`)
+    .all(principalId, documentId);
+
+export const analysisSections = (principalId, documentId) =>
+  db.prepare(`SELECT * FROM document_analysis_sections WHERE principal_id = ? AND document_id = ? ORDER BY section_no`)
+    .all(principalId, documentId);
+
+export const saveAnalysisSection = (principalId, documentId, n, hash, model, data) =>
+  db.prepare(`INSERT INTO document_analysis_sections VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(principal_id, document_id, section_no) DO UPDATE SET
+    source_hash = excluded.source_hash, model = excluded.model,
+    result_json = excluded.result_json, updated_at = excluded.updated_at`)
+    .run(principalId, documentId, n, hash, model, JSON.stringify(data), new Date().toISOString());
+
+export const analysisSynthesis = (principalId, documentId) =>
+  db.prepare(`SELECT * FROM document_analysis_synthesis WHERE principal_id = ? AND document_id = ?`)
+    .get(principalId, documentId);
+
+export const saveAnalysisSynthesis = (principalId, documentId, hash, model, data) =>
+  db.prepare(`INSERT INTO document_analysis_synthesis VALUES (?,?,?,?,?,?)
+    ON CONFLICT(principal_id, document_id) DO UPDATE SET
+    source_hash = excluded.source_hash, model = excluded.model,
+    result_json = excluded.result_json, updated_at = excluded.updated_at`)
+    .run(principalId, documentId, hash, model, JSON.stringify(data), new Date().toISOString());
+
+export const analysisBatch = (principalId, documentId, level, n) =>
+  db.prepare(`SELECT * FROM document_analysis_batches WHERE principal_id = ? AND document_id = ? AND level = ? AND batch_no = ?`)
+    .get(principalId, documentId, level, n);
+
+export const saveAnalysisBatch = (principalId, documentId, level, n, sourceHash, data) =>
+  db.prepare(`INSERT INTO document_analysis_batches VALUES (?,?,?,?,?,?,?)
+    ON CONFLICT(principal_id, document_id, level, batch_no) DO UPDATE SET
+    source_hash = excluded.source_hash, result_json = excluded.result_json,
+    updated_at = excluded.updated_at`)
+    .run(principalId, documentId, level, n, sourceHash, JSON.stringify(data), new Date().toISOString());
 
 /** Oldest-first, so it can be handed straight to a model as conversation history. */
 export const conversation = (principalId, dossierId, limit = 20) =>
