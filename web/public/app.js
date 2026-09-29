@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false;
+let investigation = null;
 const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
@@ -23,11 +24,12 @@ async function refresh() {
   await loadUploads();
   if (!activeJob) {
     const { job } = await api('/api/active-job');
-    if (job) watch(job.id, ({ import:'خواندن سند', analysis:'تحلیل عمیق سند',
+    if (job) watch(job.id, ({ import:'خواندن سند', analysis:'تحلیل عمیق سند', deep:'کاوش عمیق',
       research:'تحقیق وب', chat:'در حال پاسخ', claims:'استخراج ادعاها' })[job.kind] || 'در حال کار');
   }
 }
 function render(data) {
+  investigation = data.investigation ?? null;
   $('case-count').textContent = fa(data.dossiers.length);
   $('stat-cases').textContent = fa(data.stats.dossiers);
   $('stat-verified').textContent = fa(data.stats.verified);
@@ -52,6 +54,53 @@ function render(data) {
   for (const b of document.querySelectorAll('[data-claims]')) b.onclick = async () => { try { const r = await api('/api/claims', { method:'POST', json:{ documentId:Number(b.dataset.claims) } }); watch(r.id, 'استخراج ادعاها'); } catch(e){fail(e);} };
   for (const b of document.querySelectorAll('[data-analyze]')) b.onclick = async () => { try { const r = await api('/api/analyze-document', { method:'POST', json:{ documentId:Number(b.dataset.analyze) } }); watch(r.id, 'تحلیل عمیق سند'); } catch(e){fail(e);} };
   $('claims-list').innerHTML = data.claims.length ? data.claims.slice(-15).reverse().map((c) => `<div class="claim ${c.status === 'verified' ? '' : 'found'}">${c.status === 'verified' ? '✓ تأیید' : '◇ نیاز به بررسی'} · ${esc(c.text)}<small>${esc(c.source_title || c.source_url || 'منبع نامشخص')}</small></div>`).join('') : '<p class="muted">هنوز شاهدی ثبت نشده است.</p>';
+  renderInvestigation();
+}
+function renderInvestigation() {
+  const box = $('investigation-status');
+  const run = investigation;
+  if (!selected || !run) {
+    box.innerHTML = `<p class="muted">${selected ? 'برای این پرونده هنوز کاوشی ثبت نشده است.' : 'برای دیدن وضعیت کاوش، پرونده‌ای انتخاب کن.'}</p>`;
+    $('resume-options').hidden = true;
+    return;
+  }
+  const states = { running:'در حال کاوش', paused:'متوقف؛ آمادهٔ ادامه', done:'پایان‌یافته' };
+  const reasons = { ceiling:'رسیدن به سقف هزینه', exhausted:'پایان سرنخ‌ها', stopped:'توقف به درخواست شما', interrupted:'قطع شدن اجرا' };
+  const leads = Array.isArray(run.nextLeads) ? run.nextLeads : [];
+  box.innerHTML = `<p class="investigation-question">${esc(run.question)}</p><p><strong>${esc(states[run.state] || run.state || 'نامشخص')}</strong>${run.stopped ? ` · ${esc(reasons[run.stopped] || run.stopped)}` : ''}</p><p>${fa(run.rounds)} دور · ${fa(run.costToman)} تومان${Number.isFinite(Number(run.costUsd)) && run.costUsd != null ? ` · ${esc(String(run.costUsd))} دلار` : ''}</p>${leads.length ? `<div class="investigation-leads"><strong>سرنخ‌های بعدی</strong><ul>${leads.slice(0, 4).map((lead) => `<li>${esc(lead)}</li>`).join('')}</ul></div>` : ''}`;
+  $('resume-options').hidden = !(run.state === 'paused' && leads.length && Number.isSafeInteger(Number(run.id)) && Number(run.id) > 0);
+  $('resume-deep').disabled = busy;
+}
+function spendCeiling(input) {
+  const raw = input.value.trim();
+  const amount = Number(raw);
+  if (!raw || !Number.isFinite(amount) || amount <= 0 || amount > 20) {
+    input.setCustomValidity('سقف هزینه باید عددی بزرگ‌تر از صفر و حداکثر ۲۰ دلار باشد.');
+    input.reportValidity();
+    input.focus();
+    return null;
+  }
+  input.setCustomValidity('');
+  return amount;
+}
+async function startDeep({ resume = false } = {}) {
+  if (busy) return toast('یک کار دیگر در حال اجراست.');
+  const input = $(resume ? 'resume-ceiling' : 'deep-ceiling');
+  const ceilingUsd = spendCeiling(input);
+  if (ceilingUsd === null) return;
+  const question = resume ? investigation?.question : $('prompt').value.trim();
+  const runId = resume ? Number(investigation?.id) : null;
+  if (resume && (!selected || !Number.isSafeInteger(runId) || runId <= 0 || investigation?.state !== 'paused')) return toast('این کاوش آمادهٔ ادامه نیست.');
+  if (!resume && !question) return $('prompt').focus();
+  const action = resume ? 'ادامه' : 'آغاز';
+  if (!confirm(`${action} کاوش عمیق با سقف توقف ${ceilingUsd} دلار برای این نوبت؟ توقف بین دورها بررسی می‌شود و دور جاری ممکن است سقف را رد کند.`)) return;
+  setBusy(true);
+  try {
+    const r = await api(resume ? '/api/deep/resume' : '/api/deep', { method:'POST', json: resume
+      ? { runId, ceilingUsd } : { dossierId:selected, question, ceilingUsd } });
+    if (!resume) { $('prompt').value = ''; addMessage('user', question); }
+    watch(r.id, resume ? 'ادامهٔ کاوش عمیق' : 'کاوش عمیق');
+  } catch(e) { setBusy(false); fail(e); }
 }
 async function loadUploads() {
   const list = await api('/api/uploads');
@@ -63,7 +112,7 @@ async function loadUploads() {
   for (const b of document.querySelectorAll('[data-upload]')) b.onclick = () => beginImport(b.dataset.upload, b.dataset.mode);
 }
 function fail(e) { toast(e.message || String(e)); }
-function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value; }
+function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value; $('resume-deep').disabled = value; }
 async function beginImport(id, visionMode = 'detect') {
   if (busy) return toast('یک کار دیگر در حال اجراست.');
   if (visionMode !== 'detect' && !confirm(visionMode === 'all'
@@ -84,6 +133,10 @@ async function watch(id, title) {
       const job = await api(`/api/jobs/${id}`);
       $('progress-time').textContent = formatTime(Date.now() - started);
       $('progress-detail').textContent = job.stage || 'در حال انجام…';
+      if (job.kind === 'deep' && job.state === 'running') {
+        const status = `در حال کاوش · ${job.stage || 'در حال آماده‌سازی…'}`;
+        if ($('investigation-status').textContent !== status) $('investigation-status').textContent = status;
+      }
       const page = /صفحه\s+(\d+)\s+از\s+(\d+)/.exec(job.stage || '');
       const vector = /بردار\s+(\d+)\s+از\s+(\d+)/.exec(job.stage || '');
       const analysis = /(?:تحلیل )?بخش\s+(\d+)\s+از\s+(\d+)/.exec(job.stage || '');
@@ -95,13 +148,16 @@ async function watch(id, title) {
         setTimeout(() => { $('progress').hidden = true; $('progress-fill').style.width = '5%'; }, 1400);
         if (job.state === 'failed') toast(job.savedScan ? `${job.error} · تا صفحه ${job.savedScan.readPages} ذخیره شد.` : job.error);
         if (job.state === 'done') {
-          if (job.result?.dossierId) { selected = Number(job.result.dossierId); freshCase = false; }
+          if (job.result?.dossierId) {
+            selected = Number(job.result.dossierId); freshCase = false;
+          }
           if (job.kind === 'chat' && !selected) addMessage('assistant', job.result?.text || '');
           if (job.kind === 'research') toast('تحقیق ثبت شد؛ یافته‌ها را در پرونده ببین.');
           if (job.kind === 'import') toast(job.result?.alreadyRead ? 'این سند قبلاً خوانده شده است.' : job.result?.pages
             ? `${fa(job.result.readPages)} از ${fa(job.result.pages)} صفحه ذخیره شد${job.result.readPages < job.result.pages ? '؛ برای ادامه «تا پایان» را بزن.' : '.'}`
             : 'سند ذخیره شد.');
           if (job.kind === 'analysis') toast(`تحلیل ${fa(job.result?.sections)} بخش ثبت شد؛ فایل MD از کنار سند دریافت می‌شود.`);
+          if (job.kind === 'deep') toast(job.result?.canResume ? 'کاوش متوقف شد؛ می‌توانی آن را از دفتر پرونده ادامه بدهی.' : 'کاوش عمیق ثبت شد؛ یافته‌ها را در پرونده ببین.');
         }
         if (job.state === 'needs_vision') {
           selected = Number(job.result.dossierId);
@@ -147,16 +203,25 @@ $('logout').onclick = async () => { await api('/api/logout', { method:'POST' }).
 $('refresh').onclick = () => refresh().catch(fail);
 $('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; $('breadcrumb').textContent='گفت‌وگوی تازه'; $('rail').classList.remove('open'); refresh().catch(fail); };
 $('mobile-menu').onclick = () => $('rail').classList.toggle('open');
-for (const [id, value] of [['tab-chat','chat'],['tab-research','research']]) $(id).onclick = () => {
-  mode=value; $('tab-chat').classList.toggle('selected',value==='chat'); $('tab-research').classList.toggle('selected',value==='research');
-  $('prompt').placeholder = value==='research' ? 'در چه موضوعی تحقیق کنم؟' : 'پرسش یا ایده‌ات را بنویس…';
-  $('compose-hint').textContent = value==='research' ? 'با ارسال، تحقیق وب و بررسی منابع شروع می‌شود و ممکن است هزینه داشته باشد.' : 'برای تحقیق وب، تب «تحقیق وب» را انتخاب کن؛ جست‌وجو خودکار شروع نمی‌شود.';
+for (const [id, value] of [['tab-chat','chat'],['tab-research','research'],['tab-deep','deep']]) $(id).onclick = () => {
+  mode=value;
+  for (const [tab, kind] of [['tab-chat','chat'],['tab-research','research'],['tab-deep','deep']]) {
+    $(tab).classList.toggle('selected', value === kind);
+    $(tab).setAttribute('aria-pressed', String(value === kind));
+  }
+  $('deep-options').hidden = value !== 'deep';
+  $('deep-ceiling').disabled = value !== 'deep';
+  $('prompt').placeholder = value === 'deep' ? 'پرسش اصلی کاوش عمیق چیست؟' : value === 'research' ? 'در چه موضوعی تحقیق کنم؟' : 'پرسش یا ایده‌ات را بنویس…';
+  $('compose-hint').textContent = value === 'deep' ? 'کاوش تنها با ارسال و پس از تأیید سقف هزینه شروع می‌شود. در پروندهٔ انتخابی ثبت خواهد شد.' : value === 'research' ? 'با ارسال، تحقیق وب و بررسی منابع شروع می‌شود و ممکن است هزینه داشته باشد.' : 'برای تحقیق وب، تب «تحقیق وب» را انتخاب کن؛ جست‌وجو خودکار شروع نمی‌شود.';
 };
 $('compose-form').onsubmit = async (e) => { e.preventDefault(); if (busy) return;
   const message=$('prompt').value.trim(); if (!message) return;
+  if (mode === 'deep') return startDeep();
   try { const r=await api(`/api/${mode}`, { method:'POST', json:{ message, question:message, dossierId:selected } });
     $('prompt').value=''; addMessage('user',message); watch(r.id,mode==='chat'?'در حال پاسخ':'در حال تحقیق وب'); }
   catch(err){fail(err);} };
+$('resume-deep').onclick = () => startDeep({ resume:true });
+for (const id of ['deep-ceiling', 'resume-ceiling']) $(id).addEventListener('input', () => $(id).setCustomValidity(''));
 $('file-input').onchange = (e) => sendFile(e.target.files[0]);
 const zone=$('drop-zone'); zone.ondragover=(e)=>{e.preventDefault();zone.classList.add('dragging');};
 zone.ondragleave=()=>zone.classList.remove('dragging'); zone.ondrop=(e)=>{e.preventDefault();zone.classList.remove('dragging');sendFile(e.dataTransfer.files[0]);};

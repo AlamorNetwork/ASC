@@ -9,6 +9,7 @@ import * as store from './db.js';
 import * as settings from './settings.js';
 import * as chat from './chat.js';
 import { runResearch } from './research.js';
+import { deepInvestigate } from './deep.js';
 import { ingestToDossier, extractClaimsFor, sha256 } from './ingest.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
 import { researchLedger } from './research-ledger.js';
@@ -136,7 +137,7 @@ function startJob(kind, work) {
   jobs.set(id, job);
   if (jobs.size > 100) jobs.delete(jobs.keys().next().value);
   void (async () => {
-    try { job.result = await work((stage) => { job.stage = String(stage).slice(0, 300); });
+    try { job.result = await work((stage) => { job.stage = String(stage).slice(0, 300); }, job);
       job.state = job.result?.needsVision ? 'needs_vision' : 'done'; }
     catch (err) { job.state = 'failed'; job.error = err.message;
       if (err.savedScan) job.savedScan = err.savedScan;
@@ -154,6 +155,42 @@ export function visionPlan(input) {
   const batch = input.visionMode === 'batch' || input.visionPages === 20;
   return { allowVision: input.visionMode === 'all' || batch,
     pageLimit: batch ? 20 : null };
+}
+export function deepCeiling(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 20)
+    throw new Error('سقف دلاری نامعتبر است؛ عددی بیشتر از صفر و حداکثر ۲۰ دلار بده.');
+  return value;
+}
+function investigationView(row) {
+  if (!row) return null;
+  let leads = [];
+  try { leads = JSON.parse(row.leads ?? '[]'); } catch { /* old malformed row */ }
+  return { id: row.id, question: row.question, state: row.state, stopped: row.stopped,
+    rounds: row.rounds, costToman: row.cost_toman, costUsd: row.cost_usd,
+    nextLeads: Array.isArray(leads) ? leads.slice(0, 4) : [] };
+}
+function deepProgress(note) {
+  if (note.kind === 'web') return `دور ${note.round} · جست‌وجوی وب: ${String(note.lead ?? '').slice(0, 130)}`;
+  if (note.kind === 'nextleads') return `دور ${note.round} · سرنخ‌های بعدی: ${(note.leads ?? []).join('؛ ').slice(0, 140)}`;
+  if (note.kind === 'error') return `دور ${note.round} · یک جست‌وجو شکست خورد: ${String(note.message ?? '').slice(0, 130)}`;
+  if (note.kind === 'resumed') return `ادامه از دور ${note.round}`;
+  return `دور ${note.round ?? 1} · ${String(note.detail ?? note.kind ?? 'بررسی منابع').slice(0, 140)}`;
+}
+async function runDeepJob(pid, dossierId, question, ceilingUsd, runId, progress, job) {
+  const activeKey = `web.deep.active_run.${pid}`;
+  try {
+    const out = await deepInvestigate({ principalId: pid, dossierId, question, ceilingUsd, runId,
+      onStarted: (id) => { job.runId = id; store.setSetting(activeKey, String(id)); progress(`کاوش #${id} آغاز شد`); },
+      onNote: (note) => progress(deepProgress(note)),
+      onRound: (round) => progress(`دور ${round.round} ذخیره شد · ${round.fresh} یافتهٔ تازه`),
+    });
+    return { dossierId, runId: out.runId, rounds: out.rounds, stopped: out.stopped,
+      canResume: out.canResume, costToman: out.costToman, costUsd: out.costUsd,
+      nextLeads: out.nextLeads, answered: out.answered, open: out.open };
+  } finally {
+    if (job.runId) store.pauseInterruptedInvestigation(pid, job.runId);
+    if (store.getSetting(activeKey) === String(job.runId)) store.setSetting(activeKey, '');
+  }
 }
 async function importFile(pid, input, progress) {
   const meta = await uploaded(input.uploadId);
@@ -191,7 +228,11 @@ function state(pid, dossierId, fresh = false) {
   const dossiers = store.listDossiers(pid, 50);
   const chosen = fresh ? null : dossierId ? requireDossier(pid, dossierId)
     : store.getDossier(pid, settings.activeDossier(pid)) ?? dossiers[0] ?? null;
-  return { dossiers, selected: chosen, documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
+  const latest = chosen && store.latestDossierInvestigation(pid, chosen.id);
+  const investigation = latest?.state === 'running' ? latest : chosen
+    ? store.resumableInvestigation(pid, chosen.id) ?? latest : null;
+  return { dossiers, selected: chosen, investigation: investigationView(investigation),
+    documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
     claims: chosen ? store.dossierClaims(pid, chosen.id) : [],
     episodes: chosen ? store.dossierEpisodes(pid, chosen.id, 8) : [],
     messages: store.conversation(pid, chosen?.id ?? null, 30),
@@ -298,8 +339,36 @@ async function route(req, res) {
       onProgress: (e) => progress(e.detail || e.stage || 'تحقیق…'),
     }))));
   }
+  if (url.pathname === '/api/deep' && req.method === 'POST') {
+    const input = await readJson(req);
+    const question = String(input.question ?? '').trim().slice(0, 1000);
+    if (!question) throw new Error('پرسش کاوش خالی است.');
+    const ceilingUsd = deepCeiling(input.ceilingUsd);
+    if (running) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
+    const dossier = input.dossierId ? requireDossier(pid, input.dossierId) : null;
+    const dossierId = dossier?.id ?? Number(store.insertDossier({ principalId: pid,
+      topic: question, question, state: 'open' }));
+    settings.setActiveDossier(pid, dossierId);
+    const started = startJob('deep', (progress, job) =>
+      runDeepJob(pid, dossierId, question, ceilingUsd, null, progress, job));
+    store.addMessage({ principalId: pid, dossierId, role: 'user', text: question });
+    return response(res, 202, started);
+  }
+  if (url.pathname === '/api/deep/resume' && req.method === 'POST') {
+    const input = await readJson(req);
+    const ceilingUsd = deepCeiling(input.ceilingUsd);
+    const run = store.getInvestigation(pid, input.runId);
+    if (!run) throw new Error('این کاوش پیدا نشد.');
+    if (run.state !== 'paused') throw new Error('این کاوش در حالت توقف نیست.');
+    if (running) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
+    settings.setActiveDossier(pid, run.dossier_id);
+    return response(res, 202, startJob('deep', (progress, job) =>
+      runDeepJob(pid, run.dossier_id, run.question, ceilingUsd, run.id, progress, job)));
+  }
   if (url.pathname === '/api/stop' && req.method === 'POST') {
     cancel.request(pid);
+    const deepJob = [...jobs.values()].find((job) => job.state === 'running' && job.kind === 'deep');
+    if (deepJob?.runId) store.requestStop(pid, deepJob.runId);
     return response(res, 200, { ok: true });
   }
   if (url.pathname === '/api/claims' && req.method === 'POST') {
@@ -357,6 +426,14 @@ export function createWebServer() {
 }
 
 export function runWeb() {
+  const pid = principal();
+  const activeKey = `web.deep.active_run.${pid}`;
+  const interrupted = store.getSetting(activeKey);
+  if (interrupted) {
+    if (store.pauseInterruptedInvestigation(pid, interrupted))
+      console.warn(`[asc-web] investigation #${interrupted} interrupted; resume is available`);
+    store.setSetting(activeKey, '');
+  }
   const server = createWebServer();
   server.listen(config.web.port, '127.0.0.1', () => console.log(`[asc-web] http://127.0.0.1:${config.web.port}`));
   return server;

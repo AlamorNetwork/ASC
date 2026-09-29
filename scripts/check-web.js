@@ -8,7 +8,7 @@ process.env.ASC_DB = path.join(temp, 'check.db');
 process.env.WEB_PASSWORD = 'this-is-a-test-password-only';
 process.env.WEB_ORIGIN = 'https://asc.alamornetwork.ir';
 process.env.WEB_PRINCIPAL_ID = 'test-web-owner';
-const { createWebServer, visionPlan } = await import('../src/web.js');
+const { createWebServer, visionPlan, deepCeiling } = await import('../src/web.js');
 const store = await import('../src/db.js');
 const { db } = store;
 const server = createWebServer();
@@ -20,8 +20,14 @@ try {
     throw new Error('read to end still has a hidden page limit');
   if (visionPlan({ visionMode: 'batch' }).pageLimit !== 20)
     throw new Error('20-page cost-control mode changed');
+  if (deepCeiling(0.16) !== 0.16 || ![0, -1, 21, null, '0.16'].every((x) => {
+    try { deepCeiling(x); return false; } catch { return true; }
+  })) throw new Error('deep research can start without an explicit bounded ceiling');
   const page = await fetch(url);
-  if (page.status !== 200 || !(await page.text()).includes('تالار پژوهش')) throw new Error('login page failed');
+  const markup = await page.text();
+  if (page.status !== 200 || !markup.includes('تالار پژوهش') ||
+      !markup.includes('id="tab-deep"') || !markup.includes('id="investigation-status"'))
+    throw new Error('web research controls are missing');
   const denied = await fetch(`${url}/api/state`);
   if (denied.status !== 401) throw new Error('unauthenticated state was exposed');
   const privateReport = await fetch(`${url}/api/document-analysis?documentId=1`);
@@ -58,6 +64,31 @@ try {
   if (select.status !== 200) throw new Error('dossier selection failed');
   const reopened = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
   if ((await reopened.json()).selected?.id !== dossierId) throw new Error('selected dossier did not survive refresh');
+  const runId = Number(store.startInvestigation({ principalId: 'test-web-owner', dossierId,
+    question: 'پرسش ناتمام', leads: ['سرنخ ذخیره‌شده'] }));
+  store.saveInvestigation(runId, { state: 'paused', stopped: 'ceiling', rounds: 2,
+    leads: ['سرنخ ذخیره‌شده'], costUsd: 0.16, costToman: 2000 });
+  const withRun = await fetch(`${url}/api/state?dossierId=${dossierId}`, { headers: { Cookie: cookie } });
+  const savedRun = (await withRun.json()).investigation;
+  if (savedRun?.id !== runId || savedRun.rounds !== 2 || savedRun.nextLeads[0] !== 'سرنخ ذخیره‌شده')
+    throw new Error('resumable investigation is not visible in web state');
+  const refusedDeep = await fetch(`${url}/api/deep/resume`, { method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runId, ceilingUsd: 0 }) });
+  if (refusedDeep.status !== 400) throw new Error('zero-ceiling deep run was accepted');
+  const refusedStart = await fetch(`${url}/api/deep`, { method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dossierId, question: 'کاوش آزمایشی', ceilingUsd: 0 }) });
+  if (refusedStart.status !== 400) throw new Error('zero-ceiling new investigation was accepted');
+  const interrupted = Number(store.startInvestigation({ principalId: 'test-web-owner', dossierId,
+    question: 'کاوش وب', leads: ['سرنخ بعدی'] }));
+  const otherDossierId = Number(store.insertDossier({ principalId: 'another-user', topic: 'پرونده جدا' }));
+  const otherPrincipal = Number(store.startInvestigation({ principalId: 'another-user', dossierId: otherDossierId,
+    question: 'کاربر دیگر', leads: ['جدا'] }));
+  if (store.pauseInterruptedInvestigation('test-web-owner', interrupted) !== 1 ||
+      store.getInvestigation('test-web-owner', interrupted).state !== 'paused' ||
+      store.getInvestigation('another-user', otherPrincipal).state !== 'running')
+    throw new Error('web recovery paused the wrong investigation');
   for (const filename of ['first.pdf', 'second.pdf']) {
     const saved = await fetch(`${url}/api/upload?name=${filename}&dossierId=${dossierId}`, { method: 'POST',
       headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'pdf' });

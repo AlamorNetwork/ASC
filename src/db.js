@@ -452,6 +452,13 @@ export const stopRequested = (id) =>
   !!db.prepare(`SELECT stop_requested FROM investigations WHERE id = ?`)
     .get(Number(id))?.stop_requested;
 
+/** Reopen one interrupted run without disturbing a run owned by another process. */
+export const pauseInterruptedInvestigation = (principalId, id) => db.prepare(`
+  UPDATE investigations SET state = 'paused', stopped = 'interrupted',
+    stop_requested = 0, updated_at = ?
+  WHERE principal_id = ? AND id = ? AND state = 'running'
+`).run(now(), principalId, Number(id)).changes;
+
 export const clearStop = (id) =>
   db.prepare(`UPDATE investigations SET stop_requested = 0 WHERE id = ?`).run(Number(id));
 
