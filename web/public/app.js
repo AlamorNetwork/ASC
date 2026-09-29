@@ -21,6 +21,11 @@ async function refresh() {
   if (selected && !data.selected) selected = null;
   render(data);
   await loadUploads();
+  if (!activeJob) {
+    const { job } = await api('/api/active-job');
+    if (job) watch(job.id, ({ import:'خواندن سند', analysis:'تحلیل عمیق سند',
+      research:'تحقیق وب', chat:'در حال پاسخ', claims:'استخراج ادعاها' })[job.kind] || 'در حال کار');
+  }
 }
 function render(data) {
   $('case-count').textContent = fa(data.dossiers.length);

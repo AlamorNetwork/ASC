@@ -161,7 +161,7 @@ function state(pid, dossierId) {
   return { dossiers, selected: chosen, documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
     claims: chosen ? store.dossierClaims(pid, chosen.id) : [],
     episodes: chosen ? store.dossierEpisodes(pid, chosen.id, 8) : [],
-    messages: chosen ? store.conversation(pid, chosen.id, 30) : [],
+    messages: store.conversation(pid, chosen?.id ?? null, 30),
     stats: store.stats(pid) };
 }
 async function servePublic(res, pathname) {
@@ -209,6 +209,8 @@ async function route(req, res) {
   }
   if (url.pathname === '/api/state' && req.method === 'GET')
     return response(res, 200, state(pid, url.searchParams.get('dossierId')));
+  if (url.pathname === '/api/active-job' && req.method === 'GET')
+    return response(res, 200, { job: [...jobs.values()].find((j) => j.state === 'running') ?? null });
   if (url.pathname === '/api/uploads' && req.method === 'GET') {
     const files = await fsp.readdir(uploadDir).catch(() => []);
     const list = await Promise.all(files.filter((x) => /^[a-f0-9-]{36}\.json$/.test(x)).map(async (x) => {

@@ -114,17 +114,24 @@ analysis runs only when requested and may cost model credits. Set `MODEL_ANALYSI
 a reasoning-capable model chain, or use `/model analysis MODEL@PROVIDER`; its default
 is `MODEL_STRUCTURE`. The Jev Decisions model is unsuitable for this prose/JSON role.
 
-On the server, point `asc.alamornetwork.ir` at it in Cloudflare. Then run:
+On the server, point a proxied Cloudflare DNS record for `asc.alamornetwork.ir`
+at it. Set SSL/TLS to **Full (strict)** and create an **Origin Rule** for that
+hostname that rewrites the destination port to **2083**. Xray keeps 443 and
+9router keeps 8443. Then run as root:
 
 ```bash
 cd /root/ASC && git pull
+read -rsp 'Cloudflare DNS API token: ' CF_TOKEN; echo; export CF_TOKEN
 bash scripts/setup-web.sh asc.alamornetwork.ir you@example.com
+unset CF_TOKEN
 ```
 
 The installer generates a long password and shows it once, then puts the app behind
-nginx and a certificate. It binds Node to `127.0.0.1:3000`. If another service owns
-443, run with `WEB_HTTPS_PORT=2053` and route this hostname's origin port to 2053
-in Cloudflare; the public URL can still be `https://asc.alamornetwork.ir`.
+nginx and a certificate on origin port 2083. It binds Node to `127.0.0.1:3000`.
+The DNS token is stored in `/etc/letsencrypt/cloudflare.ini` with root-only
+permissions for certificate renewal. The script checks the local origin; verify
+the public URL separately after the Cloudflare rule is active. If 2083 is occupied,
+choose a free `WEB_HTTPS_PORT` and set the Origin Rule to the same port.
 The existing Telegram service keeps running during migration. To run the web smoke
 test without model spend: `node scripts/check-web.js` and
 `node scripts/check-document-analysis.js`.

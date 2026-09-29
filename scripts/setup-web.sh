@@ -6,20 +6,34 @@ trap 'echo "setup-web stopped at line $LINENO" >&2' ERR
 
 DOMAIN="${1:-asc.alamornetwork.ir}"
 EMAIL="${2:-}"
-PORT="${WEB_HTTPS_PORT:-443}"
+PORT="${WEB_HTTPS_PORT:-2083}"
 PUBLIC_PORT="${WEB_PUBLIC_PORT:-443}"
 DIR="${ASC_DIR:-/root/ASC}"
 CREDS=/etc/letsencrypt/cloudflare.ini
 LIVE="/etc/letsencrypt/live/$DOMAIN"
 
 if [ "$(id -u)" -ne 0 ]; then echo 'Run as root.' >&2; exit 1; fi
-if ! [[ "$DOMAIN" =~ ^[a-zA-Z0-9.-]+$ && "$PORT" =~ ^[0-9]+$ && "$PUBLIC_PORT" =~ ^[0-9]+$ ]]; then echo 'Invalid domain or port.' >&2; exit 1; fi
+if ! [[ "$DOMAIN" =~ ^[a-zA-Z0-9.-]+$ && "$PORT" =~ ^[0-9]+$ && "$PUBLIC_PORT" =~ ^[0-9]+$ ]] ||
+   (( 10#$PORT < 1 || 10#$PORT > 65535 || 10#$PUBLIC_PORT < 1 || 10#$PUBLIC_PORT > 65535 )); then
+  echo 'Invalid domain or port.' >&2; exit 1
+fi
 if [ ! -f "$DIR/.env" ]; then echo "Missing $DIR/.env" >&2; exit 1; fi
+if ! command -v ss >/dev/null; then echo 'ss (iproute2) is required for port preflight.' >&2; exit 1; fi
+HOLDER=$(ss -tlnpH "sport = :$PORT")
+if [ -n "$HOLDER" ] && ! printf '%s' "$HOLDER" | grep -q 'users:(("nginx"'; then
+  echo "Port $PORT belongs to another service: $HOLDER" >&2
+  echo 'Choose a free WEB_HTTPS_PORT; existing listeners will not be changed.' >&2
+  exit 1
+fi
 
-if [ ! -f "$LIVE/fullchain.pem" ] || ! openssl x509 -in "$LIVE/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1; then
+if ! command -v nginx >/dev/null || ! command -v certbot >/dev/null ||
+   ! dpkg-query -W -f='${Status}' python3-certbot-dns-cloudflare 2>/dev/null | grep -q 'install ok installed'; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq nginx certbot python3-certbot-dns-cloudflare
+fi
+
+if [ ! -f "$LIVE/fullchain.pem" ] || ! openssl x509 -in "$LIVE/fullchain.pem" -noout -checkend 604800 >/dev/null 2>&1; then
   if [ -n "${CF_TOKEN:-}" ]; then
     install -d -m 755 /etc/letsencrypt
     umask 077
@@ -32,15 +46,6 @@ if [ ! -f "$LIVE/fullchain.pem" ] || ! openssl x509 -in "$LIVE/fullchain.pem" -n
   if [ -n "$EMAIL" ]; then ACCOUNT+=(-m "$EMAIL"); else ACCOUNT+=(--register-unsafely-without-email); fi
   certbot certonly --authenticator dns-cloudflare --dns-cloudflare-credentials "$CREDS" \
     --dns-cloudflare-propagation-seconds 30 -d "$DOMAIN" "${ACCOUNT[@]}"
-fi
-
-if [ "$PORT" = 443 ]; then
-  HOLDER=$(ss -tlnpH 'sport = :443' 2>/dev/null || true)
-  if [ -n "$HOLDER" ] && ! printf '%s' "$HOLDER" | grep -q nginx; then
-    echo "Port 443 belongs to another service: $HOLDER" >&2
-    echo 'Keep that service; rerun with WEB_HTTPS_PORT=2053 and configure a Cloudflare Origin Rule for this hostname.' >&2
-    exit 1
-  fi
 fi
 
 node - "$DIR/.env" "$DOMAIN" "$PUBLIC_PORT" <<'NODE'
@@ -84,23 +89,27 @@ Environment=NODE_ENV=production
 WantedBy=multi-user.target
 UNIT
 systemctl daemon-reload
-systemctl enable asc-web
-systemctl restart asc-web
-sleep 2
-if ! systemctl is-active --quiet asc-web; then
-  echo 'asc-web failed; recent service errors:' >&2
-  journalctl -u asc-web -n 20 --no-pager -o cat >&2 || true
-  exit 1
-fi
 
-if [ "$PUBLIC_PORT" = 443 ]; then HTTPS_TARGET='https://$host$request_uri'; else HTTPS_TARGET="https://\$host:$PUBLIC_PORT\$request_uri"; fi
-cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $DOMAIN;
-    location / { return 301 $HTTPS_TARGET; }
+SITE="/etc/nginx/sites-available/$DOMAIN"
+ENABLED="/etc/nginx/sites-enabled/$DOMAIN"
+INCLUDE=/etc/nginx/conf.d/000-sites-enabled.conf
+BACKUP=$(mktemp -d)
+for name in SITE ENABLED INCLUDE; do
+  path="${!name}"
+  if [ -e "$path" ] || [ -L "$path" ]; then cp -a "$path" "$BACKUP/$name"; fi
+done
+restore_nginx() {
+  for name in SITE ENABLED INCLUDE; do
+    path="${!name}"
+    if [ -e "$BACKUP/$name" ] || [ -L "$BACKUP/$name" ]; then
+      rm -f "$path"
+      cp -a "$BACKUP/$name" "$path"
+    else
+      rm -f "$path"
+    fi
+  done
 }
+cat > "$SITE" <<EOF
 server {
     listen $PORT ssl;
     listen [::]:$PORT ssl;
@@ -119,16 +128,50 @@ server {
     }
 }
 EOF
-ln -sf "/etc/nginx/sites-available/$DOMAIN" "/etc/nginx/sites-enabled/$DOMAIN"
-if ! nginx -T 2>/dev/null | grep -F "server_name $DOMAIN" >/dev/null; then
-  printf 'include /etc/nginx/sites-enabled/*;\n' > /etc/nginx/conf.d/000-sites-enabled.conf
+install -d /etc/nginx/sites-enabled
+ln -sf "$SITE" "$ENABLED"
+if ! nginx -T 2>/dev/null | grep -F "# configuration file /etc/nginx/sites-enabled/$DOMAIN:" >/dev/null; then
+  if [ -e "$INCLUDE" ] && ! grep -Fxq 'include /etc/nginx/sites-enabled/*;' "$INCLUDE"; then
+    echo "Existing $INCLUDE does not include sites-enabled; inspect it before retrying." >&2
+    restore_nginx
+    rm -rf "$BACKUP"
+    exit 1
+  fi
+  if [ ! -e "$INCLUDE" ]; then
+    printf 'include /etc/nginx/sites-enabled/*;\n' > "$INCLUDE"
+  fi
 fi
-nginx -t
-systemctl restart nginx
-if ! ss -tlnpH "sport = :$PORT" 2>/dev/null | grep -q nginx; then
+if ! nginx -t; then
+  restore_nginx
+  rm -rf "$BACKUP"
+  exit 1
+fi
+if ! systemctl reload-or-restart nginx; then
+  restore_nginx
+  nginx -t && systemctl reload-or-restart nginx || true
+  rm -rf "$BACKUP"
+  exit 1
+fi
+rm -rf "$BACKUP"
+if ! ss -tlnpH "sport = :$PORT" | grep -q 'users:(("nginx"'; then
   echo "nginx did not bind port $PORT; see journalctl -u nginx -n 30" >&2; exit 1
 fi
-curl -fkS --resolve "$DOMAIN:$PORT:127.0.0.1" "https://$DOMAIN:$PORT/" -o /dev/null
+systemctl enable asc-web
+systemctl restart asc-web
+for ((attempt = 1; attempt <= 15; attempt++)); do
+  if systemctl is-active --quiet asc-web &&
+     curl --noproxy '*' -fsS --max-time 2 "http://127.0.0.1:3000/" -o /dev/null &&
+     curl --noproxy '*' -fsS --max-time 3 --resolve "$DOMAIN:$PORT:127.0.0.1" "https://$DOMAIN:$PORT/" -o /dev/null; then
+    READY=1
+    break
+  fi
+  sleep 2
+done
+if [ "${READY:-0}" != 1 ]; then
+  echo 'ASC web did not pass local HTTP and HTTPS checks; recent service errors:' >&2
+  journalctl -u asc-web -n 20 --no-pager -o cat >&2 || true
+  exit 1
+fi
 echo "ASC Web origin is healthy on local HTTPS port $PORT."
 if [ "$PORT" != "$PUBLIC_PORT" ]; then
   echo "For the public URL, proxy $DOMAIN in Cloudflare and set an Origin Rule rewriting its destination port to $PORT."

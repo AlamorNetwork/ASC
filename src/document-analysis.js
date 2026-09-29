@@ -49,12 +49,14 @@ const SYNTH_SYSTEM = `تو تحلیل‌گر ساختار یک سند هستی. 
 
 function grounded(items, source, kind) {
   return list(items, kind === 'details' ? 10 : 6).flatMap((item) => {
-    const quote = plain(item?.quote, 550);
+    const quote = typeof item?.quote === 'string' ? item.quote.trim() : '';
+    // Check the entire model claim before shortening it for the report. A valid
+    // prefix must not make a fabricated suffix look like a verified quotation.
     const result = verifyAgainstText(source, quote, 'document_section_quote_matched');
     if (result.status !== 'verified') return [];
     const text = plain(item?.text ?? item?.meaning ?? item?.role, 650);
     const name = plain(item?.name ?? item?.term, 100);
-    return text || name ? [{ text, name, quote }] : [];
+    return text || name ? [{ text, name, quote: plain(quote, 550) }] : [];
   });
 }
 function cleanSection(data, section) {
@@ -73,7 +75,8 @@ function cleanSynthesis(data) {
     structure: data?.structure, timeline: data?.timeline, tensions: data?.tensions,
     hypotheses: data?.hypotheses, openQuestions: data?.openQuestions,
     nextSteps: data?.nextSteps }).map(([key, value]) => [key, Array.isArray(value)
-    ? list(value, 20).map((x) => plain(x, 700)).filter(Boolean) : value]));
+    ? list(value, 20).map((x) => plain(x, 700)).filter(Boolean)
+    : key === 'overview' ? value : []]));
 }
 
 export function renderDocumentAnalysis({ doc, sections, synthesis, total }) {
@@ -143,7 +146,7 @@ async function synthesizeAll({ pid, doc, summaries, model, ask, onProgress }) {
       const group = batches[n];
       const fingerprint = hash(model + JSON.stringify(group));
       const old = store.analysisBatch(pid, doc.id, level, n);
-      let result = old?.source_hash === fingerprint ? JSON.parse(old.result_json) : null;
+      let result = old?.source_hash === fingerprint ? cleanSynthesis(JSON.parse(old.result_json)) : null;
       if (!result) {
         onProgress?.(`جمع‌بندی گروه ${n + 1} از ${batches.length} · سطح ${level + 1}`);
         const { data } = await ask({ model, system: SYNTH_SYSTEM,

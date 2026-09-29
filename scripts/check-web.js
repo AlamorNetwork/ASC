@@ -9,7 +9,8 @@ process.env.WEB_PASSWORD = 'this-is-a-test-password-only';
 process.env.WEB_ORIGIN = 'https://asc.alamornetwork.ir';
 process.env.WEB_PRINCIPAL_ID = 'test-web-owner';
 const { createWebServer } = await import('../src/web.js');
-const { db } = await import('../src/db.js');
+const store = await import('../src/db.js');
+const { db } = store;
 const server = createWebServer();
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const url = `http://127.0.0.1:${server.address().port}`;
@@ -26,8 +27,12 @@ try {
   if (login.status !== 200) throw new Error(`login ${login.status}: ${await login.text()}`);
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const { csrf } = await login.json();
+  store.addMessage({ principalId: 'test-web-owner', dossierId: null, role: 'user', text: 'سلام' });
   const state = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
-  if (state.status !== 200 || !(await state.json()).dossiers) throw new Error('authenticated state failed');
+  if (state.status !== 200 || !(await state.json()).messages.some((m) => m.text === 'سلام'))
+    throw new Error('ordinary chat history disappeared after refresh');
+  const active = await fetch(`${url}/api/active-job`, { headers: { Cookie: cookie } });
+  if (active.status !== 200 || (await active.json()).job !== null) throw new Error('idle status failed');
   const missingDocument = await fetch(`${url}/api/analyze-document`, { method: 'POST',
     headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' },
     body: JSON.stringify({ documentId: 999 }) });

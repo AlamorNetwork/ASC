@@ -22,6 +22,7 @@ try {
     { seq: 1, page: 2, text: b.repeat(100) },
   ]);
   let sectionCalls = 0, synthesisCalls = 0;
+  const longFalseQuote = `${a.repeat(10)}این دنباله در سند نیست`;
   const ask = async ({ system }) => {
     if (system.includes('ساختار یک سند')) {
       synthesisCalls++;
@@ -32,7 +33,8 @@ try {
     if (sectionCalls === 2) throw new Error('قطع آزمایشی');
     return { data: { about: 'بررسی متن کهن', details: [
       { text: 'نسخه دوم پیدا شد', quote: 'سپس نسخه دوم پیدا شد' },
-      { text: 'نقل ساختگی', quote: 'نقل قولی که در سند نیست و مدل ساخته است' } ],
+      { text: 'نقل ساختگی', quote: 'نقل قولی که در سند نیست و مدل ساخته است' },
+      { text: 'پسوند ساختگی', quote: longFalseQuote } ],
       events: [], actors: [], concepts: [], links: ['رابطه احتمالی'], questions: [] }, usage: {} };
   };
   let interrupted = false;
@@ -52,10 +54,41 @@ try {
   yes(synthesisCalls === 1, 'synthesis did not run once');
   const markdown = fs.readFileSync(result.file, 'utf8');
   yes(markdown.includes('بخش ۱') && markdown.includes('بخش ۲'), 'missing section');
-  yes(markdown.includes('سپس نسخه دوم پیدا شد') && !markdown.includes('نقل ساختگی'), 'quote gate failed');
+  yes(markdown.includes('سپس نسخه دوم پیدا شد') && !markdown.includes('نقل ساختگی') &&
+    !markdown.includes('پسوند ساختگی'), 'quote gate failed');
   yes(markdown.includes('2 از 2 صفحه'), 'page coverage missing');
   await analyzeDocument({ principalId: pid, documentId: id, model: 'fake', ask: () => { throw new Error('bought again'); } });
-  console.log('document analysis check passed — full coverage, quote gate, partial Markdown, resume, cached synthesis; 0 model calls');
+
+  const largeId = Number(store.insertDocument({ principalId: pid, dossierId: dossier,
+    filename: 'large.txt', kind: 'text', extraction: 'local', pages: 12, readPages: 12 }));
+  store.insertChunks(pid, dossier, largeId, Array.from({ length: 12 }, (_, seq) =>
+    ({ seq, page: seq + 1, text: `بخش ${seq + 1} ` + 'متن '.repeat(1998) })));
+  let largeSections = 0, batches = 0;
+  const largeAsk = async ({ system }) => {
+    if (system.includes('ساختار یک سند')) {
+      batches++;
+      if (batches === 2) throw new Error('قطع گروهی');
+      return { data: { overview: 'جمع‌بندی گروه‌ها' } };
+    }
+    largeSections++;
+    return { data: { about: 'موضوع '.repeat(200),
+      links: Array(6).fill('رابطه '.repeat(100)),
+      questions: Array(6).fill('پرسش '.repeat(100)) } };
+  };
+  let batchInterrupted = false, batchError = '';
+  try { await analyzeDocument({ principalId: pid, documentId: largeId, model: 'fake', ask: largeAsk }); }
+  catch (err) { batchError = err.message; batchInterrupted = err.message === 'قطع گروهی'; }
+  yes(batchInterrupted && batches === 2, `batch interruption was not reached (${batches} batches, ${largeSections} sections: ${batchError})`);
+  yes(largeSections === 12, 'large document was not fully sectioned');
+  const savedBatch = store.analysisBatch(pid, largeId, 0, 0);
+  yes(savedBatch, 'first synthesis batch was not saved');
+  store.saveAnalysisBatch(pid, largeId, 0, 0, savedBatch.source_hash,
+    { overview: 'legacy sparse batch' });
+  await analyzeDocument({ principalId: pid, documentId: largeId, model: 'fake', ask: largeAsk });
+  yes(largeSections === 12 && batches === 4, 'resume repeated saved section or synthesis batch');
+  await analyzeDocument({ principalId: pid, documentId: largeId, model: 'fake',
+    ask: () => { throw new Error('large document bought again'); } });
+  console.log('document analysis check passed — coverage, full quote gate, section and batch resume, cached synthesis; 0 model calls');
 } finally {
   store.db.close();
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
