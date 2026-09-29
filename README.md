@@ -138,15 +138,18 @@ test without model spend: `node scripts/check-web.js` and
 
 #### Research team and source library
 
-In a selected dossier, add a root research question (and optionally child questions),
-then press **Run research**. ASC saves the plan before model work, runs up to three
-local-source analysts in parallel through `MODEL_STRUCTURE`, checks their quotations
-against stored passages, and lets `MODEL_COORDINATOR` summarize their reports and
-handle conversation. It follows the current structure setting until explicitly set
-with `/model coordinator MODEL@PROVIDER`.
-Agent reports are leads; the usual claim verification gate is still separate. Stop
-and run the root again to continue unfinished children. A restart pauses running
-nodes in SQLite. The dossier's Markdown ledger lists node status and open questions.
+Talk to ASC normally in the web workspace. When you explicitly ask it to research a
+topic, its coordinator chooses the root question and up to three distinct subquestions,
+saves them before work starts, and sends local-document or web-search agents in
+parallel. A plain question or request for conversation does not launch research.
+Say "ادامه بده" in that dossier to continue an unfinished root without repeating
+completed agents. The intention tree shows status and open questions; it is managed
+from chat. `MODEL_COORDINATOR` handles planning and synthesis (falling back to the
+structure model until set with `/model coordinator MODEL@PROVIDER`); workers use
+`MODEL_STRUCTURE`. Each web agent searches for its own subquestion and reads fetched
+page excerpts. Its quotations are checked against the excerpt, but its report remains
+a lead; the separate full-source claim verification gate is unchanged. A restart
+pauses running nodes in SQLite. The dossier's Markdown ledger lists their status.
 
 The source library lists documents, analysis overviews and cross-section links.
 Submit a site URL to read up to 10 same-origin HTML pages per run; submit the same URL
@@ -164,7 +167,7 @@ candidate in parallel with local analysts. OpenRouter may perform more than one 
 inside that completion, so this is a bounded workflow call, not a guaranteed dollar
 ceiling. Check reported usage before routine use.
 
-Free local checks: `node scripts/check-research-team.js`,
+Free local checks: `node scripts/check-mother.js`, `node scripts/check-research-team.js`,
 `node scripts/check-site-crawl.js`, `node scripts/check-site-library.js`, and
 `node scripts/check-source-consult.js`.
 

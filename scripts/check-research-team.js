@@ -55,6 +55,36 @@ try {
     throw new Error('cross-dossier parent accepted');
   } catch (err) { if (err.message === 'cross-dossier parent accepted') throw err; }
   if (store.getResearchNode('b', root)) throw new Error('other principal can see node');
+  const webRoot = store.createResearchNode({ principalId: pid, dossierId,
+    title: 'وب چه می‌گوید؟' });
+  store.createResearchNode({ principalId: pid, dossierId, parentId: webRoot,
+    title: 'شاهد بیرونی', assignedRole: 'web-researcher' });
+  let webQueries = 0, localQueries = 0;
+  const webResult = await runResearchTeam({ principalId: pid, dossierId, nodeId: webRoot,
+    ask, search: async () => { localQueries++; return []; }, crawl: async () => ({ pagesSaved: 0 }),
+    discover: async (query, options) => {
+      webQueries++;
+      if (query !== 'شاهد بیرونی') throw new Error('wrong delegated question');
+      const planned = await options.ask();
+      if (planned.data.queries.length) throw new Error('web worker added extra planning calls');
+      return { evidence: [{ id: 0, url: 'https://example.org/evidence', title: 'Evidence',
+        text: 'متن صفحه عبارت دقیق منبع را دارد و عامل باید آن را عیناً نقل کند.' }] };
+    } });
+  const webFinding = webResult.reports[0]?.report.findings[0];
+  if (webQueries !== 1 || localQueries || webFinding?.sourceUrl !== 'https://example.org/evidence' ||
+      webFinding?.verification !== 'quote_present_in_fetched_excerpt_only' ||
+      webResult.reports[0]?.report.findings.length !== 1)
+    throw new Error('web worker did not preserve URL and exact-quote gate');
+  const dryRoot = store.createResearchNode({ principalId: pid, dossierId, title: 'سرنخ گمشده' });
+  const dryChild = store.createResearchNode({ principalId: pid, dossierId, parentId: dryRoot,
+    title: 'متن گمشده', assignedRole: 'web-researcher' });
+  const dry = await runResearchTeam({ principalId: pid, dossierId, nodeId: dryRoot,
+    ask, crawl: async () => ({ pagesSaved: 0 }),
+    discover: async () => ({ evidence: [] }) });
+  if (!dry.incomplete.includes(dryChild) ||
+      store.getResearchNode(pid, dryRoot).status !== 'paused' ||
+      store.getResearchNode(pid, dryChild).status !== 'paused')
+    throw new Error('a dry web search lost its resumable frontier');
   console.log('research team check passed — bounded parallelism, quote gate, resume, isolation; 0 paid calls');
 } finally {
   store.db.close();

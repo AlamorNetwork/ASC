@@ -28,6 +28,9 @@ try {
   if (page.status !== 200 || !markup.includes('تالار پژوهش') ||
       !markup.includes('id="tab-deep"') || !markup.includes('id="investigation-status"'))
     throw new Error('web research controls are missing');
+  if (!markup.includes('id="tab-chat"') || markup.includes('id="tab-research"') ||
+      markup.includes('id="research-node-form"'))
+    throw new Error('web chat still requires manual research routing');
   const script = fs.readFileSync(path.join(import.meta.dirname, '..', 'web', 'public', 'app.js'), 'utf8');
   const htmlIds = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
   const referencedIds = new Set([...script.matchAll(/\$\('([^']+)'\)/g)].map((match) => match[1]));

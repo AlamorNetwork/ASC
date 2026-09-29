@@ -7,7 +7,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import { config } from './config.js';
 import * as store from './db.js';
 import * as settings from './settings.js';
-import * as chat from './chat.js';
+import { motherTurn } from './mother.js';
 import { runResearch } from './research.js';
 import { deepInvestigate } from './deep.js';
 import { ingestToDossier, extractClaimsFor, sha256 } from './ingest.js';
@@ -368,15 +368,9 @@ async function route(req, res) {
     const message = String(input.message ?? '').trim().slice(0, 4000);
     if (!message) throw new Error('پیام خالی است.');
     const dossier = input.dossierId ? requireDossier(pid, input.dossierId) : null;
-    return response(res, 202, startJob('chat', async (progress) => {
-      progress('در حال بررسی پرونده…');
-      let stream = '';
-      const onDelta = (part) => { stream += part; progress(stream.slice(-280)); };
-      return dossier ? chat.reply({ principalId: pid, dossierId: dossier.id, userText: message, onDelta,
-        onStep: (step) => progress(typeof step === 'string' ? step : JSON.stringify(step)) })
-        : chat.replyPlain({ principalId: pid, userText: message, onDelta,
-          recent: store.listDossiers(pid, 5) });
-    }));
+    return response(res, 202, startJob('chat', (progress) => motherTurn({
+      principalId: pid, dossierId: dossier?.id ?? null, userText: message,
+      onProgress: progress })));
   }
   if (url.pathname === '/api/research' && req.method === 'POST') {
     const input = await readJson(req);

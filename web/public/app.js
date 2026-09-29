@@ -1,10 +1,10 @@
 const $ = (id) => document.getElementById(id);
 let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false;
-let investigation = null;
-const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+let investigation = null, progressHideTimer = null, toastTimer = null;
+const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
-function toast(message) { $('toast').textContent = message; $('toast').hidden = false; setTimeout(() => $('toast').hidden = true, 5500); }
+function toast(message) { clearTimeout(toastTimer); $('toast').textContent = message; $('toast').hidden = false; toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
 async function api(url, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (options.method && options.method !== 'GET') headers['X-CSRF-Token'] = csrf;
@@ -31,16 +31,18 @@ async function refresh() {
 }
 function render(data) {
   investigation = data.investigation ?? null;
-  $('case-count').textContent = fa(data.dossiers.length);
-  $('stat-cases').textContent = fa(data.stats.dossiers);
-  $('stat-verified').textContent = fa(data.stats.verified);
-  $('stat-claims').textContent = fa(data.stats.claims);
-  $('case-list').innerHTML = data.dossiers.map((d) => `<button class="case-item ${selected === d.id ? 'active' : ''}" data-case="${d.id}"><span class="case-name">${esc(d.topic)}</span><small>#${d.id} · ${esc(d.state)}</small></button>`).join('');
+  const dossiers = Array.isArray(data.dossiers) ? data.dossiers : [];
+  const stats = data.stats || {};
+  $('case-count').textContent = fa(dossiers.length);
+  $('stat-cases').textContent = fa(stats.dossiers);
+  $('stat-verified').textContent = fa(stats.verified);
+  $('stat-claims').textContent = fa(stats.claims);
+  $('case-list').innerHTML = dossiers.length ? dossiers.map((d) => `<button class="case-item ${selected === d.id ? 'active' : ''}" data-case="${Number(d.id)}" ${selected === d.id ? 'aria-current="true"' : ''}><span class="case-name">${esc(d.topic)}</span><small>#${fa(d.id)} · ${esc(d.state)}</small></button>`).join('') : '<p class="rail-empty">هنوز پرونده‌ای نیست. گفت‌وگو را آغاز کن.</p>';
   for (const button of document.querySelectorAll('[data-case]')) button.onclick = async () => {
     try {
       const id = Number(button.dataset.case);
       await api('/api/select-dossier', { method:'POST', json:{ dossierId:id } });
-      selected = id; freshCase = false; $('rail').classList.remove('open'); await refresh();
+      selected = id; freshCase = false; $('rail').classList.remove('open'); $('mobile-menu').setAttribute('aria-expanded', 'false'); await refresh(); $('prompt').focus();
     } catch(e) { fail(e); }
   };
   $('breadcrumb').textContent = selected ? data.selected?.topic || 'پرونده' : 'گفت‌وگوی تازه';
@@ -49,12 +51,13 @@ function render(data) {
   $('upload-target').textContent = freshCase || !selected
     ? 'مقصد فایل بعدی: پروندهٔ تازه'
     : `مقصد فایل بعدی: ${data.selected?.topic || 'پرونده'} (#${fa(selected)})`;
-  $('messages').innerHTML = data.messages.map((m) => `<div class="message ${m.role === 'user' ? 'user' : 'assistant'}"><div class="who">${m.role === 'user' ? 'YOU' : 'ASC'}</div><p>${esc(m.text)}</p></div>`).join('');
+  $('messages').innerHTML = (Array.isArray(data.messages) ? data.messages : []).map((m) => `<div class="message ${m.role === 'user' ? 'user' : 'assistant'}"><div class="who">${m.role === 'user' ? 'شما' : 'عامل مادر'}</div><p>${esc(m.text)}</p></div>`).join('');
   $('messages').scrollTop = $('messages').scrollHeight;
-  $('document-list').innerHTML = data.documents.map((d) => `<div class="doc-row"><span title="${esc(d.filename)}">◈ ${esc(d.filename)} ${d.pages ? `· ${fa(d.read_pages ?? d.pages)}/${fa(d.pages)}` : ''}</span><span class="doc-actions">${d.id && d.extraction !== 'model_vision_pages' ? `<button class="small-action" data-claims="${d.id}">ادعاها</button>` : ''}<button class="small-action" data-analyze="${d.id}" title="مدل تمام متن ذخیره‌شده را بخش‌به‌بخش تحلیل می‌کند و ممکن است هزینه داشته باشد">تحلیل عمیق</button><a class="small-action" href="/api/document-analysis?documentId=${d.id}" title="گزارش Markdown، پس از آغاز تحلیل">MD</a></span></div>`).join('');
+  $('document-list').innerHTML = (Array.isArray(data.documents) ? data.documents : []).map((d) => `<div class="doc-row"><span title="${esc(d.filename)}">◈ ${esc(d.filename)} ${d.pages ? `· ${fa(d.read_pages ?? d.pages)}/${fa(d.pages)}` : ''}</span><span class="doc-actions">${d.id && d.extraction !== 'model_vision_pages' ? `<button class="small-action" data-claims="${Number(d.id)}">ادعاها</button>` : ''}<button class="small-action" data-analyze="${Number(d.id)}" title="تحلیل متن ذخیره‌شده ممکن است هزینه داشته باشد">تحلیل عمیق</button><a class="small-action" href="/api/document-analysis?documentId=${Number(d.id)}" title="دریافت گزارش Markdown">MD</a></span></div>`).join('');
   for (const b of document.querySelectorAll('[data-claims]')) b.onclick = async () => { try { const r = await api('/api/claims', { method:'POST', json:{ documentId:Number(b.dataset.claims) } }); watch(r.id, 'استخراج ادعاها'); } catch(e){fail(e);} };
   for (const b of document.querySelectorAll('[data-analyze]')) b.onclick = async () => { try { const r = await api('/api/analyze-document', { method:'POST', json:{ documentId:Number(b.dataset.analyze) } }); watch(r.id, 'تحلیل عمیق سند'); } catch(e){fail(e);} };
-  $('claims-list').innerHTML = data.claims.length ? data.claims.slice(-15).reverse().map((c) => `<div class="claim ${c.status === 'verified' ? '' : 'found'}">${c.status === 'verified' ? '✓ تأیید' : '◇ نیاز به بررسی'} · ${esc(c.text)}<small>${esc(c.source_title || c.source_url || 'منبع نامشخص')}</small></div>`).join('') : '<p class="muted">هنوز شاهدی ثبت نشده است.</p>';
+  const claims = Array.isArray(data.claims) ? data.claims : [];
+  $('claims-list').innerHTML = claims.length ? claims.slice(-15).reverse().map((c) => `<div class="claim ${c.status === 'verified' ? '' : 'found'}">${c.status === 'verified' ? '✓ تأیید' : '◇ نیاز به بررسی'} · ${esc(c.text)}<small>${esc(c.source_title || c.source_url || 'منبع نامشخص')}</small></div>`).join('') : '<p class="muted">هنوز شاهدی ثبت نشده است.</p>';
   renderResearch(data.researchNodes);
   renderSources(data.sources);
   renderInvestigation();
@@ -66,11 +69,8 @@ function safeWebUrl(value) {
   } catch { return null; }
 }
 function renderResearch(rawNodes) {
-  const form = $('research-node-form');
-  form.hidden = !selected;
   if (!selected) {
     $('research-tree').innerHTML = '<p class="muted">برای دیدن پرسش‌ها، پرونده‌ای انتخاب کن.</p>';
-    $('research-parent').innerHTML = '';
     return;
   }
   const nodes = Array.isArray(rawNodes) ? rawNodes.filter((n) => n && Number.isSafeInteger(Number(n.id)) && Number(n.id) > 0) : [];
@@ -83,48 +83,31 @@ function renderResearch(rawNodes) {
     children.get(key).push(node);
   }
   const visited = new Set();
-  const options = ['<option value="">پرسش اصلی (ریشه)</option>'];
   function branch(node, depth) {
     const id = Number(node.id);
     if (visited.has(id)) return '';
     visited.add(id);
-    options.push(`<option value="${id}">${esc(`${'— '.repeat(Math.min(depth, 12))}${node.title || 'بی‌عنوان'}`)}</option>`);
-    const status = node.status ? `<span class="research-status">${esc(node.status)}</span>` : '';
+    const statusNames = { pending:'در صف', running:'در حال بررسی', paused:'مکث', done:'تکمیل', completed:'تکمیل', failed:'خطا' };
+    const status = `<span class="research-status" data-status="${esc(node.status || 'pending')}">${esc(statusNames[node.status] || node.status || 'در صف')}</span>`;
     const question = node.open_question ? `<p>${esc(node.open_question)}</p>` : '';
     let result = null;
     try { result = JSON.parse(node.result_json || 'null'); } catch { /* unfinished output */ }
     const summary = result?.summary ? `<p class="research-summary">${esc(result.summary)}</p>` : '';
-    const findings = Array.isArray(result?.findings) ? result.findings.slice(0, 5).map((f) =>
-      `<li>${esc(f.text)} <small>سند #${fa(f.documentId)}${f.page ? ` · ص ${fa(f.page)}` : ''} · نقل‌قول در متن موجود است؛ صحت ادعا هنوز داوری نشده</small></li>`).join('') : '';
+    const findings = Array.isArray(result?.findings) ? result.findings.slice(0, 5).map((f) => {
+      const url = safeWebUrl(f?.sourceUrl);
+      const source = url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(f?.sourceTitle || f.sourceUrl)}</a>`
+        : f?.sourceTitle ? esc(f.sourceTitle)
+        : Number.isSafeInteger(Number(f?.documentId)) && Number(f.documentId) > 0 ? `سند #${fa(f.documentId)}` : 'منبع نامشخص';
+      return `<li>${esc(f?.text)} <small>${source}${f?.page ? ` · ص ${fa(f.page)}` : ''} · صحت ادعا هنوز داوری نشده</small></li>`;
+    }).join('') : '';
     const resultView = summary || findings ? `<details><summary>گزارش عامل</summary>${summary}${findings ? `<ul>${findings}</ul>` : ''}</details>` : '';
     const role = node.assigned_role ? `<small>نقش: ${esc(node.assigned_role)}</small>` : '';
-    const run = (node.parent_id == null || node.parent_id === '' || node.parent_id === 0) && ['pending', 'paused'].includes(node.status)
-      ? `<button type="button" class="small-action" data-research-run="${id}" aria-label="اجرای پژوهش ${esc(node.title || 'بی‌عنوان')}" ${busy ? 'disabled' : ''}>اجرای پژوهش</button>` : '';
     const descendants = (children.get(id) || []).map((child) => branch(child, depth + 1)).join('');
-    return `<li><div class="research-node"><strong>${esc(node.title || 'بی‌عنوان')}</strong>${status}${question}${role}${resultView}<div class="research-actions"><button type="button" class="small-action" data-research-child="${id}" aria-label="افزودن زیرپرسش به ${esc(node.title || 'بی‌عنوان')}">＋ زیرپرسش</button>${run}</div></div>${descendants ? `<ul>${descendants}</ul>` : ''}</li>`;
+    return `<li><div class="research-node"><div class="research-node-head"><strong>${esc(node.title || 'بی‌عنوان')}</strong>${status}</div>${question}${role}${resultView}</div>${descendants ? `<ul>${descendants}</ul>` : ''}</li>`;
   }
   const roots = children.get(0) || [];
   const tree = [...roots, ...nodes.filter((n) => !roots.includes(n))].map((node) => branch(node, 0)).join('');
-  $('research-tree').innerHTML = tree ? `<ul class="research-roots">${tree}</ul>` : '<p class="muted">هنوز پرسشی ثبت نشده است. یک پرسش اصلی بساز.</p>';
-  const parent = $('research-parent');
-  const prior = parent.value;
-  parent.innerHTML = options.join('');
-  if (options.some((option) => option.includes(`value="${prior}"`))) parent.value = prior;
-  for (const button of $('research-tree').querySelectorAll('[data-research-child]')) button.onclick = () => {
-    parent.value = button.dataset.researchChild;
-    $('research-title').focus();
-  };
-  for (const button of $('research-tree').querySelectorAll('[data-research-run]')) button.onclick = async () => {
-    if (busy || !selected) return;
-    if (!confirm('گروه پژوهش تا ۳ عامل متنی را موازی اجرا می‌کند و برای برنامه‌ریزی و جمع‌بندی هم مدل صدا می‌زند. هزینه بسته به مدل تنظیم‌شده است. شروع شود؟')) return;
-    setBusy(true);
-    try {
-      const job = await api('/api/research-nodes/run', { method:'POST', json:{ nodeId:Number(button.dataset.researchRun) } });
-      if (job.id) watch(job.id, 'اجرای پژوهش');
-      else { setBusy(false); await refresh(); }
-    } catch (err) { setBusy(false); fail(err); }
-  };
-  form.querySelector('button[type="submit"]').disabled = busy;
+  $('research-tree').innerHTML = tree ? `<ul class="research-roots">${tree}</ul>` : '<p class="muted">هنوز نیتی ثبت نشده است. به عامل مادر بگو چه چیزی را بررسی کند.</p>';
 }
 function renderSources(rawSources) {
   $('site-form').hidden = !selected;
@@ -194,15 +177,35 @@ async function startDeep({ resume = false } = {}) {
 }
 async function loadUploads() {
   const list = await api('/api/uploads');
-  $('upload-list').innerHTML = list.map((m) => {
+  $('upload-list').innerHTML = (Array.isArray(list) ? list : []).map((m) => {
     const progress = m.pages ? ` · ${fa(m.readPages ?? 0)}/${fa(m.pages)} صفحه` : '';
     const destination = m.dossierId ? `پرونده #${fa(m.dossierId)}` : m.newDossier ? 'پروندهٔ تازه' : 'پروندهٔ فعال';
     return `<div class="upload-row"><span title="${esc(m.name)}">${esc(m.name)}<small>${destination}${progress}</small></span><span class="upload-actions"><button class="small-action" data-upload="${esc(m.id)}" data-mode="detect">بررسی</button>${/\.pdf$/i.test(m.name) && (!m.pages || m.readPages < m.pages) ? `<button class="small-action" data-upload="${esc(m.id)}" data-mode="batch">۲۰ صفحه</button><button class="small-action" data-upload="${esc(m.id)}" data-mode="all">تا پایان</button>` : ''}</span></div>`;
-  }).join('');
+  }).join('') || '<p class="muted">فایلی در انتظار خواندن نیست.</p>';
   for (const b of document.querySelectorAll('[data-upload]')) b.onclick = () => beginImport(b.dataset.upload, b.dataset.mode);
 }
 function fail(e) { toast(e.message || String(e)); }
-function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value; $('resume-deep').disabled = value; $('research-node-form').querySelector('button[type="submit"]').disabled = value; $('site-form').querySelector('button[type="submit"]').disabled = value; $('consult-form').querySelector('button[type="submit"]').disabled = value; for (const button of $('research-tree').querySelectorAll('[data-research-run]')) button.disabled = value; }
+function handleAction(action) {
+  if (!action || typeof action !== 'object') return;
+  if (action.type === 'propose_team' && action.requiresApproval !== false && action.approvalRequired !== false) {
+    const node = Number(action.nodeId);
+    const label = action.title || action.summary || 'پیشنهاد گروه پژوهش';
+    addMessage('assistant', `${label}\nبرای تأیید، در همین گفت‌وگو به عامل مادر بگو این مسیر را آغاز کند.${Number.isSafeInteger(node) && node > 0 ? ` (نیت #${fa(node)})` : ''}`);
+  } else if (action.type === 'team_started' || action.type === 'team_resumed') {
+    toast(action.type === 'team_started' ? 'گروه پژوهش آغاز به کار کرد؛ وضعیت را در درخت نیت ببین.' : 'گروه پژوهش ادامه داد؛ وضعیت را در درخت نیت ببین.');
+  }
+}
+function selectResultDossier(result) {
+  const id = Number(result?.dossierId);
+  if (Number.isSafeInteger(id) && id > 0) { selected = id; freshCase = false; }
+}
+function showChatResult(result) {
+  if (typeof result?.text !== 'string' || !result.text.trim()) return;
+  const last = $('messages').lastElementChild;
+  if (last?.classList.contains('assistant') && last.querySelector('p')?.textContent === result.text) return;
+  addMessage('assistant', result.text);
+}
+function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value; $('resume-deep').disabled = value; $('site-form').querySelector('button[type="submit"]').disabled = value; $('consult-form').querySelector('button[type="submit"]').disabled = value; }
 async function beginImport(id, visionMode = 'detect') {
   if (busy) return toast('یک کار دیگر در حال اجراست.');
   if (visionMode !== 'detect' && !confirm(visionMode === 'all'
@@ -216,13 +219,23 @@ async function beginImport(id, visionMode = 'detect') {
   } catch(e) { fail(e); }
 }
 async function watch(id, title) {
+  if (!id) return;
+  clearTimeout(progressHideTimer);
   activeJob = id; setBusy(true); $('progress').hidden = false; $('progress-title').textContent = title;
+  $('progress-detail').textContent = 'در حال آماده‌سازی…';
+  $('progress-summary').hidden = true;
+  $('progress-track').removeAttribute('aria-valuenow');
+  $('progress-fill').classList.add('indeterminate');
+  $('stop-job').hidden = false;
   const started = Date.now();
   while (activeJob === id) {
     try {
       const job = await api(`/api/jobs/${id}`);
       $('progress-time').textContent = formatTime(Date.now() - started);
       $('progress-detail').textContent = job.stage || 'در حال انجام…';
+      const summary = job.summary || job.result?.summary;
+      $('progress-summary').hidden = !summary;
+      if (summary) $('progress-summary').textContent = String(summary);
       if (job.kind === 'deep' && job.state === 'running') {
         const status = `در حال کاوش · ${job.stage || 'در حال آماده‌سازی…'}`;
         if ($('investigation-status').textContent !== status) $('investigation-status').textContent = status;
@@ -232,16 +245,20 @@ async function watch(id, title) {
       const analysis = /(?:تحلیل )?بخش\s+(\d+)\s+از\s+(\d+)/.exec(job.stage || '');
       const part = page || vector || analysis;
       $('progress-fill').classList.toggle('indeterminate', !part);
-      if (part) $('progress-fill').style.width = `${Math.max(3, Math.min(100, Math.round(Number(part[1]) / Number(part[2]) * 100)))}%`;
+      if (part && Number(part[2]) > 0) {
+        const percent = Math.max(3, Math.min(100, Math.round(Number(part[1]) / Number(part[2]) * 100)));
+        $('progress-fill').style.width = `${percent}%`;
+        $('progress-track').setAttribute('aria-valuenow', String(percent));
+      } else $('progress-track').removeAttribute('aria-valuenow');
       if (job.state !== 'running') {
         activeJob = null; setBusy(false); $('progress-fill').classList.remove('indeterminate'); $('progress-fill').style.width = '100%';
-        setTimeout(() => { $('progress').hidden = true; $('progress-fill').style.width = '5%'; }, 1400);
-        if (job.state === 'failed') toast(job.savedScan ? `${job.error} · تا صفحه ${job.savedScan.readPages} ذخیره شد.` : job.error);
+        $('progress-track').setAttribute('aria-valuenow', '100');
+        $('progress-detail').textContent = job.state === 'failed' ? `خطا: ${job.error || 'کار ناموفق بود.'}` : job.state === 'done' ? 'کار پایان یافت.' : 'کار متوقف شد.';
+        $('stop-job').hidden = true;
+        progressHideTimer = setTimeout(() => { if (!activeJob) $('progress').hidden = true; }, job.state === 'failed' ? 12000 : 4500);
+        if (job.state === 'failed') toast(job.savedScan ? `${job.error} · تا صفحه ${job.savedScan.readPages} ذخیره شد.` : job.error || 'کار ناموفق بود.');
         if (job.state === 'done') {
-          if (job.result?.dossierId) {
-            selected = Number(job.result.dossierId); freshCase = false;
-          }
-          if (job.kind === 'chat' && !selected) addMessage('assistant', job.result?.text || '');
+          selectResultDossier(job.result);
           if (job.kind === 'research') toast('تحقیق ثبت شد؛ یافته‌ها را در پرونده ببین.');
           if (job.kind === 'import') toast(job.result?.alreadyRead ? 'این سند قبلاً خوانده شده است.' : job.result?.pages
             ? `${fa(job.result.readPages)} از ${fa(job.result.pages)} صفحه ذخیره شد${job.result.readPages < job.result.pages ? '؛ برای ادامه «تا پایان» را بزن.' : '.'}`
@@ -253,20 +270,21 @@ async function watch(id, title) {
           if (job.kind === 'consult') toast(`${fa(job.result?.sources?.length)} نشانی پیشنهادی ثبت شد؛ هنوز تأیید نشده‌اند.`);
         }
         if (job.state === 'needs_vision') {
-          selected = Number(job.result.dossierId);
-          freshCase = false;
-          toast(`PDF اسکن‌شده است؛ ${fa(job.result.readPages)} از ${fa(job.result.pages)} صفحه خوانده شده. برای ادامه، «۲۰ صفحه» یا «تا پایان» را بزن.`);
+          selectResultDossier(job.result);
+          toast(`PDF اسکن‌شده است؛ ${fa(job.result?.readPages)} از ${fa(job.result?.pages)} صفحه خوانده شده. برای ادامه، «۲۰ صفحه» یا «تا پایان» را بزن.`);
         }
-        await refresh();
+        try { await refresh(); }
+        finally { if (job.state === 'done' && job.kind === 'chat') showChatResult(job.result); }
+        if (job.state === 'done') handleAction(job.result?.action || job.action);
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
-    } catch(e) { activeJob = null; setBusy(false); $('progress').hidden = true; fail(e); break; }
+    } catch(e) { activeJob = null; setBusy(false); $('progress-detail').textContent = 'ارتباط با وضعیت کار قطع شد. با تازه‌سازی، وضعیت را دوباره بررسی کن.'; $('stop-job').hidden = true; fail(e); break; }
   }
 }
 function addMessage(role, text) {
   const box = document.createElement('div'); box.className = `message ${role}`;
-  const who = document.createElement('div'); who.className = 'who'; who.textContent = role === 'user' ? 'YOU' : 'ASC';
+  const who = document.createElement('div'); who.className = 'who'; who.textContent = role === 'user' ? 'شما' : 'عامل مادر';
   const p = document.createElement('p'); p.textContent = text;
   box.append(who, p); $('messages').append(box); $('messages').scrollTop = $('messages').scrollHeight;
 }
@@ -294,45 +312,45 @@ $('login-form').onsubmit = async (e) => { e.preventDefault(); $('login-error').t
   catch(err){ $('login-error').textContent = err.message; } };
 $('logout').onclick = async () => { await api('/api/logout', { method:'POST' }).catch(() => {}); csrf=''; displayAuth(false); };
 $('refresh').onclick = () => refresh().catch(fail);
-$('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; $('breadcrumb').textContent='گفت‌وگوی تازه'; $('rail').classList.remove('open'); refresh().catch(fail); };
-$('mobile-menu').onclick = () => $('rail').classList.toggle('open');
-for (const [id, value] of [['tab-chat','chat'],['tab-research','research'],['tab-deep','deep']]) $(id).onclick = () => {
+$('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; $('breadcrumb').textContent='گفت‌وگوی تازه'; $('rail').classList.remove('open'); $('mobile-menu').setAttribute('aria-expanded', 'false'); refresh().then(() => $('prompt').focus()).catch(fail); };
+$('mobile-menu').onclick = () => {
+  const open = $('rail').classList.toggle('open');
+  $('mobile-menu').setAttribute('aria-expanded', String(open));
+  if (open) $('new-case').focus();
+};
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && $('rail').classList.contains('open')) {
+    $('rail').classList.remove('open');
+    $('mobile-menu').setAttribute('aria-expanded', 'false');
+    $('mobile-menu').focus();
+  }
+});
+for (const [id, value] of [['tab-chat','chat'],['tab-deep','deep']]) $(id).onclick = () => {
   mode=value;
-  for (const [tab, kind] of [['tab-chat','chat'],['tab-research','research'],['tab-deep','deep']]) {
+  for (const [tab, kind] of [['tab-chat','chat'],['tab-deep','deep']]) {
     $(tab).classList.toggle('selected', value === kind);
     $(tab).setAttribute('aria-pressed', String(value === kind));
   }
   $('deep-options').hidden = value !== 'deep';
   $('deep-ceiling').disabled = value !== 'deep';
-  $('prompt').placeholder = value === 'deep' ? 'پرسش اصلی کاوش عمیق چیست؟' : value === 'research' ? 'در چه موضوعی تحقیق کنم؟' : 'پرسش یا ایده‌ات را بنویس…';
-  $('compose-hint').textContent = value === 'deep' ? 'کاوش تنها با ارسال و پس از تأیید سقف هزینه شروع می‌شود. در پروندهٔ انتخابی ثبت خواهد شد.' : value === 'research' ? 'با ارسال، تحقیق وب و بررسی منابع شروع می‌شود و ممکن است هزینه داشته باشد.' : 'برای تحقیق وب، تب «تحقیق وب» را انتخاب کن؛ جست‌وجو خودکار شروع نمی‌شود.';
+  $('prompt').placeholder = value === 'deep' ? 'پرسش اصلی کاوش عمیق چیست؟' : 'پرسش یا دستورت را به عامل مادر بگو…';
+  $('compose-hint').textContent = value === 'deep' ? 'این مسیر مستقل از گفت‌وگو با عامل مادر است؛ پس از تأیید سقف هزینه آغاز می‌شود و در پرونده ثبت خواهد شد.' : 'با عامل مادر حرف بزن. وقتی صریحاً دستور تحقیق بدهی، خودش زیرنیت‌ها را می‌سازد و عامل‌ها را مأمور می‌کند.';
 };
 $('compose-form').onsubmit = async (e) => { e.preventDefault(); if (busy) return;
   const message=$('prompt').value.trim(); if (!message) return;
-  if (mode === 'deep') return startDeep();
-  try { const r=await api(`/api/${mode}`, { method:'POST', json:{ message, question:message, dossierId:selected } });
-    $('prompt').value=''; addMessage('user',message); watch(r.id,mode==='chat'?'در حال پاسخ':'در حال تحقیق وب'); }
-  catch(err){fail(err);} };
+  const requestMode = mode;
+  if (requestMode === 'deep') return startDeep();
+  try { setBusy(true); const r=await api(`/api/${requestMode}`, { method:'POST', json:{ message, question:message, dossierId:selected } });
+    $('prompt').value=''; addMessage('user',message);
+    if (r.id) watch(r.id,requestMode==='chat'?'عامل مادر در حال بررسی':'در حال تحقیق وب');
+    else {
+      selectResultDossier(r);
+      try { await refresh(); } finally { if (requestMode === 'chat') showChatResult(r); }
+      handleAction(r.action);
+      setBusy(false);
+    } }
+  catch(err){setBusy(false);fail(err);} };
 $('resume-deep').onclick = () => startDeep({ resume:true });
-$('research-node-form').onsubmit = async (e) => {
-  e.preventDefault();
-  if (busy || !selected) return;
-  const title = $('research-title').value.trim();
-  const openQuestion = $('research-question').value.trim();
-  const parentId = $('research-parent').value ? Number($('research-parent').value) : null;
-  if (!title) return $('research-title').focus();
-  const status = $('research-form-status');
-  status.textContent = 'در حال ثبت…';
-  setBusy(true);
-  try {
-    await api('/api/research-nodes', { method:'POST', json:{ dossierId:selected, ...(parentId ? { parentId } : {}), title, ...(openQuestion ? { openQuestion } : {}) } });
-    $('research-title').value = '';
-    $('research-question').value = '';
-    status.textContent = 'پرسش ثبت شد.';
-    await refresh();
-  } catch (err) { status.textContent = err.message || 'ثبت پرسش ناموفق بود.'; fail(err); }
-  finally { setBusy(false); }
-};
 $('site-form').onsubmit = async (e) => {
   e.preventDefault();
   if (busy || !selected) return;
@@ -369,4 +387,4 @@ const zone=$('drop-zone'); zone.ondragover=(e)=>{e.preventDefault();zone.classLi
 zone.ondragleave=()=>zone.classList.remove('dragging'); zone.ondrop=(e)=>{e.preventDefault();zone.classList.remove('dragging');sendFile(e.dataTransfer.files[0]);};
 $('ledger').onclick = () => { if (selected) window.location.href=`/api/ledger?dossierId=${selected}`; };
 $('stop-job').onclick = async () => { try { await api('/api/stop',{method:'POST'}); toast('درخواست توقف ثبت شد؛ پس از گام جاری می‌ایستد.'); } catch(e){fail(e);} };
-api('/api/session').then((r)=>{csrf=r.csrf;displayAuth(true);return refresh();}).catch(()=>displayAuth(false));
+api('/api/session').then((r)=>{csrf=r.csrf;displayAuth(true);return refresh();}).catch((err)=>{displayAuth(false);if (!/HTTP 401|وارد حساب شو/.test(err.message)) $('login-error').textContent = 'اتصال برقرار نشد. اتصال را بررسی و دوباره تلاش کن.';});
