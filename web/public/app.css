@@ -39,7 +39,7 @@ a{color:var(--copper-strong)}
 .login-footer{border-top:1px solid var(--line);padding-top:18px;margin-top:35px;color:var(--muted);font:700 10px var(--latin);letter-spacing:.14em;direction:ltr}
 
 /* App frame: archive rail / active conversation / working dossier. */
-.app-shell{position:fixed;inset:0;display:grid;grid-template-columns:244px minmax(0,1fr);height:100vh;height:100dvh;width:100%;overflow:hidden;direction:rtl}
+.app-shell{position:fixed;inset:0;display:grid;grid-template-columns:244px minmax(0,1fr);height:100vh;height:100dvh;width:100%;overflow:clip;direction:rtl}
 .rail{display:flex;flex-direction:column;min-width:0;min-height:0;padding:31px 15px 20px;background:var(--ink-deep);color:#e9e8df;border-left:1px solid #465160}
 .rail-brand{display:flex;align-items:center;gap:12px;padding:0 12px 38px;direction:ltr;justify-content:flex-end}
 .mini-seal{width:41px;height:41px;font-size:24px;flex:none;color:#e2a77e;border-color:#a8765c}
@@ -65,7 +65,7 @@ a{color:var(--copper-strong)}
 .signal{font-size:11px;color:#b9d6c6}
 .signal i,.pulse,.top-mark i{display:inline-block;width:7px;height:7px;margin-left:6px;border-radius:50%;background:#79b99d;box-shadow:0 0 0 4px #79b99d1e}
 .rail-bottom .text-button{color:#e5aa80;font-size:11px;margin-top:9px}
-.main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden}
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:clip}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;flex:none;height:75px;padding:0 29px;border-bottom:1px solid var(--line);background:#fffdf8}
 .topbar-title{min-width:0}.topbar .eyebrow{color:#987b66;font-size:9px}
 .breadcrumb{max-width:46vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:18px;font-weight:800;line-height:1.35;margin-top:4px}
@@ -169,7 +169,8 @@ a{color:var(--copper-strong)}
 .inspector-form label{font-size:10px;font-weight:700}.inspector-form input{width:100%;min-width:0;min-height:37px;padding:7px 9px;border:1px solid #c9c4b8;border-radius:4px;background:#fff;color:var(--ink)}
 .inspector-form button{justify-self:start}.form-feedback{margin:0;min-height:1em;color:var(--green);font-size:10px}
 .upload-target{padding:9px 11px;margin:11px 0;border-right:2px solid var(--copper);background:#e9e1d5;font-size:10px;overflow-wrap:anywhere}
-.drop-zone{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:129px;padding:13px;text-align:center;cursor:pointer;border:1px dashed #bdad96;border-radius:5px;background:#faf7f0}
+.drop-zone{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:129px;padding:13px;text-align:center;cursor:pointer;border:1px dashed #bdad96;border-radius:5px;background:#faf7f0}
+.drop-zone input.sr-only{top:0;right:0}
 .drop-zone:hover,.drop-zone.dragging{border-color:var(--copper);background:#f9eee1}
 .drop-zone:focus-within{outline:2px solid var(--copper);outline-offset:3px}
 .drop-icon{font:34px var(--latin);line-height:1;color:var(--copper)}
