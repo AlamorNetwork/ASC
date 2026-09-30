@@ -5,7 +5,7 @@ import path from 'node:path';
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'asc-mother-check-'));
 process.env.ASC_DB = path.join(temp, 'check.db');
 const store = await import('../src/db.js');
-const { motherTurn, normalizePlan } = await import('../src/mother.js');
+const { motherTurn, motherSourceContext, normalizePlan } = await import('../src/mother.js');
 try {
   const pid = 'owner';
   let teamCalls = 0;
@@ -35,6 +35,30 @@ try {
   if (teamCalls !== 2 || resumed.dossierId !== planned.dossierId ||
       store.dossierResearchNodes(pid, planned.dossierId).length !== 3)
     throw new Error('resume duplicated intentions');
+  const docId = Number(store.insertDocument({ principalId: pid, dossierId: planned.dossierId,
+    filename: 'متن میترائیسم.pdf', kind: 'pdf', extraction: 'model_vision_pages', pages: 480,
+    readPages: 20, charCount: 120 }));
+  store.insertChunks(pid, planned.dossierId, docId, [
+    { seq: 0, page: 4, text: 'در این بخش، میترائیسم در روم باستان و نقش آیین‌های رازآمیز بررسی شده است.' },
+  ]);
+  store.saveAnalysisSynthesis(pid, docId, 'hash', 'test-model',
+    { overview: 'خلاصهٔ تحلیلیِ بخش خوانده‌شده؛ هنوز شاهد مستقل نیست.' });
+  let packet;
+  await motherTurn({ principalId: pid, dossierId: planned.dossierId,
+    userText: 'در سند میترائیسم چه آمده؟', team,
+    ask: async ({ content }) => { packet = JSON.parse(content); return {
+      data: { action: 'respond', reply: 'صفحهٔ ۴ دربارهٔ میترائیسم است.' }, usage: {} }; } });
+  const evidence = packet?.dossier?.evidence;
+  if (!evidence?.sources?.some((s) => s.documentId === docId && s.title === 'متن میترائیسم.pdf' &&
+      s.readPages === 20 && s.pages === 480 && s.overview.includes('خلاصهٔ تحلیلی')) ||
+      !evidence.excerpts?.some((p) => p.page === 4 && p.text.includes('میترائیسم')))
+    throw new Error('mother cannot see scoped source catalogue and read passages');
+  if (!packet.dossier.agents?.some((n) => n.id === root.id && n.role === 'coordinator'))
+    throw new Error('mother cannot see the work it delegated');
+  if (!motherSourceContext(pid, planned.dossierId, 'دفترچه MD')?.ledger?.includes('دفترچهٔ تحقیق'))
+    throw new Error('mother cannot read its research ledger');
+  if (motherSourceContext('other', planned.dossierId, 'میترائیسم') !== null)
+    throw new Error('mother read another principal\'s sources');
   const rejected = normalizePlan({ action: 'crawl_site', url: 'https://other.org/' },
     'این لینک را بخوان: https://example.org/');
   if (rejected.action !== 'respond') throw new Error('model-invented URL was accepted');

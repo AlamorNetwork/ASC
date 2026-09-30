@@ -604,6 +604,12 @@ export const getResearchNode = (principalId, id) => db.prepare(`SELECT * FROM re
 export const dossierResearchNodes = (principalId, dossierId) => db.prepare(`SELECT * FROM research_nodes
   WHERE principal_id=? AND dossier_id=? ORDER BY id`).all(principalId, dossierId);
 
+/** Lightweight public progress view: leave reports and source text in their own routes. */
+export const dossierResearchProgress = (principalId, dossierId) => db.prepare(`
+  SELECT id,parent_id,title,open_question,assigned_role,status,progress_stage,updated_at
+  FROM research_nodes WHERE principal_id=? AND dossier_id=? ORDER BY id
+`).all(principalId, dossierId);
+
 export function updateResearchNode(principalId, id, { status, openQuestion, result }) {
   if (!['pending','running','paused','done','failed'].includes(status)) throw new Error('وضعیت نیت نامعتبر است.');
   return db.prepare(`UPDATE research_nodes SET status=?,open_question=?,result_json=?,updated_at=?
@@ -611,8 +617,16 @@ export function updateResearchNode(principalId, id, { status, openQuestion, resu
       result == null ? null : JSON.stringify(result), new Date().toISOString(), principalId, id).changes;
 }
 
+/** A durable, principal-scoped live checkpoint; preserves the last saved result. */
+export function setResearchNodeStage(principalId, id, stage) {
+  return db.prepare(`UPDATE research_nodes SET progress_stage=?,updated_at=?
+    WHERE principal_id=? AND id=?`).run(String(stage ?? '').slice(0, 240),
+      new Date().toISOString(), principalId, id).changes;
+}
+
 export const pauseInterruptedResearchNodes = () => db.prepare(`UPDATE research_nodes
-  SET status='paused', updated_at=? WHERE status='running'`).run(new Date().toISOString()).changes;
+  SET status='paused', progress_stage='اجرا قطع شد؛ آمادهٔ ادامه', updated_at=?
+  WHERE status='running'`).run(new Date().toISOString()).changes;
 
 export const dossierDocuments = (principalId, dossierId) =>
   db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)
@@ -972,6 +986,7 @@ function addColumn(table, column, type) {
 // rather than paying to read the same pages again.
 addColumn('documents', 'sha256', 'TEXT');
 addColumn('documents', 'read_pages', 'INTEGER');
+addColumn('research_nodes', 'progress_stage', 'TEXT');
 // A watch can carry its own question, so "keep looking into this" is not limited to
 // the dossier's headline topic.
 addColumn('intentions', 'question', 'TEXT');

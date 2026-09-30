@@ -26,7 +26,8 @@ export function renderResearchLedger({ dossier, documents = [], claims = [], epi
   lines.push('', '## نیت‌ها و زیرنیت‌های پژوهش');
   if (researchNodes.length) for (const node of researchNodes.slice(-25)) {
     const parent = node.parent_id ? `زیرنیتِ #${node.parent_id}` : 'نیت اصلی';
-    lines.push(`- #${node.id} ${parent} · ${clean(node.status, 30)} · ${clean(node.title, 220)}`);
+    lines.push(`- #${node.id} ${parent} · ${clean(node.assigned_role, 40)} · ${clean(node.status, 30)} · ${clean(node.title, 220)}`);
+    if (node.progress_stage) lines.push(`  - گام جاری/آخر: ${clean(node.progress_stage, 220)}`);
     if (node.open_question) lines.push(`  - پرسش باز: ${clean(node.open_question, 240)}`);
   } else lines.push('- هنوز نیتی ثبت نشده است.');
 

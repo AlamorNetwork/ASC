@@ -49,7 +49,7 @@ export function dossierContextFor(principalId, dossierId) {
   const nodes = store.dossierResearchNodes(principalId, dossierId);
   if (nodes.length) {
     L.push('', 'نقشهٔ کار پژوهشی (گزارش عامل‌ها سرنخ است، نه شاهد تأییدشده):');
-    for (const n of nodes.slice(-18)) L.push(`- #${n.id}${n.parent_id ? ` زیر #${n.parent_id}` : ' اصلی'} · ${n.status}: ${n.title}${n.open_question ? ` · باز: ${n.open_question}` : ''}`);
+    for (const n of nodes.slice(-18)) L.push(`- #${n.id}${n.parent_id ? ` زیر #${n.parent_id}` : ' اصلی'} · ${n.assigned_role} · ${n.status}: ${n.title}${n.progress_stage ? ` · گام: ${n.progress_stage}` : ''}${n.open_question ? ` · باز: ${n.open_question}` : ''}`);
   }
 
   const verified = by('verified');

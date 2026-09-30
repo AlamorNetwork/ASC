@@ -290,6 +290,13 @@ async function route(req, res) {
   }
   if (url.pathname === '/api/state' && req.method === 'GET')
     return response(res, 200, state(pid, url.searchParams.get('dossierId'), url.searchParams.get('fresh') === '1'));
+  if (url.pathname === '/api/research-progress' && req.method === 'GET') {
+    const dossier = url.searchParams.get('dossierId')
+      ? requireDossier(pid, url.searchParams.get('dossierId'))
+      : store.getDossier(pid, settings.activeDossier(pid));
+    return response(res, 200, { dossierId: dossier?.id ?? null,
+      nodes: dossier ? store.dossierResearchProgress(pid, dossier.id) : [] });
+  }
   if (url.pathname === '/api/research-nodes' && req.method === 'POST') {
     const input = await readJson(req);
     const dossier = requireDossier(pid, input.dossierId);

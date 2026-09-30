@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false;
-let investigation = null, progressHideTimer = null, toastTimer = null;
+let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', monitorTimer = null;
 const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
@@ -16,6 +16,17 @@ async function api(url, options = {}) {
   return data;
 }
 function displayAuth(ok) { $('login').hidden = ok; $('app').hidden = !ok; }
+async function pollAgentMonitor() {
+  if (!selected || freshCase || document.hidden || activeJob || $('app').hidden) return;
+  const dossierId = selected;
+  try {
+    const live = await api(`/api/research-progress?dossierId=${dossierId}`);
+    if (selected === dossierId && !freshCase) renderAgentMonitor(live.nodes);
+  } catch { /* the next refresh can retry without interrupting the conversation */ }
+}
+function startAgentMonitor() {
+  if (!monitorTimer) monitorTimer = setInterval(pollAgentMonitor, 2500);
+}
 async function refresh() {
   const q = freshCase ? '?fresh=1' : selected ? `?dossierId=${selected}` : '';
   const data = await api(`/api/state${q}`);
@@ -59,9 +70,29 @@ function render(data) {
   for (const b of document.querySelectorAll('[data-analyze]')) b.onclick = async () => { try { const r = await api('/api/analyze-document', { method:'POST', json:{ documentId:Number(b.dataset.analyze) } }); watch(r.id, 'تحلیل عمیق سند'); } catch(e){fail(e);} };
   const claims = Array.isArray(data.claims) ? data.claims : [];
   $('claims-list').innerHTML = claims.length ? claims.slice(-15).reverse().map((c) => `<div class="claim ${c.status === 'verified' ? '' : 'found'}">${c.status === 'verified' ? '✓ تأیید' : '◇ نیاز به بررسی'} · ${esc(c.text)}<small>${esc(c.source_title || c.source_url || 'منبع نامشخص')}</small></div>`).join('') : '<p class="muted">هنوز شاهدی ثبت نشده است.</p>';
+  renderAgentMonitor(data.researchNodes);
   renderResearch(data.researchNodes);
   renderSources(data.sources);
   renderInvestigation();
+}
+function renderAgentMonitor(rawNodes) {
+  const box = $('agent-monitor');
+  const nodes = Array.isArray(rawNodes) ? rawNodes.filter((n) => n && Number.isSafeInteger(Number(n.id))) : [];
+  if (!selected || !nodes.length) {
+    const empty = selected ? 'هنوز عاملی برای این پرونده مأمور نشده است.' : 'برای دیدن وضعیت عامل‌ها، پرونده‌ای انتخاب کن.';
+    const html = `<p class="muted">${empty}</p>`;
+    if (monitorSnapshot !== html) { box.innerHTML = html; monitorSnapshot = html; }
+    return;
+  }
+  const order = { running: 0, failed: 1, paused: 2, pending: 3, done: 4 };
+  const statusNames = { pending:'در صف', running:'در حال کار', paused:'مکث', done:'تکمیل', failed:'خطا' };
+  const roles = { coordinator:'عامل مادر', 'source-analyst':'عامل اسناد', 'web-researcher':'عامل وب', local:'عامل محلی' };
+  const running = nodes.filter((n) => n.status === 'running').length;
+  const done = nodes.filter((n) => n.status === 'done').length;
+  const cards = [...nodes].sort((a, b) => (order[a.status] ?? 5) - (order[b.status] ?? 5) || Number(a.id) - Number(b.id))
+    .map((n) => `<div class="agent-card" data-status="${esc(n.status || 'pending')}"><div class="agent-card-head"><strong>${esc(roles[n.assigned_role] || n.assigned_role || 'عامل')}</strong><span>${esc(statusNames[n.status] || n.status || 'در صف')}</span></div><p>${esc(n.title)}</p><small>${esc(n.progress_stage || (n.status === 'pending' ? 'منتظر شروع' : n.open_question || 'گام تازه ثبت نشده است'))}</small></div>`).join('');
+  const html = `<div class="agent-count">${fa(running)} فعال · ${fa(done)} تکمیل · ${fa(nodes.length)} نیت</div>${cards}`;
+  if (monitorSnapshot !== html) { box.innerHTML = html; monitorSnapshot = html; }
 }
 function safeWebUrl(value) {
   try {
@@ -234,6 +265,13 @@ async function watch(id, title) {
       const job = await api(`/api/jobs/${id}`);
       $('progress-time').textContent = formatTime(Date.now() - started);
       $('progress-detail').textContent = job.stage || 'در حال انجام…';
+      if (job.kind === 'chat' || job.kind === 'team') {
+        try {
+          const live = await api(`/api/research-progress${selected ? `?dossierId=${selected}` : ''}`);
+          if (!selected && live.dossierId) selected = Number(live.dossierId);
+          renderAgentMonitor(live.nodes);
+        } catch { /* live panel may fail without losing the underlying job */ }
+      }
       const summary = job.summary || job.result?.summary;
       $('progress-summary').hidden = !summary;
       if (summary) $('progress-summary').textContent = String(summary);
@@ -309,7 +347,7 @@ function sendFile(file) {
   xhr.send(file);
 }
 $('login-form').onsubmit = async (e) => { e.preventDefault(); $('login-error').textContent = '';
-  try { const r = await api('/api/login', { method:'POST', json:{ password:$('password').value } }); csrf = r.csrf; $('password').value=''; displayAuth(true); await refresh(); }
+  try { const r = await api('/api/login', { method:'POST', json:{ password:$('password').value } }); csrf = r.csrf; $('password').value=''; displayAuth(true); startAgentMonitor(); await refresh(); }
   catch(err){ $('login-error').textContent = err.message; } };
 $('logout').onclick = async () => { await api('/api/logout', { method:'POST' }).catch(() => {}); csrf=''; displayAuth(false); };
 $('refresh').onclick = () => refresh().catch(fail);
@@ -395,4 +433,4 @@ const zone=$('drop-zone'); zone.ondragover=(e)=>{e.preventDefault();zone.classLi
 zone.ondragleave=()=>zone.classList.remove('dragging'); zone.ondrop=(e)=>{e.preventDefault();zone.classList.remove('dragging');sendFile(e.dataTransfer.files[0]);};
 $('ledger').onclick = () => { if (selected) window.location.href=`/api/ledger?dossierId=${selected}`; };
 $('stop-job').onclick = async () => { try { await api('/api/stop',{method:'POST'}); toast('درخواست توقف ثبت شد؛ پس از گام جاری می‌ایستد.'); } catch(e){fail(e);} };
-api('/api/session').then((r)=>{csrf=r.csrf;displayAuth(true);return refresh();}).catch((err)=>{displayAuth(false);if (!/HTTP 401|وارد حساب شو/.test(err.message)) $('login-error').textContent = 'اتصال برقرار نشد. اتصال را بررسی و دوباره تلاش کن.';});
+api('/api/session').then((r)=>{csrf=r.csrf;displayAuth(true);startAgentMonitor();return refresh();}).catch((err)=>{displayAuth(false);if (!/HTTP 401|وارد حساب شو/.test(err.message)) $('login-error').textContent = 'اتصال برقرار نشد. اتصال را بررسی و دوباره تلاش کن.';});

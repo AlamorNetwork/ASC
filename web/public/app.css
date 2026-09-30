@@ -139,6 +139,19 @@ a{color:var(--copper-strong)}
 .inspector-stat strong{display:block;font:700 23px var(--latin);line-height:1.15;color:var(--ink)}
 .inspector-stat span{display:block;margin-top:4px;color:var(--muted);font-size:10px}
 .inspector-section{margin:27px 0}
+.agent-control{padding:15px;margin-top:21px;border:1px solid var(--line);border-radius:7px;background:#1b2b3c}
+.agent-control .section-heading{margin-bottom:9px}
+.agent-count{margin-bottom:10px;color:var(--muted);font-size:10px}
+.agent-card{padding:10px 11px;margin-top:7px;border:1px solid #425366;border-right:3px solid #657789;border-radius:5px;background:#203246}
+.agent-card[data-status=running]{border-right-color:var(--copper);background:#28394b}
+.agent-card[data-status=done]{border-right-color:var(--green)}
+.agent-card[data-status=failed]{border-right-color:var(--danger)}
+.agent-card[data-status=paused]{border-right-color:#c9ab75}
+.agent-card-head{display:flex;justify-content:space-between;gap:8px;font-size:10px}
+.agent-card-head strong{color:var(--ink)}
+.agent-card-head span{color:var(--copper-strong)}
+.agent-card p{margin:6px 0;color:var(--ink);font-size:11px;font-weight:700;line-height:1.65}
+.agent-card small{display:block;color:var(--muted);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
 .section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #d3d0c6}
 .section-heading span{font-size:13px;font-weight:800}.section-heading small{color:#a27b67;font:700 9px var(--latin);letter-spacing:.07em;direction:ltr;white-space:nowrap}
 .section-note{margin:0 0 12px;color:var(--muted);font-size:10px;line-height:1.75}

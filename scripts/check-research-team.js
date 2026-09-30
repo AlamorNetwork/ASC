@@ -13,7 +13,7 @@ try {
   const root = store.createResearchNode({ principalId: pid, dossierId, title: 'چه رخ داد؟' });
   store.addSourceCandidate({ principalId: pid, dossierId,
     url: 'https://example.org/page', title: 'Suggested', why: 'Possible source' });
-  let active = 0, peak = 0, calls = 0;
+  let active = 0, peak = 0, calls = 0, observedLive = false, supervisorSawStates = false;
   let crawlOverlapped = false;
   const crawl = async () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -23,12 +23,19 @@ try {
       text: 'متن صفحه ' .repeat(50), chunks: ['متن صفحه '.repeat(50)] });
     return { pagesSaved: 1 };
   };
-  const ask = async ({ system }) => {
+  const ask = async ({ system, content }) => {
     calls++;
     if (system.includes('زیرپرسش مستقل')) return { data: { subquestions: [
       { title: 'یک', question: 'یک' }, { title: 'دو', question: 'دو' }, { title: 'سه', question: 'سه' }] } };
-    if (system.includes('هماهنگ‌کننده')) return { data: { summary: 'نتیجه مقدماتی', open_questions: ['چه منبع دیگری؟'] } };
+    if (system.includes('هماهنگ‌کننده')) {
+      const packet = JSON.parse(content);
+      supervisorSawStates = packet.workerStates?.length > 0 &&
+        packet.workerStates.every((w) => w.status === 'done' && w.stage);
+      return { data: { summary: 'نتیجه مقدماتی', open_questions: ['چه منبع دیگری؟'] } };
+    }
     active++; peak = Math.max(peak, active);
+    observedLive ||= store.dossierResearchNodes(pid, dossierId)
+      .some((n) => n.status === 'running' && n.progress_stage?.includes('تحلیل'));
     await new Promise((resolve) => setTimeout(resolve, 10));
     active--;
     return { data: { summary: 'بررسی شد', findings: [
@@ -39,9 +46,11 @@ try {
     text: 'اینجا عبارت دقیق منبع وجود دارد و باید بررسی شود.' }];
   const result = await runResearchTeam({ principalId: pid, dossierId, nodeId: root, ask, search, crawl });
   const nodes = store.dossierResearchNodes(pid, dossierId);
-  if (peak !== 3 || !crawlOverlapped || result.crawledPages.length !== 1 || calls !== 5 || nodes.length !== 4 ||
+  if (peak !== 3 || !crawlOverlapped || !observedLive || !supervisorSawStates ||
+      result.crawledPages.length !== 1 || calls !== 5 || nodes.length !== 4 ||
       result.reports.some((r) => r.report.findings.length !== 1) ||
-      nodes.some((n) => n.status !== 'done')) throw new Error('parallel grounded plan failed');
+      nodes.some((n) => n.status !== 'done' || !n.progress_stage))
+    throw new Error('parallel grounded plan or live checkpoints failed');
   await runResearchTeam({ principalId: pid, dossierId, nodeId: root, ask, search });
   if (calls !== 5) throw new Error('completed work called a model again');
   store.createResearchNode({ principalId: pid, dossierId, parentId: root, title: 'پرسش تازه' });
@@ -85,7 +94,14 @@ try {
       store.getResearchNode(pid, dryRoot).status !== 'paused' ||
       store.getResearchNode(pid, dryChild).status !== 'paused')
     throw new Error('a dry web search lost its resumable frontier');
-  console.log('research team check passed — bounded parallelism, quote gate, resume, isolation; 0 paid calls');
+  const interrupted = store.createResearchNode({ principalId: pid, dossierId, title: 'کار قطع‌شده' });
+  store.updateResearchNode(pid, interrupted, { status: 'running' });
+  store.setResearchNodeStage(pid, interrupted, 'خواندن منبع');
+  store.pauseInterruptedResearchNodes();
+  if (store.getResearchNode(pid, interrupted).status !== 'paused' ||
+      !store.getResearchNode(pid, interrupted).progress_stage.includes('آمادهٔ ادامه'))
+    throw new Error('restart lost the agent checkpoint');
+  console.log('research team check passed — parallel agents, live checkpoints, supervisor review, resume, isolation; 0 paid calls');
 } finally {
   store.db.close();
   fs.rmSync(temp, { recursive: true, force: true });

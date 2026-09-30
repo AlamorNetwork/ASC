@@ -44,6 +44,8 @@ try {
   if (absent.length) throw new Error(`web script refers to missing DOM ids: ${absent.join(', ')}`);
   const denied = await fetch(`${url}/api/state`);
   if (denied.status !== 401) throw new Error('unauthenticated state was exposed');
+  const deniedProgress = await fetch(`${url}/api/research-progress?dossierId=1`);
+  if (deniedProgress.status !== 401) throw new Error('unauthenticated agent progress was exposed');
   const privateReport = await fetch(`${url}/api/document-analysis?documentId=1`);
   if (privateReport.status !== 401) throw new Error('unauthenticated analysis was exposed');
   const login = await fetch(`${url}/api/login`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
@@ -61,6 +63,16 @@ try {
     body: JSON.stringify({ dossierId: planCase, title: 'چه شواهدی داریم؟' }) });
   if (newNode.status !== 201) throw new Error(`research node ${newNode.status}`);
   const nodeId = (await newNode.json()).id;
+  store.setResearchNodeStage('test-web-owner', nodeId, 'جست‌وجوی متن اسناد پرونده');
+  const live = await fetch(`${url}/api/research-progress?dossierId=${planCase}`, { headers: { Cookie: cookie } });
+  const liveNodes = (await live.json()).nodes;
+  if (live.status !== 200 || !liveNodes.some((n) => n.id === nodeId &&
+      n.progress_stage === 'جست‌وجوی متن اسناد پرونده') ||
+      liveNodes.some((n) => 'result_json' in n))
+    throw new Error('agent checkpoint is not live in the web API');
+  const otherDossier = Number(store.insertDossier({ principalId: 'another-owner', topic: 'private' }));
+  const foreignProgress = await fetch(`${url}/api/research-progress?dossierId=${otherDossier}`, { headers: { Cookie: cookie } });
+  if (foreignProgress.status === 200) throw new Error('other principal agent progress was exposed');
   const planState = await fetch(`${url}/api/state?dossierId=${planCase}`, { headers: { Cookie: cookie } });
   const planData = await planState.json();
   if (!planData.researchNodes?.some((n) => n.id === nodeId) || !Array.isArray(planData.sources))
