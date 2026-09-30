@@ -3,54 +3,56 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#07140f">
-  <title>ASC · تالار پژوهش</title>
+  <meta name="theme-color" content="#101a29">
+  <title>ASC · اطلس پژوهش</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-  <div class="grain" aria-hidden="true"></div>
   <section id="login" class="login-shell">
+    <div class="login-art" aria-hidden="true"><div class="art-index">ASC / RESEARCH ATLAS<br>FIELD NOTES · 01—∞</div><div class="art-caption">هر سرنخ، نقطه‌ای برای پرسش بعدی.</div></div>
     <div class="login-card">
-      <div class="seal" aria-hidden="true"><span>✦</span></div>
-      <div class="eyebrow">ALAMOR NETWORK · RESEARCH ATELIER</div>
-      <h1>تالار پژوهش <em>ASC</em></h1>
-      <p>اسناد، سرنخ‌ها و نتیجهٔ هر تحقیق در یک جا. برای ورود، رمز پنل را وارد کن.</p>
+      <div class="login-mark" aria-hidden="true">A<span>↗</span></div>
+      <div class="eyebrow">ALAMOR NETWORK / PRIVATE WORKSPACE</div>
+      <h1>جایی برای<br><em>کشفِ دقیق‌تر.</em></h1>
+      <p>با دستیار پژوهش گفت‌وگو کن. اسناد، سرنخ‌ها و مسیر هر بررسی در پروندهٔ تو می‌ماند.</p>
       <form id="login-form">
-        <label for="password">رمز ورود</label>
+        <label for="password">رمز فضای پژوهش</label>
         <input id="password" type="password" autocomplete="current-password" minlength="16" required placeholder="••••••••••••••••">
-        <button class="primary" type="submit">ورود به تالار <span>←</span></button>
+        <button class="primary" type="submit">ورود به اطلس <span aria-hidden="true">↖</span></button>
       </form>
       <div id="login-error" class="form-error" role="alert"></div>
-      <div class="login-footer">PRIVATE RESEARCH SPACE <span>✧</span> 2026</div>
+      <div class="login-footer">ASC / SECURE RESEARCH WORKSPACE</div>
     </div>
   </section>
 
   <div id="app" class="app-shell" hidden>
     <aside id="rail" class="rail">
-      <div class="rail-brand"><div class="mini-seal">✦</div><div><strong>ASC</strong><small>THE RESEARCH CHAMBER</small></div></div>
-      <div class="rail-label">فضای کار</div>
-      <button id="new-case" class="rail-action active">＋ <span>گفت‌وگوی تازه</span></button>
+      <div class="rail-brand"><div class="mini-seal">A<span>↗</span></div><div><strong>ASC</strong><small>RESEARCH ATLAS / 01</small></div></div>
+      <div class="rail-label">میز پژوهش</div>
+      <button id="new-case" class="rail-action active"><span aria-hidden="true">＋</span> <span>گفت‌وگوی تازه</span></button>
       <div class="rail-divider"></div>
       <div class="rail-heading"><span>پرونده‌ها</span><span id="case-count">۰</span></div>
       <div id="case-list" class="case-list"></div>
-      <div class="rail-bottom"><div class="signal"><i></i> سامانه آمادهٔ پژوهش</div><button id="logout" class="text-button">خروج امن ↗</button></div>
+      <div class="rail-bottom"><div class="rail-note">از یک پرسش آغاز کن. مسیر هر تحقیق اینجا می‌ماند.</div><div class="signal"><i></i> فضای پژوهش آماده است</div><button id="logout" class="text-button">خروج امن ↗</button></div>
     </aside>
 
     <main class="main">
       <header class="topbar">
         <button id="mobile-menu" class="icon-button" aria-label="فهرست پرونده‌ها" aria-controls="rail" aria-expanded="false">☰</button>
-        <div><div class="eyebrow">RESEARCH WORKSPACE / ASC</div><div id="breadcrumb" class="breadcrumb">گفت‌وگوی تازه</div></div>
-        <div class="top-actions"><span class="top-mark">✦ &nbsp; دقت، پیش از ادعا</span><button id="refresh" class="icon-button" title="تازه‌سازی">↻</button></div>
+        <div class="topbar-title"><div class="eyebrow">WORKSPACE / پروندهٔ فعال</div><div id="breadcrumb" class="breadcrumb">گفت‌وگوی تازه</div></div>
+        <div class="top-actions"><span class="top-mark"><i></i> دقت، پیش از ادعا</span><button id="mobile-dossier" class="mobile-dossier" type="button">دفتر پرونده</button><button id="refresh" class="icon-button" title="تازه‌سازی" aria-label="تازه‌سازی">↻</button></div>
       </header>
 
       <div class="workspace">
         <section class="conversation">
           <div class="hero">
-            <div class="hero-ornament">✦</div>
-            <p class="eyebrow">YOUR RESEARCH COMPANION</p>
-            <h2>از پرسش تا <em>شاهد.</em></h2>
-            <p>از عامل مادر بپرس یا صریحاً بگو چه چیزی را بررسی کند. او مسیر پژوهش و عامل‌ها را در پرونده مدیریت می‌کند.</p>
-            <div class="hero-line"></div>
+            <div class="hero-copy">
+              <div class="hero-kicker"><span>01 / 03</span> همراه پژوهش شما</div>
+              <h2>هر پرسش،<br><em>یک مسیر تازه.</em></h2>
+              <p>ایده‌ات را بگو. دستیار مادر گفت‌وگو می‌کند، سرنخ‌ها را دنبال می‌کند و اگر بخواهی، عامل‌ها را برای بررسی مأمور می‌کند.</p>
+              <div class="hero-steps"><span>گفت‌وگو</span><b>←</b><span>بررسی</span><b>←</b><span>شاهد</span></div>
+            </div>
+            <div class="hero-art" aria-hidden="true"></div>
           </div>
 
           <div id="messages" class="messages" aria-live="polite" aria-label="گفت‌وگو"></div>
@@ -64,15 +66,15 @@
           </div>
 
           <div class="composer-wrap">
-            <div class="composer-tabs" role="group" aria-label="مسیر درخواست"><button id="tab-chat" class="selected" type="button" aria-pressed="true">گفت‌وگو با عامل مادر</button><button id="tab-deep" type="button" aria-pressed="false">کاوش عمیق مستقل</button></div>
+            <div class="composer-tabs" role="group" aria-label="مسیر درخواست"><button id="tab-chat" class="selected" type="button" aria-pressed="true"><span class="tab-dot"></span> گفت‌وگو با عامل مادر</button><button id="tab-deep" type="button" aria-pressed="false">کاوش عمیق <span class="tab-arrow">↗</span></button></div>
             <div id="deep-options" class="deep-options" hidden><label for="deep-ceiling">سقف توقف این نوبت (دلار آمریکا)</label><input id="deep-ceiling" type="number" min="0" max="20" step="any" value="0.16" inputmode="decimal" required disabled><small>توقف بین دورهای تحقیق بررسی می‌شود؛ هزینهٔ دور جاری ممکن است از سقف عبور کند. پیش از شروع تأیید می‌گیریم.</small></div>
-            <form id="compose-form" class="composer"><label class="sr-only" for="prompt">پیام به عامل مادر</label><textarea id="prompt" rows="2" placeholder="به عامل مادر بگو چه چیزی را بررسی کند…" required></textarea><button class="send-button" type="submit" aria-label="ارسال پیام">↑</button></form>
-            <div id="compose-hint" class="compose-hint">با عامل مادر حرف بزن. وقتی صریحاً دستور تحقیق بدهی، خودش زیرنیت‌ها را می‌سازد و عامل‌ها را مأمور می‌کند.</div>
+            <form id="compose-form" class="composer"><label class="sr-only" for="prompt">پیام به عامل مادر</label><textarea id="prompt" rows="2" placeholder="چه چیزی ذهن تو را مشغول کرده؟" required></textarea><button class="send-button" type="submit" aria-label="ارسال پیام">↖</button></form>
+            <div id="compose-hint" class="compose-hint">برای شروع پژوهش بگو «دربارهٔ ... تحقیق کن». دستیار مادر مسیر را می‌سازد.</div>
           </div>
         </section>
 
         <aside class="inspector">
-          <div class="inspector-title"><span class="eyebrow">THE DOSSIER</span><h3>دفتر پرونده</h3><p id="inspector-subtitle">پرسش‌ها و شاهدها، کنار هم.</p></div>
+          <div class="inspector-title"><span class="eyebrow">DOSSIER / LIVE NOTES</span><h3>دفتر پرونده<span aria-hidden="true">↗</span></h3><p id="inspector-subtitle">پرسش‌ها، منابع و شاهدها در یک نگاه.</p></div>
           <div class="inspector-stat"><div><strong id="stat-cases">۰</strong><span>پرونده</span></div><div><strong id="stat-verified">۰</strong><span>تأییدشده</span></div><div><strong id="stat-claims">۰</strong><span>ادعا</span></div></div>
           <div class="inspector-section"><div class="section-heading"><span>کاوش عمیق</span><small>INVESTIGATION</small></div><div id="investigation-status" class="investigation-status" aria-live="polite"><p class="muted">برای دیدن وضعیت کاوش، پرونده‌ای انتخاب کن.</p></div><div id="resume-options" class="resume-options" hidden><label for="resume-ceiling">سقف توقف نوبت بعد (دلار آمریکا)</label><input id="resume-ceiling" type="number" min="0" max="20" step="any" value="0.16" inputmode="decimal"><button id="resume-deep" class="small-action" type="button">ادامهٔ کاوش</button></div></div>
           <section class="inspector-section" aria-labelledby="research-heading"><div class="section-heading"><span id="research-heading">درخت نیت پژوهش</span><small>RESEARCH INTENT</small></div>

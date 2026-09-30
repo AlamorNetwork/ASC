@@ -25,9 +25,15 @@ try {
   })) throw new Error('deep research can start without an explicit bounded ceiling');
   const page = await fetch(url);
   const markup = await page.text();
-  if (page.status !== 200 || !markup.includes('تالار پژوهش') ||
+  if (page.status !== 200 || !markup.includes('اطلس پژوهش') ||
       !markup.includes('id="tab-deep"') || !markup.includes('id="investigation-status"'))
     throw new Error('web research controls are missing');
+  for (const [asset, contentType] of [['atlas.png', 'image/png'], ['vazirmatn.woff2', 'font/woff2']]) {
+    const response = await fetch(`${url}/${asset}`);
+    if (response.status !== 200 || !response.headers.get('content-type')?.includes(contentType) ||
+        (await response.arrayBuffer()).byteLength < 1000)
+      throw new Error(`web design asset ${asset} is unavailable`);
+  }
   if (!markup.includes('id="tab-chat"') || markup.includes('id="tab-research"') ||
       markup.includes('id="research-node-form"'))
     throw new Error('web chat still requires manual research routing');

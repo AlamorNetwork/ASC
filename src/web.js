@@ -246,10 +246,11 @@ function state(pid, dossierId, fresh = false) {
 }
 async function servePublic(res, pathname) {
   const name = pathname === '/' ? 'index.html' : pathname.slice(1);
-  if (!['index.html', 'app.css', 'app.js'].includes(name)) return error(res, 404, 'یافت نشد.');
-  const type = name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css' : 'text/javascript';
+  if (!['index.html', 'app.css', 'app.js', 'atlas.png', 'vazirmatn.woff2'].includes(name)) return error(res, 404, 'یافت نشد.');
+  const type = name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css'
+    : name.endsWith('.png') ? 'image/png' : name.endsWith('.woff2') ? 'font/woff2' : 'text/javascript';
   const body = await fsp.readFile(path.join(publicDir, name));
-  res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store',
+  res.writeHead(200, { 'Content-Type': ['image/png', 'font/woff2'].includes(type) ? type : `${type}; charset=utf-8`, 'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
     'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" });
   res.end(body);

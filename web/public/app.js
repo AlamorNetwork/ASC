@@ -52,6 +52,7 @@ function render(data) {
     ? 'مقصد فایل بعدی: پروندهٔ تازه'
     : `مقصد فایل بعدی: ${data.selected?.topic || 'پرونده'} (#${fa(selected)})`;
   $('messages').innerHTML = (Array.isArray(data.messages) ? data.messages : []).map((m) => `<div class="message ${m.role === 'user' ? 'user' : 'assistant'}"><div class="who">${m.role === 'user' ? 'شما' : 'عامل مادر'}</div><p>${esc(m.text)}</p></div>`).join('');
+  document.querySelector('.conversation').classList.toggle('has-messages', $('messages').childElementCount > 0);
   $('messages').scrollTop = $('messages').scrollHeight;
   $('document-list').innerHTML = (Array.isArray(data.documents) ? data.documents : []).map((d) => `<div class="doc-row"><span title="${esc(d.filename)}">◈ ${esc(d.filename)} ${d.pages ? `· ${fa(d.read_pages ?? d.pages)}/${fa(d.pages)}` : ''}</span><span class="doc-actions">${d.id && d.extraction !== 'model_vision_pages' ? `<button class="small-action" data-claims="${Number(d.id)}">ادعاها</button>` : ''}<button class="small-action" data-analyze="${Number(d.id)}" title="تحلیل متن ذخیره‌شده ممکن است هزینه داشته باشد">تحلیل عمیق</button><a class="small-action" href="/api/document-analysis?documentId=${Number(d.id)}" title="دریافت گزارش Markdown">MD</a></span></div>`).join('');
   for (const b of document.querySelectorAll('[data-claims]')) b.onclick = async () => { try { const r = await api('/api/claims', { method:'POST', json:{ documentId:Number(b.dataset.claims) } }); watch(r.id, 'استخراج ادعاها'); } catch(e){fail(e);} };
@@ -286,7 +287,7 @@ function addMessage(role, text) {
   const box = document.createElement('div'); box.className = `message ${role}`;
   const who = document.createElement('div'); who.className = 'who'; who.textContent = role === 'user' ? 'شما' : 'عامل مادر';
   const p = document.createElement('p'); p.textContent = text;
-  box.append(who, p); $('messages').append(box); $('messages').scrollTop = $('messages').scrollHeight;
+  box.append(who, p); $('messages').append(box); document.querySelector('.conversation').classList.add('has-messages'); $('messages').scrollTop = $('messages').scrollHeight;
 }
 function sendFile(file) {
   if (!file) return;
@@ -312,7 +313,14 @@ $('login-form').onsubmit = async (e) => { e.preventDefault(); $('login-error').t
   catch(err){ $('login-error').textContent = err.message; } };
 $('logout').onclick = async () => { await api('/api/logout', { method:'POST' }).catch(() => {}); csrf=''; displayAuth(false); };
 $('refresh').onclick = () => refresh().catch(fail);
-$('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; $('breadcrumb').textContent='گفت‌وگوی تازه'; $('rail').classList.remove('open'); $('mobile-menu').setAttribute('aria-expanded', 'false'); refresh().then(() => $('prompt').focus()).catch(fail); };
+$('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; document.querySelector('.conversation').classList.remove('has-messages'); $('breadcrumb').textContent='گفت‌وگوی تازه'; $('rail').classList.remove('open'); $('mobile-menu').setAttribute('aria-expanded', 'false'); refresh().then(() => $('prompt').focus()).catch(fail); };
+$('mobile-dossier').onclick = () => {
+  const workspace = document.querySelector('.workspace');
+  const atDossier = workspace.scrollTop > workspace.clientHeight * .45;
+  const inspector = document.querySelector('.inspector');
+  const inspectorTop = workspace.scrollTop + inspector.getBoundingClientRect().top - workspace.getBoundingClientRect().top;
+  workspace.scrollTo({ top: atDossier ? 0 : inspectorTop, behavior: 'smooth' });
+};
 $('mobile-menu').onclick = () => {
   const open = $('rail').classList.toggle('open');
   $('mobile-menu').setAttribute('aria-expanded', String(open));
