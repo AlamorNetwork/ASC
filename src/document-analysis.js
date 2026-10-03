@@ -183,10 +183,21 @@ export async function analyzeDocument({ principalId, documentId, onProgress, ask
     if (completed.some((s) => s.no === part.no)) continue;
     checkpoint(principalId, `پیش از تحلیل بخش ${part.no}`);
     onProgress?.(`تحلیل بخش ${part.no} از ${plan.length} · صفحه ${part.firstPage ?? '?'}`);
-    const { data } = await ask({ model, system: SECTION_SYSTEM,
-      content: `سند: ${doc.filename}\nبخش ${part.no} از ${plan.length}؛ صفحه ${part.firstPage ?? '?'} تا ${part.lastPage ?? '?'}\n\n${part.text}`,
-      maxTokens: 3000, noThinking: false,
-      onAttempt: ({ model: attempt }) => onProgress?.(`تحلیل بخش ${part.no} از ${plan.length} · ${attempt}`) });
+    const content = `سند: ${doc.filename}\nبخش ${part.no} از ${plan.length}؛ صفحه ${part.firstPage ?? '?'} تا ${part.lastPage ?? '?'}\n\n${part.text}`;
+    let data;
+    try {
+      ({ data } = await ask({ model, system: SECTION_SYSTEM, content,
+        maxTokens: 3000, noThinking: false,
+        onAttempt: ({ model: attempt }) => onProgress?.(`تحلیل بخش ${part.no} از ${plan.length} · ${attempt}`) }));
+    } catch (err) {
+      if (err.kind !== 'model_json') throw err;
+      checkpoint(principalId, `بازآزمایی تحلیل بخش ${part.no}`);
+      onProgress?.(`پاسخ بخش ${part.no} قالب درست نداشت؛ یک بار با خروجی کوتاه‌تر دوباره بررسی می‌شود`);
+      ({ data } = await ask({ model,
+        system: `${SECTION_SYSTEM}\nاین بار حداکثر ۴ جزئیات و ۲ مورد در هر دسته بده. رشته‌های چندخطی را با \\n داخل JSON بنویس. پاسخ را حتماً با } تمام کن.`,
+        content, maxTokens: 4000, noThinking: true,
+        onAttempt: ({ model: attempt }) => onProgress?.(`بازآزمایی بخش ${part.no} از ${plan.length} · ${attempt}`) }));
+    }
     const result = cleanSection(data, part);
     store.saveAnalysisSection(principalId, doc.id, part.no, part.hash, model, result);
     completed = currentSections(principalId, doc.id, plan, model);

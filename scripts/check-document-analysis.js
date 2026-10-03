@@ -9,8 +9,14 @@ process.env.ROUTER_KEY ||= 'test-only';
 process.env.ROUTER_BASE_URL ||= 'http://127.0.0.1:1/v1';
 const store = await import('../src/db.js');
 const { analyzeDocument, documentAnalysisPath } = await import('../src/document-analysis.js');
+const { parseModelJson } = await import('../src/llm.js');
 const yes = (condition, note) => { if (!condition) throw new Error(note); };
 try {
+  const withNewline = '{"about":"روایت\nچندخطی","details":[{"text":"نمونه","quote":"عبارت دقیق"}]}';
+  yes(parseModelJson(withNewline).about === 'روایت\nچندخطی', 'literal line break inside a JSON string was not recovered');
+  let truncatedRejected = false;
+  try { parseModelJson('{"about":"ناتمام'); } catch { truncatedRejected = true; }
+  yes(truncatedRejected, 'a truncated JSON answer was accepted as evidence');
   const pid = 'analysis-test';
   const dossier = Number(store.insertDossier({ principalId: pid, topic: 'آزمایش سند' }));
   const id = Number(store.insertDocument({ principalId: pid, dossierId: dossier,
@@ -88,6 +94,21 @@ try {
   yes(largeSections === 12 && batches === 4, 'resume repeated saved section or synthesis batch');
   await analyzeDocument({ principalId: pid, documentId: largeId, model: 'fake',
     ask: () => { throw new Error('large document bought again'); } });
+  const retryId = Number(store.insertDocument({ principalId: pid, dossierId: dossier,
+    filename: 'retry.txt', kind: 'text', extraction: 'local', pages: 1, readPages: 1 }));
+  store.insertChunks(pid, dossier, retryId, [{ seq: 0, page: 1, text: 'عبارت دقیق سند در این صفحه است.' }]);
+  let attempts = 0;
+  const retried = await analyzeDocument({ principalId: pid, documentId: retryId, model: 'fake',
+    ask: async ({ system }) => {
+      if (system.includes('ساختار یک سند')) return { data: { overview: 'یک صفحه' } };
+      attempts++;
+      if (attempts === 1) throw Object.assign(new Error('model did not return valid JSON'), { kind: 'model_json' });
+      return { data: { about: 'یک صفحه', details: [
+        { text: 'عبارت در سند است', quote: 'عبارت دقیق سند' }] } };
+    } });
+  yes(attempts === 2 && retried.sections === 1 &&
+    fs.readFileSync(retried.file, 'utf8').includes('عبارت دقیق سند'),
+  'malformed section response did not retry once and save a verified quote');
   console.log('document analysis check passed — coverage, full quote gate, section and batch resume, cached synthesis; 0 model calls');
 } finally {
   store.db.close();

@@ -346,25 +346,45 @@ export async function chat({
   };
 }
 
-/** Same call, but the reply must be a JSON object. Returns { data, usage }. */
-export async function chatJson(opts) {   // budgetMs and onAttempt ride along in opts
-  const { text, usage } = await chat(opts);
-  const cleaned = text
+/** Recover only literal control characters inside JSON strings; never invent missing content. */
+function escapeStringControls(value) {
+  let quoted = false, escaped = false, out = '';
+  for (const ch of value) {
+    if (escaped) { out += ch; escaped = false; continue; }
+    if (ch === '\\' && quoted) { out += ch; escaped = true; continue; }
+    if (ch === '"') { quoted = !quoted; out += ch; continue; }
+    out += quoted && ch.charCodeAt(0) < 32 ? JSON.stringify(ch).slice(1, -1) : ch;
+  }
+  return out;
+}
+
+export function parseModelJson(text) {
+  const cleaned = String(text ?? '')
     .replace(/^\s*```(?:json)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
     .trim();
-  try {
-    return { data: JSON.parse(cleaned), usage };
-  } catch {
-    // Last resort: the outermost {...} in the reply.
-    const m = cleaned.match(/\{[\s\S]*\}/);
-    if (m) {
-      try { return { data: JSON.parse(m[0]), usage }; } catch { /* fall through */ }
+  const outer = cleaned.match(/\{[\s\S]*\}/)?.[0];
+  for (const candidate of [...new Set([cleaned, outer].filter(Boolean))]) {
+    for (const source of [candidate, escapeStringControls(candidate)]) {
+      try {
+        const parsed = JSON.parse(source);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+      } catch { /* try the next exact or control-character-only form */ }
     }
-    const err = new Error(`model did not return JSON: ${cleaned.slice(0, 200)}`);
-    err.usage = usage; // malformed output was still billed
-    throw err;
   }
+  const truncated = !cleaned.endsWith('}');
+  const err = new Error(`model did not return valid JSON (${truncated ? 'ناتمام' : 'ساختار نامعتبر'}): ` +
+    `${JSON.stringify(cleaned.slice(0, 100))} … ${JSON.stringify(cleaned.slice(-100))}`);
+  err.kind = 'model_json';
+  err.truncated = truncated;
+  throw err;
+}
+
+/** Same call, but the reply must be a JSON object. Returns { data, usage }. */
+export async function chatJson(opts) {   // budgetMs and onAttempt ride along in opts
+  const { text, usage } = await chat(opts);
+  try { return { data: parseModelJson(text), usage }; }
+  catch (err) { err.usage = usage; throw err; } // malformed output was still billed
 }
 
 /**
