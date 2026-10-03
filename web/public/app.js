@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false;
-let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', leadSnapshot = '', monitorTimer = null;
+let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', leadSnapshot = '', monitorTimer = null, monitorNodes = [];
 const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
@@ -79,6 +79,14 @@ function render(data) {
 function renderAgentMonitor(rawNodes) {
   const box = $('agent-monitor');
   const nodes = Array.isArray(rawNodes) ? rawNodes.filter((n) => n && Number.isSafeInteger(Number(n.id))) : [];
+  monitorNodes = nodes;
+  const running = nodes.filter((n) => n.status === 'running').length;
+  const waiting = nodes.filter((n) => n.status === 'pending' || n.status === 'paused').length;
+  const failed = nodes.filter((n) => n.status === 'failed').length;
+  const signal = $('activity-signal');
+  signal.dataset.status = running || activeJob ? 'running' : failed ? 'failed' : waiting ? 'waiting' : 'idle';
+  signal.dataset.short = running ? `${fa(running)} فعال` : activeJob ? 'در حال کار' : failed ? `${fa(failed)} خطا` : waiting ? `${fa(waiting)} در صف` : '';
+  $('activity-label').textContent = running ? `${fa(running)} عامل در حال کار` : activeJob ? $('progress-title').textContent : failed ? `${fa(failed)} عامل نیازمند بررسی` : waiting ? `${fa(waiting)} عامل در انتظار` : 'فضای پژوهش آماده است';
   if (!selected || !nodes.length) {
     const empty = selected ? 'هنوز عاملی برای این پرونده مأمور نشده است.' : 'برای دیدن وضعیت عامل‌ها، پرونده‌ای انتخاب کن.';
     const html = `<p class="muted">${empty}</p>`;
@@ -88,11 +96,10 @@ function renderAgentMonitor(rawNodes) {
   const order = { running: 0, failed: 1, paused: 2, pending: 3, done: 4 };
   const statusNames = { pending:'در صف', running:'در حال کار', paused:'مکث', done:'این گام تکمیل', failed:'خطا' };
   const roles = { coordinator:'عامل مادر', 'source-analyst':'عامل اسناد', 'web-researcher':'عامل وب', local:'عامل محلی' };
-  const running = nodes.filter((n) => n.status === 'running').length;
   const done = nodes.filter((n) => n.status === 'done').length;
   const cards = [...nodes].sort((a, b) => (order[a.status] ?? 5) - (order[b.status] ?? 5) || Number(a.id) - Number(b.id))
-    .map((n) => `<div class="agent-card" data-status="${esc(n.status || 'pending')}"><div class="agent-card-head"><strong>${esc(roles[n.assigned_role] || n.assigned_role || 'عامل')}${n.parent_id ? ` · زیر #${fa(n.parent_id)}` : ''}</strong><span>${esc(statusNames[n.status] || n.status || 'در صف')}</span></div><p>${esc(n.title)}</p><small>${esc(n.progress_stage || (n.status === 'pending' ? 'منتظر شروع' : n.open_question || 'گام تازه ثبت نشده است'))}</small></div>`).join('');
-  const html = `<div class="agent-count">${fa(running)} فعال · ${fa(done)} تکمیل · ${fa(nodes.length)} نیت</div>${cards}`;
+    .map((n) => `<div class="agent-card" data-status="${esc(n.status || 'pending')}"><div class="agent-card-head"><strong>${esc(roles[n.assigned_role] || n.assigned_role || 'عامل')}${n.parent_id ? ` · زیر #${fa(n.parent_id)}` : ''}</strong><span>${esc(statusNames[n.status] || n.status || 'در صف')}</span></div><p>${esc(n.title)}</p><small>گام فعلی: ${esc(n.progress_stage || (n.status === 'pending' ? 'منتظر شروع' : 'گام تازه ثبت نشده است'))}</small>${n.open_question ? `<small class="agent-card-question">پرسش باز: ${esc(n.open_question)}</small>` : ''}</div>`).join('');
+  const html = `<div class="agent-count">${fa(running)} فعال · ${fa(waiting)} در انتظار · ${fa(done)} تکمیل · ${fa(nodes.length)} نیت</div>${cards}`;
   if (monitorSnapshot !== html) { box.innerHTML = html; monitorSnapshot = html; }
 }
 function renderLeadMonitor(rawLeads) {
@@ -281,6 +288,7 @@ async function watch(id, title) {
   if (!id) return;
   clearTimeout(progressHideTimer);
   activeJob = id; setBusy(true); $('progress').hidden = false; $('progress-title').textContent = title;
+  renderAgentMonitor(monitorNodes);
   $('progress-detail').textContent = 'در حال آماده‌سازی…';
   $('progress-summary').hidden = true;
   $('progress-track').removeAttribute('aria-valuenow');
@@ -345,7 +353,7 @@ async function watch(id, title) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
-    } catch(e) { activeJob = null; setBusy(false); $('progress-detail').textContent = 'ارتباط با وضعیت کار قطع شد. با تازه‌سازی، وضعیت را دوباره بررسی کن.'; $('stop-job').hidden = true; fail(e); break; }
+    } catch(e) { activeJob = null; setBusy(false); renderAgentMonitor(monitorNodes); $('progress-detail').textContent = 'ارتباط با وضعیت کار قطع شد. با تازه‌سازی، وضعیت را دوباره بررسی کن.'; $('stop-job').hidden = true; fail(e); break; }
   }
 }
 function addMessage(role, text) {
