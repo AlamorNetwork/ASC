@@ -11,12 +11,14 @@ import { motherTurn } from './mother.js';
 import { runResearch } from './research.js';
 import { deepInvestigate } from './deep.js';
 import { ingestToDossier, extractClaimsFor, sha256 } from './ingest.js';
+import { pdftotextAvailable } from './pdf.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
 import { researchLedger } from './research-ledger.js';
 import { analyzeDocument, documentAnalysisPath } from './document-analysis.js';
 import { runResearchTeam } from './research-team.js';
 import { collectSite } from './site-library.js';
 import { consultSources } from './source-consult.js';
+import { pendingUploadsFor } from './upload-state.js';
 import * as cancel from './cancel.js';
 
 const publicDir = path.join(config.root, 'web', 'public');
@@ -102,14 +104,19 @@ async function upload(req, res, name, pid, targetId, newDossier) {
       ? Number(store.insertDossier({ principalId: pid, topic: name, state: 'open' }))
       : target?.id ?? null;
     if (newDossier) settings.setActiveDossier(pid, dossierId);
-    const meta = { id, name, size, createdAt: new Date().toISOString(),
+    const meta = { id, name, size, principalId: pid, createdAt: new Date().toISOString(),
       dossierId, newDossier: false,
       mime: /\.pdf$/i.test(name) ? 'application/pdf'
         : /\.png$/i.test(name) ? 'image/png'
           : /\.webp$/i.test(name) ? 'image/webp'
             : /\.jpe?g$/i.test(name) ? 'image/jpeg' : 'text/plain' };
     await fsp.writeFile(files.meta, JSON.stringify(meta), { flag: 'wx', mode: 0o600 });
-    response(res, 201, meta);
+    // Detect and index text-layer PDFs locally as soon as upload finishes. Image pages
+    // still stop for explicit vision approval; this job makes no model calls.
+    const job = /\.pdf$/i.test(name) && !running && await pdftotextAvailable()
+      ? startJob('import', (progress) => importFile(pid, { uploadId: id, dossierId, localOnly: true }, progress))
+      : null;
+    response(res, 201, { ...meta, jobId: job?.id ?? null });
   } catch (err) {
     out.destroy();
     await fsp.rm(files.data, { force: true }).catch(() => {});
@@ -117,9 +124,12 @@ async function upload(req, res, name, pid, targetId, newDossier) {
     if (!res.destroyed) error(res, /سقف/.test(err.message) ? 413 : 400, err.message);
   }
 }
-async function uploaded(id) {
+async function uploaded(id, pid) {
   const files = uploadPaths(id);
   const meta = JSON.parse(await fsp.readFile(files.meta, 'utf8'));
+  if ((meta.principalId && String(meta.principalId) !== String(pid)) ||
+      (meta.dossierId && !store.getDossier(pid, meta.dossierId)))
+    throw new Error('فایل برای این کاربر پیدا نشد.');
   return { ...meta, file: files.data };
 }
 async function bindUpload(meta, dossierId, documentId = null) {
@@ -196,20 +206,20 @@ async function runDeepJob(pid, dossierId, question, ceilingUsd, runId, progress,
   }
 }
 async function importFile(pid, input, progress) {
-  const meta = await uploaded(input.uploadId);
+  const meta = await uploaded(input.uploadId, pid);
   const buffer = await fsp.readFile(meta.file);
   if (buffer.length > MAX_DOCUMENT_BYTES) throw new Error('سقف فایل ۱۰۰ مگابایت است.');
   const previousCopy = meta.newDossier ? null : store.findDocumentAnywhere(pid, sha256(buffer));
   const target = meta.newDossier ? null : meta.dossierId
-    ? requireDossier(pid, meta.dossierId) : previousCopy
-      ? requireDossier(pid, previousCopy.dossier_id)
-      : input.dossierId ? requireDossier(pid, input.dossierId)
+    ? requireDossier(pid, meta.dossierId) : input.dossierId
+      ? requireDossier(pid, input.dossierId)
+      : previousCopy ? requireDossier(pid, previousCopy.dossier_id)
       : store.getDossier(pid, settings.activeDossier(pid)) ?? store.listDossiers(pid, 1)[0] ?? null;
   const dossierId = target?.id ?? Number(store.insertDossier({ principalId: pid, topic: meta.name, state: 'open' }));
   await bindUpload(meta, dossierId);
-  settings.setActiveDossier(pid, dossierId);
+  if (!input.localOnly) settings.setActiveDossier(pid, dossierId);
   const prior = store.findDocumentByHash(pid, dossierId, sha256(buffer));
-  if (prior && (!prior.pages || prior.read_pages >= prior.pages)) {
+  if (prior && (prior.extraction === 'local' || !prior.pages || prior.read_pages >= prior.pages)) {
     await bindUpload(meta, dossierId, prior.id);
     return { dossierId, documentId: prior.id, alreadyRead: true };
   }
@@ -217,7 +227,8 @@ async function importFile(pid, input, progress) {
   try {
     const out = await ingestToDossier({ principalId: pid, dossierId, buffer,
       filename: meta.name, mime: meta.mime, ...vision,
-      resumeDocumentId: prior?.id ?? null, onProgress: progress });
+      resumeDocumentId: prior?.id ?? null, onProgress: progress,
+      localOnly: input.localOnly === true });
     await bindUpload(meta, dossierId, out.documentId);
     return { dossierId, ...out };
   } catch (err) {
@@ -237,6 +248,8 @@ function state(pid, dossierId, fresh = false) {
     ? store.resumableInvestigation(pid, chosen.id) ?? latest : null;
   return { dossiers, selected: chosen, investigation: investigationView(investigation),
     documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
+    otherDossierDocuments: chosen ? store.documentsInOtherDossiers(pid, chosen.id) : [],
+    pendingUploads: chosen ? pendingUploadsFor(pid, chosen.id) : [],
     researchNodes: chosen ? store.dossierResearchNodes(pid, chosen.id) : [],
     researchLeads: chosen ? store.researchLeads(pid, chosen.id) : [],
     sources: chosen ? store.sourceCatalogue(pid, chosen.id) : [],
@@ -352,7 +365,10 @@ async function route(req, res) {
       try { return JSON.parse(await fsp.readFile(path.join(uploadDir, x), 'utf8')); }
       catch { return null; }
     }));
-    return response(res, 200, list.filter(Boolean).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30)
+    return response(res, 200, list.filter((meta) => meta &&
+      (!meta.principalId || String(meta.principalId) === String(pid)) &&
+      (!meta.dossierId || store.getDossier(pid, meta.dossierId)))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 30)
       .map((meta) => {
         const doc = meta.documentId && store.getDocument(pid, meta.documentId);
         return { ...meta, pages: doc?.pages ?? null, readPages: doc?.read_pages ?? null };
@@ -371,7 +387,7 @@ async function route(req, res) {
     const input = await readJson(req);
     if (!input.uploadId) throw new Error('فایل انتخاب نشده است.');
     if (input.visionMode && !['all', 'batch'].includes(input.visionMode)) throw new Error('حالت خواندن نامعتبر است.');
-    await uploaded(input.uploadId);
+    await uploaded(input.uploadId, pid);
     return response(res, 202, startJob('import', (progress) => importFile(pid, input, progress)));
   }
   if (url.pathname === '/api/chat' && req.method === 'POST') {

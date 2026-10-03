@@ -710,6 +710,13 @@ export const dossierDocuments = (principalId, dossierId) =>
   db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)
     .all(principalId, dossierId);
 
+export const documentsInOtherDossiers = (principalId, dossierId, limit = 8) => db.prepare(`
+  SELECT d.id,d.filename,d.dossier_id AS dossierId,d.pages,d.read_pages AS readPages,
+         o.topic AS dossierTopic
+  FROM documents d JOIN dossiers o ON o.id=d.dossier_id AND o.principal_id=d.principal_id
+  WHERE d.principal_id=? AND d.dossier_id<>? ORDER BY d.id DESC LIMIT ?
+`).all(principalId, dossierId, limit);
+
 export function sourceCatalogue(principalId, dossierId) {
   const docs = db.prepare(`SELECT d.*, a.result_json AS analysis_json,
     s.url AS source_url, s.summary AS source_summary FROM documents d

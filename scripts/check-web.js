@@ -9,6 +9,8 @@ process.env.WEB_PASSWORD = 'this-is-a-test-password-only';
 process.env.WEB_ORIGIN = 'https://asc.alamornetwork.ir';
 process.env.WEB_PRINCIPAL_ID = 'test-web-owner';
 const { createWebServer, visionPlan, deepCeiling } = await import('../src/web.js');
+const { motherSourceContext, motherTurn } = await import('../src/mother.js');
+const { ingestToDossier } = await import('../src/ingest.js');
 const store = await import('../src/db.js');
 const { db } = store;
 const server = createWebServer();
@@ -98,6 +100,38 @@ try {
   if (upload.status !== 201) throw new Error(`upload ${upload.status}: ${await upload.text()}`);
   const meta = await upload.json();
   if (meta.size !== 3) throw new Error('upload bytes were not saved');
+  const uploadedState = await fetch(`${url}/api/state?dossierId=${meta.dossierId}`, { headers: { Cookie: cookie } });
+  const pendingState = await uploadedState.json();
+  const motherEvidence = motherSourceContext('test-web-owner', meta.dossierId, 'چه کتابی داری؟');
+  if (!pendingState.pendingUploads?.some((file) => file.id === meta.id) ||
+      !motherEvidence?.pendingUploads?.some((file) => file.id === meta.id) ||
+      motherEvidence.sourceCount !== 0)
+    throw new Error('raw upload was hidden from mother or mistaken for a readable source');
+  const pendingAnswer = await motherTurn({ principalId: 'test-web-owner', dossierId: meta.dossierId,
+    userText: 'به چه فایل‌هایی دسترسی داری؟', ask: async () => {
+      throw new Error('inventory of unread uploads must not call a model');
+    } });
+  if (!pendingAnswer.text.includes('book.pdf') || !pendingAnswer.text.includes('هنوز'))
+    throw new Error('mother did not explain that uploaded book has not been read');
+  const sampleDoc = Number(store.insertDocument({ principalId: 'test-web-owner',
+    dossierId: meta.dossierId, filename: 'notes.txt', kind: 'text', extraction: 'local' }));
+  store.insertChunks('test-web-owner', meta.dossierId, sampleDoc, [
+    { seq: 0, page: 1, text: 'این گذرگاه واقعی دربارهٔ محتوای سند آزمایشی است.' },
+  ]);
+  if (!motherSourceContext('test-web-owner', meta.dossierId, 'چه فایل‌هایی داری؟')
+    .excerpts.some((p) => p.documentId === sampleDoc && p.text.includes('گذرگاه واقعی')))
+    throw new Error('mother did not receive stored content for an inventory question');
+  const emptyCase = Number(store.insertDossier({ principalId: 'test-web-owner', topic: 'پروندهٔ دیگر' }));
+  const otherState = await fetch(`${url}/api/state?dossierId=${emptyCase}`, { headers: { Cookie: cookie } });
+  if (!(await otherState.json()).otherDossierDocuments.some((d) => d.id === sampleDoc &&
+      d.dossierId === meta.dossierId))
+    throw new Error('book stored in another dossier is invisible in the web state');
+  const elsewhereAnswer = await motherTurn({ principalId: 'test-web-owner', dossierId: emptyCase,
+    userText: 'چه سندهایی داری؟', ask: async () => {
+      throw new Error('cross-dossier inventory must not call a model');
+    } });
+  if (!elsewhereAnswer.text.includes('notes.txt') || !elsewhereAnswer.text.includes('پرونده'))
+    throw new Error('mother did not point to the dossier holding the document');
   const files = await fetch(`${url}/api/uploads`, { headers: { Cookie: cookie } });
   if (!(await files.json()).some((x) => x.id === meta.id)) throw new Error('upload not recoverable');
   const dossierId = Number(store.insertDossier({ principalId: 'test-web-owner', topic: 'یک پرونده برای چند کتاب', state: 'open' }));
@@ -152,7 +186,18 @@ try {
     headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'pdf' });
   if (nextFile.status !== 201 || (await nextFile.json()).dossierId !== freshMeta.dossierId)
     throw new Error('second file did not join the new dossier');
-  console.log('web check passed — login, same dossier uploads, explicit new dossier and recovery; 0 model calls');
+  const savedFetch = globalThis.fetch;
+  let networkCalls = 0;
+  let localResult;
+  try {
+    globalThis.fetch = async () => { networkCalls++; throw new Error('unexpected paid call'); };
+    localResult = await ingestToDossier({ principalId: 'test-web-owner', dossierId,
+      buffer: Buffer.from('این متن محلی به قدر کافی بلند است که در فهرست قابل جست‌وجو ذخیره شود. '.repeat(5)),
+      filename: 'local.txt', mime: 'text/plain', localOnly: true });
+  } finally { globalThis.fetch = savedFetch; }
+  if (!localResult.documentId || !store.documentChunks('test-web-owner', localResult.documentId).length || networkCalls)
+    throw new Error('local import did not create searchable text without a model call');
+  console.log('web check passed — pending uploads, mother inventory, local import, dossier recovery; 0 model calls');
 } finally {
   await new Promise((resolve) => server.close(resolve));
   db.close();

@@ -4,6 +4,7 @@ import { renderPassages } from './chunks.js';
 import { investigate } from './investigate.js';
 import * as store from './db.js';
 import { researchLedger } from './research-ledger.js';
+import { pendingUploadsFor } from './upload-state.js';
 
 const SYSTEM = `تو دستیار پژوهشی کاربر هستی و دارید درباره‌ی یک پرونده‌ی مشخص گفتگو می‌کنید.
 
@@ -46,6 +47,11 @@ export function dossierContextFor(principalId, dossierId) {
 
   const L = [`موضوع پرونده: ${d.topic}`];
   if (d.question) L.push(`پرسش اولیه: ${d.question}`);
+  const pending = pendingUploadsFor(principalId, dossierId);
+  if (pending.length) {
+    L.push('فایل‌های آپلودشده اما هنوز خوانده‌نشده (محتوا شاهد نیست):');
+    for (const file of pending.slice(0, 8)) L.push(`- ${file.name}: از فهرست فایل‌ها «بررسی» را بزن.`);
+  }
   const nodes = store.dossierResearchNodes(principalId, dossierId);
   if (nodes.length) {
     L.push('', 'نقشهٔ کار پژوهشی (گزارش عامل‌ها سرنخ است، نه شاهد تأییدشده):');

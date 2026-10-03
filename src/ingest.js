@@ -355,7 +355,9 @@ export async function ingestScannedPages({
 export async function ingestToDossier({
   principalId, dossierId, buffer, filename, mime, onProgress,
   allowVision = false, pageLimit = null, fromPage = 1, resumeDocumentId = null,
+  localOnly = false,
 }) {
+  if (localOnly && allowVision) throw new Error('خواندن محلی نمی‌تواند هم‌زمان ویژن را اجرا کند.');
   const kind = guard({ buffer, filename, mime });
   if (kind === 'pdf' && !await pdftotextAvailable()) {
     throw new Error('pdftotext نصب نیست. روی سرور: apt install -y poppler-utils');
@@ -424,7 +426,7 @@ export async function ingestToDossier({
   store.insertChunks(principalId, dossierId, documentId, rows);
 
   let embedded = 0;
-  if (rows.length) {
+  if (rows.length && !localOnly) {
     onProgress?.(`${rows.length} تکه ذخیره شد. در حال ساخت بردارها…`);
     try {
       const e = await embedPending(principalId, dossierId,
@@ -437,12 +439,12 @@ export async function ingestToDossier({
     }
   }
 
-  onProgress?.('استخراج ادعاها…');
+  if (!localOnly) onProgress?.('استخراج ادعاها…');
   let summary = extracted.summary ?? null;
   let claims = [];
   let leads = [];
   let claimsFailed = null;
-  if (extracted.text.trim()) {
+  if (extracted.text.trim() && !localOnly) {
     // By this point the document, its chunks and its vectors are all stored, and that is
     // the part that cost money and answers questions. Claims are a convenience on top.
     // Letting this throw discarded a whole scanned book because one model was slow — the

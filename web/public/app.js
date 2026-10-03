@@ -73,7 +73,7 @@ function render(data) {
   renderAgentMonitor(data.researchNodes);
   renderLeadMonitor(data.researchLeads);
   renderResearch(data.researchNodes);
-  renderSources(data.sources);
+  renderSources(data.sources, data.pendingUploads, data.otherDossierDocuments);
   renderInvestigation();
 }
 function renderAgentMonitor(rawNodes) {
@@ -150,7 +150,7 @@ function renderResearch(rawNodes) {
   const tree = [...roots, ...nodes.filter((n) => !roots.includes(n))].map((node) => branch(node, 0)).join('');
   $('research-tree').innerHTML = tree ? `<ul class="research-roots">${tree}</ul>` : '<p class="muted">هنوز نیتی ثبت نشده است. به عامل مادر بگو چه چیزی را بررسی کند.</p>';
 }
-function renderSources(rawSources) {
+function renderSources(rawSources, rawPending, rawElsewhere) {
   $('site-form').hidden = !selected;
   $('site-form').querySelector('button[type="submit"]').disabled = busy;
   $('consult-form').hidden = !selected;
@@ -160,7 +160,11 @@ function renderSources(rawSources) {
     return;
   }
   const sources = Array.isArray(rawSources) ? rawSources.filter((source) => source && typeof source === 'object') : [];
-  $('source-list').innerHTML = sources.length ? `<ul>${sources.map((source) => {
+  const pending = Array.isArray(rawPending) ? rawPending : [];
+  const elsewhere = Array.isArray(rawElsewhere) ? rawElsewhere : [];
+  const pendingHtml = pending.length ? `<ul>${pending.map((file) =>
+    `<li><div class="source-heading"><strong>${esc(file.name)}</strong></div><small>آپلود شده؛ هنوز متن آن خوانده نشده است</small><button class="small-action" type="button" data-pending-upload="${esc(file.id)}">بررسی فایل</button></li>`).join('')}</ul>` : '';
+  const sourceHtml = sources.length ? `<ul>${sources.map((source) => {
     const url = safeWebUrl(source.url);
     const title = esc(source.title || source.url || 'منبع بی‌عنوان');
     const heading = url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : `<strong>${title}</strong>`;
@@ -169,7 +173,19 @@ function renderSources(rawSources) {
     const status = source.analysisStatus ? ` · ${esc(source.analysisStatus)}` : '';
     const relations = Array.isArray(source.relations) ? source.relations.slice(0, 5) : [];
     return `<li><div class="source-heading">${heading}</div><small>${esc(source.type || 'منبع')}${pages}${noOutput}${status}</small>${source.summary ? `<p>${esc(source.summary)}</p>` : ''}${relations.length ? `<details><summary>ارتباط بخش‌ها</summary><ul>${relations.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></details>` : ''}</li>`;
-  }).join('')}</ul>` : '<p class="muted">هنوز منبعی در این پرونده ثبت نشده است.</p>';
+  }).join('')}</ul>` : pending.length || elsewhere.length ? '' : '<p class="muted">هنوز منبعی در این پرونده ثبت نشده است.</p>';
+  const elsewhereHtml = !sources.length && elsewhere.length
+    ? `<p class="muted">سندهای ذخیره‌شده در پرونده‌های دیگر:</p><ul>${elsewhere.map((doc) =>
+      `<li><strong>${esc(doc.filename)}</strong><small>پرونده #${fa(doc.dossierId)} · ${esc(doc.dossierTopic)}</small><button class="small-action" type="button" data-source-dossier="${Number(doc.dossierId)}">باز کردن پرونده</button></li>`).join('')}</ul>` : '';
+  $('source-list').innerHTML = pendingHtml + sourceHtml + elsewhereHtml;
+  for (const button of $('source-list').querySelectorAll('[data-pending-upload]'))
+    button.onclick = () => beginImport(button.dataset.pendingUpload);
+  for (const button of $('source-list').querySelectorAll('[data-source-dossier]'))
+    button.onclick = async () => { try {
+      const id = Number(button.dataset.sourceDossier);
+      await api('/api/select-dossier', { method:'POST', json:{ dossierId:id } });
+      selected = id; freshCase = false; await refresh();
+    } catch (error) { fail(error); } };
 }
 function renderInvestigation() {
   const box = $('investigation-status');
@@ -222,7 +238,8 @@ async function loadUploads() {
   $('upload-list').innerHTML = (Array.isArray(list) ? list : []).map((m) => {
     const progress = m.pages ? ` · ${fa(m.readPages ?? 0)}/${fa(m.pages)} صفحه` : '';
     const destination = m.dossierId ? `پرونده #${fa(m.dossierId)}` : m.newDossier ? 'پروندهٔ تازه' : 'پروندهٔ فعال';
-    return `<div class="upload-row"><span title="${esc(m.name)}">${esc(m.name)}<small>${destination}${progress}</small></span><span class="upload-actions"><button class="small-action" data-upload="${esc(m.id)}" data-mode="detect">بررسی</button>${/\.pdf$/i.test(m.name) && (!m.pages || m.readPages < m.pages) ? `<button class="small-action" data-upload="${esc(m.id)}" data-mode="batch">۲۰ صفحه</button><button class="small-action" data-upload="${esc(m.id)}" data-mode="all">تا پایان</button>` : ''}</span></div>`;
+    const state = m.documentId ? (m.pages && m.readPages < m.pages ? ' · خواندن ناتمام' : ' · وارد منابع شد') : ' · هنوز وارد منابع نشده';
+    return `<div class="upload-row"><span title="${esc(m.name)}">${esc(m.name)}<small>${destination}${progress}${state}</small></span><span class="upload-actions"><button class="small-action" data-upload="${esc(m.id)}" data-mode="detect">بررسی</button>${/\.pdf$/i.test(m.name) && (!m.pages || m.readPages < m.pages) ? `<button class="small-action" data-upload="${esc(m.id)}" data-mode="batch">۲۰ صفحه</button><button class="small-action" data-upload="${esc(m.id)}" data-mode="all">تا پایان</button>` : ''}</span></div>`;
   }).join('') || '<p class="muted">فایلی در انتظار خواندن نیست.</p>';
   for (const b of document.querySelectorAll('[data-upload]')) b.onclick = () => beginImport(b.dataset.upload, b.dataset.mode);
 }
@@ -251,8 +268,8 @@ function setBusy(value) { busy = value; $('compose-form').querySelector('button'
 async function beginImport(id, visionMode = 'detect') {
   if (busy) return toast('یک کار دیگر در حال اجراست.');
   if (visionMode !== 'detect' && !confirm(visionMode === 'all'
-    ? 'همهٔ صفحه‌های باقی‌ماندهٔ این PDF با مدل ویژن خوانده می‌شود و ممکن است هزینه و زمان زیادی داشته باشد. هر صفحه پس از خواندن ذخیره می‌شود و می‌توانی کار را نگه داری و ادامه بدهی. شروع شود؟'
-    : '۲۰ صفحهٔ بعدی با مدل ویژن خوانده می‌شود و ممکن است هزینه داشته باشد. شروع شود؟')) return;
+    ? 'همهٔ صفحه‌های باقی‌مانده بررسی می‌شود. صفحه‌های دارای متن محلی خوانده می‌شوند و فقط صفحه‌های تصویری به مدل ویژن می‌روند؛ ممکن است هزینه و زمان داشته باشد. هر صفحه ذخیره می‌شود. شروع شود؟'
+    : '۲۰ صفحهٔ بعدی بررسی می‌شود؛ فقط صفحه‌های تصویری ممکن است هزینهٔ ویژن داشته باشند. شروع شود؟')) return;
   try {
     const r = await api('/api/import', { method: 'POST', json: {
       uploadId:id, dossierId:selected, visionMode:visionMode === 'detect' ? null : visionMode,
@@ -320,7 +337,7 @@ async function watch(id, title) {
         }
         if (job.state === 'needs_vision') {
           selectResultDossier(job.result);
-          toast(`PDF اسکن‌شده است؛ ${fa(job.result?.readPages)} از ${fa(job.result?.pages)} صفحه خوانده شده. برای ادامه، «۲۰ صفحه» یا «تا پایان» را بزن.`);
+          toast(`این PDF صفحهٔ تصویری دارد؛ ${fa(job.result?.readPages)} از ${fa(job.result?.pages)} صفحه خوانده شده. برای ادامه، «۲۰ صفحه» یا «تا پایان» را بزن.`);
         }
         try { await refresh(); }
         finally { if (job.state === 'done' && job.kind === 'chat') showChatResult(job.result); }
@@ -349,7 +366,10 @@ function sendFile(file) {
   xhr.onload = () => {
     try { const r = JSON.parse(xhr.responseText); if (xhr.status !== 201) throw new Error(r.error || 'آپلود ناموفق بود.');
       if (r.dossierId && freshCase) { selected = Number(r.dossierId); freshCase = false; }
-      $('upload-status').textContent = 'آپلود کامل شد. مقصد پرونده ثبت شد؛ برای شروع خواندن، دکمهٔ همان فایل را بزن.';
+      $('upload-status').textContent = r.jobId
+        ? 'آپلود کامل شد؛ بررسی متن فایل آغاز شد.'
+        : 'آپلود کامل شد؛ برای شروع خواندن، «بررسی» را بزن.';
+      if (r.jobId) watch(r.jobId, 'بررسی متن فایل');
       refresh().catch(fail); }
     catch(e){ $('upload-status').textContent=''; fail(e); }
   };

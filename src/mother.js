@@ -7,6 +7,7 @@ import { runResearchTeam } from './research-team.js';
 import { collectSite } from './site-library.js';
 import { consultSources } from './source-consult.js';
 import { researchLedger } from './research-ledger.js';
+import { pendingUploadsFor } from './upload-state.js';
 import net from 'node:net';
 
 const clean = (v, n = 1000) => String(v ?? '').trim().slice(0, n);
@@ -24,12 +25,15 @@ const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبی�
 - فهرست منابع فقط می‌گوید چه چیزی ثبت شده؛ «گذرگاه‌های متن» همان بخش‌های واقعاً خوانده‌شده‌اند. در پاسخ دربارهٔ محتوای سند، به گذرگاه [n] و صفحه/سند آن ارجاع بده. خلاصهٔ تحلیلی و دفترچهٔ تحقیق شاهد مستقل نیستند.
 - اگر صفحات خوانده‌شده کمتر از کل صفحات است، پوشش را ناقص بگو. اگر سندی در فهرست نیست یا متن مرتبط پیدا نشده، نگو فایل اصلی را بررسی کرده‌ای؛ دقیق بگو چه چیزی در دسترس است و چه چیزی هنوز باید خوانده شود.
 - noOutputPages یعنی ویژن برای آن صفحات متن نداده؛ پردازش فایل ادامه یافته اما آن صفحات شاهدِ خوانده‌شده نیستند و باید جدا بازبینی شوند.
+- pendingUploads فایل‌هایی هستند که بایتشان آپلود شده ولی متنشان هنوز وارد اسناد نشده؛ محتوای آن‌ها را نخوانده‌ای. به کاربر بگو از فهرست فایل‌ها «بررسی» یا برای PDF تصویری «تا پایان» را بزند.
+- otherDossierDocuments سندهای همین کاربر در پرونده‌های دیگرند؛ محتوایشان شاهدِ پروندهٔ فعلی نیست. برای گفتگو دربارهٔ آن‌ها باید پروندهٔ مربوط را انتخاب کند.
 - اگر روشن نیست کاربر چه اقدامی می‌خواهد، با respond یک پرسش کوتاه بپرس.`;
 
 const explicitResearch = (text) => /(?:تحقیق|پژوهش|بررسی|جست[‌\s-]*وجو|کاوش).{0,100}(?:کن|بکن|شروع|بگرد)|(?:برو|بگرد|پیدا کن|منبع بیار|منابع بیار).{0,100}(?:تحقیق|پژوهش|منبع|درباره|راجع)|\b(?:research|investigate|search for)\b/i.test(text);
 const explicitContinue = (text) => /(?:ادامه بده|ادامه‌اش بده|از سر بگیر|resume|continue)/i.test(text);
 const explicitCrawl = (text) => /(?:بخون|بخوان|اسکرپ|خزش|خزیدن|استخراج|جمع کن|تحلیل کن|بررسی کن|crawl|scrape)/i.test(text);
 const explicitConsult = (text) => /(?:پرپلکسیتی|perplexity|مشاور منابع|مشاوره.*منبع)/i.test(text);
+const asksForFiles = (text) => /(?:چه|کدام|لیست|فهرست).{0,65}(?:فایل|سند|کتاب|منبع)|(?:فایل|سند|کتاب).{0,65}(?:داری|داریم|دسترسی)/i.test(text);
 function publicUserUrl(value) {
   try {
     const u = new URL(value);
@@ -87,6 +91,8 @@ export function motherSourceContext(principalId, dossierId, question) {
   const dossier = store.getDossier(principalId, dossierId);
   if (!dossier) return null;
   const catalogue = store.sourceCatalogue(principalId, dossierId);
+  const pendingUploads = pendingUploadsFor(principalId, dossierId);
+  const otherDossierDocuments = catalogue.length ? [] : store.documentsInOtherDossiers(principalId, dossierId);
   const sources = catalogue.slice(-10).map((s) => ({
     id: s.id, documentId: s.documentId, title: clean(s.title, 140), type: s.type, url: s.url,
     readPages: s.readPages, pages: s.pages, analysisStatus: s.analysisStatus,
@@ -100,6 +106,15 @@ export function motherSourceContext(principalId, dossierId, question) {
   const scope = store.dossierScope(principalId, dossierId);
   let passages = query ? store.searchChunks(principalId, scope, query, 4) : [];
   if (!passages.length) passages = store.searchChunks(principalId, scope, dossier.topic, 4);
+  // An inventory question has no useful search terms. Give the mother small,
+  // labelled samples of text actually stored for each document instead.
+  if (!passages.length && asksForFiles(question)) {
+    passages = store.dossierDocuments(principalId, dossierId).slice(-4).flatMap((doc) => {
+      const chunks = store.documentChunks(principalId, doc.id);
+      return [chunks[0], chunks[Math.floor(chunks.length / 2)]].filter(Boolean)
+        .map((chunk) => ({ ...chunk, document_id: doc.id, dossier_id: dossierId }));
+    }).slice(0, 8);
+  }
   const excerpts = passages.map((p, i) => {
     const doc = store.getDocument(principalId, p.document_id);
     return { ref: `[${i + 1}]`, documentId: p.document_id,
@@ -107,7 +122,7 @@ export function motherSourceContext(principalId, dossierId, question) {
       dossierId: p.dossier_id, text: clean(p.text, 750) };
   });
   const wantsLedger = /(?:md|markdown|دفترچه|گزارش|تا الان|تا اینجا|روند|وضعیت)/i.test(question);
-  return { sourceCount: catalogue.length, sources, excerpts,
+  return { sourceCount: catalogue.length, sources, pendingUploads, otherDossierDocuments, excerpts,
     ledger: wantsLedger ? researchLedger(principalId, dossierId).slice(0, 1800) : undefined,
     note: 'فقط excerpts متن واقعیِ ذخیره‌شده‌اند. فهرست آخرین ده منبع و گزارش تحلیلی اثبات ادعا نیستند.' };
 }
@@ -117,6 +132,22 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
   const text = clean(userText, 4000);
   if (!text) throw new Error('پیام خالی است.');
   const { dossier, history, roots } = recentContext(principalId, dossierId);
+  if (dossier && asksForFiles(text) && !store.dossierDocuments(principalId, dossier.id).length) {
+    const pending = pendingUploadsFor(principalId, dossier.id);
+    if (pending.length) {
+      const answer = `در این پرونده ${pending.length} فایل آپلود شده، اما متنشان هنوز وارد منابع قابل جست‌وجو نشده است: ${pending.slice(0, 5).map((f) => f.name).join('، ')}. از فهرست فایل‌ها «بررسی» را بزن؛ اگر PDF صفحهٔ تصویری دارد، «تا پایان» را انتخاب کن. بعد از خواندن می‌توانم محتوای ذخیره‌شده را بگویم.`;
+      store.addMessage({ principalId, dossierId: dossier.id, role: 'user', text });
+      store.addMessage({ principalId, dossierId: dossier.id, role: 'assistant', text: answer });
+      return { text: answer, dossierId: dossier.id, action: { type: 'respond' }, usage: null };
+    }
+    const elsewhere = store.documentsInOtherDossiers(principalId, dossier.id);
+    if (elsewhere.length) {
+      const answer = `در پروندهٔ فعلی سند خوانده‌شده‌ای نیست. این سندها در پرونده‌های دیگر ثبت شده‌اند: ${elsewhere.slice(0, 5).map((d) => `${d.filename} (پرونده #${d.dossierId})`).join('، ')}. پروندهٔ مربوط را انتخاب کن تا متن همان سند را بررسی کنم.`;
+      store.addMessage({ principalId, dossierId: dossier.id, role: 'user', text });
+      store.addMessage({ principalId, dossierId: dossier.id, role: 'assistant', text: answer });
+      return { text: answer, dossierId: dossier.id, action: { type: 'respond' }, usage: null };
+    }
+  }
   onProgress?.('دستیار مادر: فهم درخواست و وضعیت پرونده');
   let decision;
   try { decision = await ask({ model: settings.modelFor('coordinator'), system: SYSTEM,
