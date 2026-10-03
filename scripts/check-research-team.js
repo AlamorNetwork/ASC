@@ -76,13 +76,19 @@ try {
       if (query !== 'شاهد بیرونی') throw new Error('wrong delegated question');
       if (!options.plannerModel) throw new Error('web worker skipped source-language query planning');
       return { evidence: [{ id: 0, url: 'https://example.org/evidence', title: 'Evidence',
-        text: 'متن صفحه عبارت دقیق منبع را دارد و عامل باید آن را عیناً نقل کند.' }] };
+        text: 'متن صفحه عبارت دقیق منبع را دارد و عامل باید آن را عیناً نقل کند.',
+        fullText: 'متن کامل صفحه عبارت دقیق منبع را دارد و عامل باید آن را عیناً نقل کند. '.repeat(8),
+        via: 'scrapling' }] };
     } });
   const webFinding = webResult.reports[0]?.report.findings[0];
   if (webQueries !== 1 || localQueries || webFinding?.sourceUrl !== 'https://example.org/evidence' ||
       webFinding?.verification !== 'quote_present_in_fetched_excerpt_only' ||
       webResult.reports[0]?.report.findings.length !== 1)
     throw new Error('web worker did not preserve URL and exact-quote gate');
+  if (!store.sourceCatalogue(pid, dossierId).some((s) =>
+    s.url === 'https://example.org/evidence' && s.documentId &&
+    store.documentChunks(pid, s.documentId).some((chunk) => chunk.text.includes('عبارت دقیق منبع'))))
+    throw new Error('search agent read a browser page without storing its source text');
   const dryRoot = store.createResearchNode({ principalId: pid, dossierId, title: 'سرنخ گمشده' });
   const dryChild = store.createResearchNode({ principalId: pid, dossierId, parentId: dryRoot,
     title: 'متن گمشده', assignedRole: 'web-researcher' });

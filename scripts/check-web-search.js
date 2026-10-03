@@ -30,4 +30,18 @@ await discoverEvidence('پرسش بلند فارسی دربارهٔ مهرابه
 });
 assert.equal(chosenModel, 'test-coordinator');
 assert.equal(firstQuery, 'Mithraeum Dura-Europos');
+let browserCalls = 0;
+const rescued = await discoverEvidence('Mithraeum Dura-Europos', {
+  ask: async () => ({ data: { queries: ['Mithraeum Dura-Europos'] } }),
+  search: async () => ({ results: [
+    { url: 'https://example.org/blocked', title: 'Mithraeum Dura-Europos', engine: 'test' },
+    { url: 'https://example.org/second', title: 'Mithraeum Dura-Europos', engine: 'test' },
+  ] }),
+  open: async () => ({ ok: false, error: 'HTTP 403' }), enhancedLimit: 1,
+  openEnhanced: async (url) => { browserCalls++; return { ok: true, url, via: 'scrapling',
+    text: 'This Mithraeum was an above ground building at Dura Europos. '.repeat(8) }; },
+});
+assert.equal(browserCalls, 1);
+assert.equal(rescued.evidence[0]?.via, 'scrapling');
+assert.match(rescued.evidence[0]?.fullText || '', /above ground/);
 console.log('web search check passed — query planner used, relevant shrine ranked first, unrelated DOI rejected; 0 model calls');

@@ -5,6 +5,7 @@ import net from 'node:net';
 
 const MAX_HTML = 1024 * 1024;
 const SCRAPLING_SCRIPT = path.resolve(import.meta.dirname, '..', 'scripts', 'scrapling-page.py');
+let browserQueue = Promise.resolve();
 
 function publicTarget(value) {
   const url = new URL(value);
@@ -44,9 +45,7 @@ export async function firecrawlPage(url, key, request = fetch) {
 export async function scraplingPage(url, python, allowedHosts, run = spawn) {
   publicTarget(url);
   if (!python) throw new Error('SCRAPLING_PYTHON is missing');
-  const host = new URL(url).hostname.toLowerCase();
-  if (!allowedHosts.includes(host)) throw new Error('host is not in SCRAPLING_ALLOWED_HOSTS');
-  const output = await new Promise((resolve, reject) => {
+  const execute = () => new Promise((resolve, reject) => {
     const child = run(python, [SCRAPLING_SCRIPT, url, allowedHosts.join(',')],
       { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -65,6 +64,9 @@ export async function scraplingPage(url, python, allowedHosts, run = spawn) {
       catch { reject(new Error('Scrapling did not return JSON')); }
     });
   });
+  const pending = browserQueue.then(execute, execute);
+  browserQueue = pending.catch(() => {});
+  const output = await pending;
   return { ...checkedPage(output, url), via: 'scrapling' };
 }
 

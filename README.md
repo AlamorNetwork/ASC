@@ -186,10 +186,20 @@ fetch failures, optional fallbacks can render one page with a local
 changes the same-origin, robots, page-size, or persisted-cursor rules. It makes at
 most two fallback calls in one crawl batch.
 
+Web research agents use the same reader after an ordinary page fetch fails:
+at most one rendered search result per subquestion. They save the fetched text
+and URL in the dossier before citing an excerpt. Browser processes are
+serialized across the bot and web services, so parallel agents do not launch
+parallel Chromium instances. Scrapling opens pages found by search; it does not
+replace the search engines themselves.
+
 The fallbacks are disabled until explicitly configured. On the server, run
 `bash scripts/setup-scrapling.sh` if local Chromium fits, then set
-`WEB_FETCH_FALLBACK=scrapling`, `SCRAPLING_PYTHON=/opt/asc-scrapling/bin/python`,
-and an exact `SCRAPLING_ALLOWED_HOSTS` list in `.env`. To use Firecrawl credits
+`WEB_FETCH_FALLBACK=scrapling` and
+`SCRAPLING_PYTHON=/opt/asc-scrapling/bin/python` in `.env`. The browser
+can load the public host of each search result; optional
+`SCRAPLING_ALLOWED_HOSTS` adds explicit CDN hosts needed by some sites.
+To use Firecrawl credits
 instead, set `WEB_FETCH_FALLBACK=firecrawl` and `FIRECRAWL_API_KEY`. The chain
 `WEB_FETCH_FALLBACK=scrapling,firecrawl` tries the local browser first. Restart
 `asc-web` after editing `.env`. Firecrawl is billed outside ASC's model meter;

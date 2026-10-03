@@ -1,6 +1,7 @@
 /** A bounded, resumable research team. Text returned by agents is a lead, never evidence. */
 import * as store from './db.js';
 import { retrieve } from './chunks.js';
+import { chunkText } from './chunks.js';
 import { chatJson } from './llm.js';
 import { modelFor } from './settings.js';
 import { checkpoint, Stopped } from './cancel.js';
@@ -84,8 +85,15 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
             // A subquestion is a goal, not a search query. Plan short terms first.
             plannerModel: modelFor('coordinator'),
             onProgress: (event) => stage(node.id, clean(event.detail ?? event.stage ?? 'پیگیری سرنخ وب', 190)),
-          })).evidence.slice(0, 5).map((e) => ({ text: e.text, source_url: e.url,
-            source_title: e.title, id: `web-${e.id}` }))
+          })).evidence.slice(0, 5).map((e) => {
+            if (e.fullText && e.url) {
+              store.saveCrawledPage({ principalId, dossierId, url: e.url,
+                title: e.title || e.url, text: e.fullText, chunks: chunkText(e.fullText) });
+              stage(node.id, `منبع ${e.via === 'scrapling' ? 'با مرورگر محلی' : e.via === 'firecrawl' ? 'با Firecrawl' : 'مستقیم'} خوانده و ذخیره شد`);
+            }
+            return { text: e.text, source_url: e.url,
+              source_title: e.title, id: `web-${e.id}` };
+          })
           : await search({ principalId, dossierId, query: node.open_question || node.title,
             limit: 5, includeLinked: true });
         checkpoint(principalId, `زیرنیت ${node.id}`);

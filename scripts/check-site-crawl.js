@@ -43,6 +43,12 @@ const badFallback = await crawlSite({ url: root, maxPages: 1,
   fallbackPage: async () => ({ url: 'http://127.0.0.1/', html: '<h1>wrong host</h1>' }) });
 assert.equal(badFallback.pages.length, 0);
 assert.match(badFallback.errors[0].error, /private|off-origin/);
+let unsafeFallback = 0;
+const privateResolution = await crawlSite({ url: root, maxPages: 1,
+  fetchPage: async () => { throw new Error('private or unresolved address'); },
+  fallbackPage: async () => { unsafeFallback++; throw new Error('must not run'); } });
+assert.equal(unsafeFallback, 0);
+assert.match(privateResolution.errors[0].error, /private or unresolved/);
 
 const resumed = await crawlSite({ url: root, checkpoint: {
   visited: first.pages.map((page) => page.url), nextUrls: first.nextUrls,

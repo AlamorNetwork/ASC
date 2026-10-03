@@ -9,4 +9,4 @@ python3 -m venv /opt/asc-scrapling
 /opt/asc-scrapling/bin/python -m pip install 'scrapling[fetchers]==0.4.15'
 /opt/asc-scrapling/bin/python -m playwright install --with-deps chromium
 echo 'Scrapling ready. Add WEB_FETCH_FALLBACK=scrapling and SCRAPLING_PYTHON=/opt/asc-scrapling/bin/python to /root/ASC/.env.'
-echo 'Set SCRAPLING_ALLOWED_HOSTS to exact hostnames before enabling it.'
+echo 'Optional: set SCRAPLING_ALLOWED_HOSTS for extra CDN hosts a page needs.'

@@ -224,6 +224,8 @@ export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchP
       let nativeError;
       try { result = await (fetchPage ? fetchPage(target) : defaultFetchPage(target, origin, PAGE_BYTES)); }
       catch (error) { nativeError = error; }
+      if (nativeError && /private or unresolved|private or reserved|off-origin|credentialed URL/i.test(nativeError.message))
+        throw nativeError;
       const shortPage = result && parseHtml(result.html, result.url ?? target, origin).text.length < 120;
       if ((nativeError || shortPage) && fallbackPage && fallbackCalls < 2) {
         fallbackCalls++;

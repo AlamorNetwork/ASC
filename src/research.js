@@ -7,6 +7,8 @@ import { buildResearchAudit } from './research-audit.js';
 import { researchLedger, refreshResearchLedger } from './research-ledger.js';
 import { modelFor, budget } from './settings.js';
 import * as store from './db.js';
+import { config } from './config.js';
+import { openResearchPage } from './research-browser.js';
 
 const GATHER_SYSTEM = `You research a topic and report claims with their sources.
 
@@ -79,7 +81,10 @@ function excerpt(text, query, limit = 5500) {
 
 /** Search results are leads. Only fetched page text enters the evidence packet. */
 export async function discoverEvidence(question, {
-  ask = chatJson, search = searchWeb, open = fetchSourceText, onProgress, ledger = '',
+  ask = chatJson, search = searchWeb, open = fetchSourceText,
+  openEnhanced = openResearchPage,
+  enhancedLimit = config.webExtraction.fallback.length ? 1 : 0,
+  onProgress, ledger = '',
   plannerModel = modelFor('structure'),
 } = {}) {
   const progress = (stage, detail) => onProgress?.({ stage, detail });
@@ -118,17 +123,39 @@ export async function discoverEvidence(question, {
     lead, page: await open(lead.url),
   })));
   const evidence = [];
-  for (const result of fetched) {
-    if (result.status === 'rejected') { errors.push(result.reason?.message ?? 'fetch failed'); continue; }
+  const unread = [];
+  for (let i = 0; i < fetched.length; i++) {
+    const result = fetched[i];
+    if (result.status === 'rejected') {
+      unread.push(leads[i]);
+      errors.push(result.reason?.message ?? 'fetch failed');
+      continue;
+    }
     const { lead, page } = result.value;
     if (!page.ok || !page.text || page.text.length < 250) {
+      unread.push(lead);
       errors.push(`${lead.url}: ${page.error ?? 'no readable page text'}`);
       continue;
     }
     evidence.push({ id: evidence.length, url: page.url ?? lead.url,
       title: lead.title, engine: lead.engine,
-      text: excerpt(page.text, queries.join(' ')) });
+      text: excerpt(page.text, queries.join(' ')), fullText: page.text, via: page.via || 'direct' });
     if (evidence.length >= 5) break;
+  }
+  for (const lead of unread.slice(0, Math.max(0, Math.min(1, enhancedLimit)))) {
+    if (evidence.length >= 5) break;
+    progress('fetch', `عامل وب: تلاش مرورگری برای ${lead.url}`);
+    try {
+      const page = await openEnhanced(lead.url);
+      if (!page.ok || !page.text || page.text.length < 250) {
+        errors.push(`${lead.url}: ${page.error || 'browser returned no readable text'}`);
+        continue;
+      }
+      evidence.push({ id: evidence.length, url: page.url ?? lead.url,
+        title: lead.title, engine: lead.engine,
+        text: excerpt(page.text, queries.join(' ')), fullText: page.text,
+        via: page.via || 'browser' });
+    } catch (error) { errors.push(`${lead.url}: ${error.message}`); }
   }
   progress('fetch', `${evidence.length} صفحه خوانده شد${errors.length ? ` · ${errors.length} خطا/محدودیت` : ''}`);
   return { evidence, errors, queries, usage };
@@ -236,7 +263,9 @@ export async function runResearch({
       const source = sources?.find((s) => s.url === c.source_url);
       const excerptMatch = source ? verifyAgainstText(source.text, c.quote) : null;
       const result = excerptMatch && excerptMatch.status !== 'verified'
-        ? excerptMatch : await verify({ sourceUrl: c.source_url, quote: c.quote });
+        ? excerptMatch : source?.via !== 'direct' && source?.fullText
+          ? verifyAgainstText(source.fullText, c.quote)
+          : await verify({ sourceUrl: c.source_url, quote: c.quote });
       const row = {
         text: c.text ?? '',
         sourceUrl: c.source_url ?? null,

@@ -1,8 +1,10 @@
 """One-page dynamic rendering bridge. JSON on stdout, errors on stderr."""
 import ipaddress
+import fcntl
 import json
 import socket
 import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -21,6 +23,7 @@ def permitted(value, allowed):
 def main():
     url = sys.argv[1]
     allowed = set(sys.argv[2].split(','))
+    allowed.add((urlparse(url).hostname or '').lower())
     if not permitted(url, allowed):
         raise ValueError("URL is not an allowed public site")
 
@@ -40,9 +43,14 @@ def main():
         captured["url"] = page.url
         captured["html"] = page.content()
 
-    DynamicFetcher.fetch(url, headless=True, timeout=15000, wait=1000,
-                         disable_resources=True, google_search=False,
-                         page_setup=before, page_action=after)
+    with open(Path(sys.prefix) / 'asc-browser.lock', 'w') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError('local browser is busy; retry this page later') from exc
+        DynamicFetcher.fetch(url, headless=True, timeout=15000, wait=1000,
+                             disable_resources=True, google_search=False,
+                             page_setup=before, page_action=after)
     if not permitted(captured.get("url", ""), allowed):
         raise ValueError("browser left the allowed site")
     print(json.dumps(captured, ensure_ascii=False))
