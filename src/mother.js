@@ -40,7 +40,8 @@ const explicitResearch = (text) => /(?:تحقیق|پژوهش|بررسی|جست[�
 const explicitEvidence = (text) => /(?:منبع|منابع|نقل[‌\s-]*قول|عبارت شاهد|نمونه[ٔ‌ی\s]*مستند|شواهد).{0,120}(?:بیاور|بیار|پیدا کن|ارائه بده|نشان بده|ذکر کن|جدا کن|مقایسه کن)|(?:بیاور|بیار|پیدا کن|ارائه بده).{0,120}(?:منبع|نقل[‌\s-]*قول|شاهد|مستند)/i.test(text);
 const explicitContinue = (text) => /(?:ادامه بده|ادامه‌اش بده|از سر بگیر|resume|continue)/i.test(text);
 const explicitResume = (text) => explicitContinue(text) || /(?:فعال(?:ش|شان|شون|شان را|شون رو)?\s*کن|شروع(?:ش|شان|شون)?\s*کن|پیگیری(?:ش|شان|شون)?\s*کن)/i.test(text) ||
-  /نیت(?:\s+اصلی)?\s*#?\s*[0-9۰-۹٠-٩]+[\s\S]{0,240}دوباره\s+بررسی\s+کن/i.test(text);
+  /نیت(?:\s+اصلی)?\s*#?\s*[0-9۰-۹٠-٩]+[\s\S]{0,240}دوباره\s+بررسی\s+کن/i.test(text) ||
+  /^\s*(?:بررسی|بازبینی|پیگیری)\s+نیت(?:\s+اصلی)?\s*#?\s*[0-9۰-۹٠-٩]+\s*$/i.test(text);
 const asksQueuedStatus = (text) => /(?:در صف|تأیید مادر|تایید مادر|زیرپرسش‌های باز|زیرسوال‌های باز)/i.test(text);
 const asksAgentStatus = (text) => /(?:عامل|ایجنت).{0,35}(?:کجای|چیکار|کار|فعال|وضعیت)|وضعیت.{0,35}(?:عامل|ایجنت)/i.test(text);
 const asksResearchStatus = (text) => asksQueuedStatus(text) || asksAgentStatus(text) ||
@@ -406,6 +407,17 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
     const id = store.createResearchNode({ principalId, dossierId: active.id,
       title: plan.goal, openQuestion: plan.goal, assignedRole: 'coordinator' });
     root = store.getResearchNode(principalId, id);
+  }
+  if (plan.targetRootId) {
+    const nodesForRoot = store.dossierResearchNodes(principalId, active.id);
+    const targeted = new Set(nodesForRoot.map((n) => n.target_document_id).filter(Boolean));
+    const freshDocument = store.dossierDocuments(principalId, active.id).reverse()
+      .find((doc) => doc.created_at >= root.created_at && !targeted.has(doc.id) &&
+        store.documentChunks(principalId, doc.id).length);
+    if (freshDocument) store.createResearchNode({ principalId, dossierId: active.id,
+      parentId: root.id, title: `بررسی سند تازه «${freshDocument.filename}» برای ${root.title}`,
+      openQuestion: root.open_question || root.title, assignedRole: 'source-analyst',
+      targetDocumentId: freshDocument.id });
   }
   const existing = new Set(store.dossierResearchNodes(principalId, active.id)
     .filter((n) => n.parent_id === root.id).map((n) => n.title));

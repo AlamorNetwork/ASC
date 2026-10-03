@@ -601,7 +601,7 @@ export const getDocument = (principalId, id) =>
   db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND id = ?`).get(principalId, id);
 
 export function createResearchNode({ principalId, dossierId, parentId = null, title,
-  openQuestion = null, assignedRole = 'local' }) {
+  openQuestion = null, assignedRole = 'local', targetDocumentId = null }) {
   if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
   const count = db.prepare(`SELECT COUNT(*) AS n FROM research_nodes WHERE principal_id=? AND dossier_id=?`)
     .get(principalId, dossierId).n;
@@ -613,12 +613,14 @@ export function createResearchNode({ principalId, dossierId, parentId = null, ti
     while (cursor.parent_id && depth < 8) { depth++; cursor = getResearchNode(principalId, cursor.parent_id); }
     if (depth >= 6) throw new Error('عمق نیت‌ها حداکثر شش سطح است.');
   }
+  if (targetDocumentId != null && getDocument(principalId, targetDocumentId)?.dossier_id !== dossierId)
+    throw new Error('سند هدف در این پرونده پیدا نشد.');
   const now = new Date().toISOString();
   const id = Number(db.prepare(`INSERT INTO research_nodes
-    (principal_id,dossier_id,parent_id,title,open_question,assigned_role,status,created_at,updated_at)
-    VALUES(?,?,?,?,?,?,'pending',?,?)`).run(principalId, dossierId, parentId,
+    (principal_id,dossier_id,parent_id,title,open_question,assigned_role,target_document_id,status,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,'pending',?,?)`).run(principalId, dossierId, parentId,
       String(title).trim().slice(0, 500), openQuestion?.slice(0, 1000) ?? null,
-      assignedRole, now, now).lastInsertRowid);
+      assignedRole, targetDocumentId, now, now).lastInsertRowid);
   if (parentId) {
     let ancestor = getResearchNode(principalId, parentId);
     while (ancestor?.parent_id) ancestor = getResearchNode(principalId, ancestor.parent_id);
@@ -1102,6 +1104,7 @@ addColumn('documents', 'sha256', 'TEXT');
 addColumn('messages', 'prompt_json', 'TEXT');
 addColumn('documents', 'read_pages', 'INTEGER');
 addColumn('research_nodes', 'progress_stage', 'TEXT');
+addColumn('research_nodes', 'target_document_id', 'INTEGER');
 // A watch can carry its own question, so "keep looking into this" is not limited to
 // the dossier's headline topic.
 addColumn('intentions', 'question', 'TEXT');

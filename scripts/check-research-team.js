@@ -90,6 +90,28 @@ try {
     s.url === 'https://example.org/evidence' && s.documentId &&
     store.documentChunks(pid, s.documentId).some((chunk) => chunk.text.includes('عبارت دقیق منبع'))))
     throw new Error('search agent read a browser page without storing its source text');
+  const targetedDossier = Number(store.insertDossier({ principalId: pid, topic: 'سند تازهٔ اوستیا' }));
+  const targetedRoot = store.createResearchNode({ principalId: pid, dossierId: targetedDossier,
+    title: 'آیا مهرابهٔ دیگری زیرزمینی نبود؟' });
+  const targetedDoc = Number(store.insertDocument({ principalId: pid, dossierId: targetedDossier,
+    filename: 'The Cult of Mithras in Ostia.pdf', kind: 'pdf', extraction: 'local', pages: 11 }));
+  store.insertChunks(pid, targetedDossier, targetedDoc, [{ seq: 0, page: 7,
+    text: 'Most Mithraea in Ostia were not underground sanctuaries.' }]);
+  store.createResearchNode({ principalId: pid, dossierId: targetedDossier,
+    parentId: targetedRoot, title: 'بررسی سند اوستیا', assignedRole: 'source-analyst',
+    targetDocumentId: targetedDoc });
+  const targetedResult = await runResearchTeam({ principalId: pid,
+    dossierId: targetedDossier, nodeId: targetedRoot,
+    search: async () => { throw new Error('targeted task searched an unrelated dossier'); },
+    ask: async ({ system }) => system.includes('هماهنگ‌کننده')
+      ? { data: { summary: 'سند تازه بررسی شد', approved_leads: [] } }
+      : { data: { summary: 'مهرابه‌های اوستیا لزوماً زیرزمینی نبودند', findings: [{
+        text: 'الگوی زیرزمینی در اوستیا همگانی نبود', passage_id: 1,
+        quote: 'Most Mithraea in Ostia were not underground sanctuaries.' }],
+        open_questions: [] } } });
+  if (targetedResult.reports[0]?.report.findings[0]?.documentId !== targetedDoc ||
+      targetedResult.reports[0]?.report.findings[0]?.page !== 7)
+    throw new Error('fresh document was not read with its own page and exact quote');
   const savedDossier = Number(store.insertDossier({ principalId: pid, topic: 'مهرابهٔ روزمینی' }));
   const savedRoot = store.createResearchNode({ principalId: pid, dossierId: savedDossier,
     title: 'آیا همهٔ مهرابه‌ها زیرزمینی بودند؟', assignedRole: 'coordinator' });

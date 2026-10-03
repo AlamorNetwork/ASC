@@ -37,6 +37,26 @@ function savedSitePassages(principalId, dossierId) {
     })).filter((passage) => passage.text.length > 100);
 }
 
+function targetedDocumentPassages(principalId, dossierId, documentId, focus) {
+  const doc = store.getDocument(principalId, documentId);
+  if (!doc || doc.dossier_id !== dossierId) return [];
+  const grouped = new Map();
+  for (const chunk of store.documentChunks(principalId, documentId)) {
+    const page = chunk.page ?? `seq-${chunk.seq}`;
+    grouped.set(page, `${grouped.get(page) || ''}\n${chunk.text}`);
+  }
+  const pages = [...grouped].map(([page, text], index) => ({
+    id: `document-${documentId}-${index}`, document_id: documentId,
+    page: typeof page === 'number' ? page : null, text: text.trim().slice(0, 4000) }));
+  if (pages.length <= 12) return pages.filter((p) => p.text).slice(0, 12);
+  const terms = [...new Set((focus.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []))].slice(0, 24);
+  const scored = pages.map((p, index) => ({ index,
+    score: terms.filter((term) => p.text.toLowerCase().includes(term)).length }));
+  const selected = new Set(scored.sort((a, b) => b.score - a.score).slice(0, 6).map((p) => p.index));
+  for (let i = 0; i < 6; i++) selected.add(Math.round(i * (pages.length - 1) / 5));
+  return [...selected].sort((a, b) => a - b).slice(0, 12).map((i) => pages[i]);
+}
+
 function branch(principalId, dossierId, rootId) {
   const all = store.dossierResearchNodes(principalId, dossierId);
   const found = new Set([rootId]);
@@ -132,14 +152,17 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
           });
           return { data, findings };
         };
-        let passages = web ? savedSitePassages(principalId, dossierId) : [];
+        const targeted = !web && node.target_document_id
+          ? targetedDocumentPassages(principalId, dossierId, node.target_document_id,
+            `${root.title} ${node.title} ${node.open_question || ''}`) : null;
+        let passages = targeted ?? (web ? savedSitePassages(principalId, dossierId) : []);
         let assessed = null;
-        if (passages.length) {
+        if (web && passages.length) {
           stage(node.id, `بررسی منبع ذخیره‌شده پیش از جست‌وجوی تازه: ${passages[0].source_url}`);
           try { assessed = await review(passages); }
           catch (err) { stage(node.id, `بررسی منبع ذخیره‌شده پاسخ نداد؛ جست‌وجوی تازه: ${clean(err.message, 100)}`); }
         }
-        if (!assessed?.findings.length) passages = web
+        if (!assessed?.findings.length && !targeted) passages = web
           ? (await discover(node.open_question || node.title, {
             // A subquestion is a goal, not a search query. Plan short terms first.
             plannerModel: modelFor('coordinator'),

@@ -13,7 +13,7 @@ try {
     teamCalls++;
     const nodes = store.dossierResearchNodes(pid, dossierId);
     if (!nodes.some((n) => n.id === nodeId && !n.parent_id) ||
-        nodes.filter((n) => n.parent_id === nodeId).length !== 2)
+        nodes.filter((n) => n.parent_id === nodeId).length < 2)
       throw new Error('mother did not create its own root and children');
     return { summary: 'نتیجهٔ مقدماتی', openQuestions: ['منبع دوم؟'], incomplete: [] };
   };
@@ -263,5 +263,34 @@ try {
   if (documentReview.action.type !== 'team_completed' || documentReview.action.nodeId !== root.id ||
       teamCalls !== 3)
     throw new Error('review of a named document did not resume its research intention');
+  const shortReview = await motherTurn({ principalId: pid, dossierId: planned.dossierId,
+    userText: `بررسی نیت #${root.id}`, team,
+    ask: async () => ({ data: { action: 'respond', reply: 'نیت مکث کرده است؛ آیا ادامه دهم؟' }, usage: {} }) });
+  if (shortReview.action.nodeId !== root.id || teamCalls !== 4)
+    throw new Error('short review command only reported paused status');
+  const freshDossier = Number(store.insertDossier({ principalId: pid, topic: 'مهرابه‌های روزمینی' }));
+  const freshRoot = store.createResearchNode({ principalId: pid, dossierId: freshDossier,
+    title: 'نمونهٔ دوم مهرابهٔ روزمینی', assignedRole: 'coordinator' });
+  store.createResearchNode({ principalId: pid, dossierId: freshDossier, parentId: freshRoot,
+    title: 'جست‌وجوی وب پیشین', assignedRole: 'web-researcher' });
+  store.updateResearchNode(pid, freshRoot, { status: 'paused', result: { summary: 'فقط دورااروپوس' } });
+  const newDoc = Number(store.insertDocument({ principalId: pid, dossierId: freshDossier,
+    filename: 'The Cult of Mithras in Ostia.pdf', kind: 'pdf', extraction: 'local', pages: 11 }));
+  store.insertChunks(pid, freshDossier, newDoc, [{ seq: 0, page: 7,
+    text: 'Most Mithraea in Ostia were not underground sanctuaries.' }]);
+  let freshRuns = 0;
+  const freshTeam = async ({ nodeId }) => {
+    if (nodeId !== freshRoot) throw new Error('fresh document was sent to another root');
+    freshRuns++;
+    const targets = store.dossierResearchNodes(pid, freshDossier)
+      .filter((n) => n.target_document_id === newDoc);
+    if (targets.length !== 1 || targets[0].status !== 'pending')
+      throw new Error('newly imported document did not get one targeted research task');
+    return { summary: 'سند تازه در صف تحلیل قرار گرفت', incomplete: [] };
+  };
+  for (let i = 0; i < 2; i++) await motherTurn({ principalId: pid, dossierId: freshDossier,
+    userText: `بررسی نیت #${freshRoot}`, team: freshTeam,
+    ask: async () => ({ data: { action: 'respond', reply: 'آیا ادامه بدهم؟' }, usage: {} }) });
+  if (freshRuns !== 2) throw new Error('named research root did not run');
   console.log('mother check passed — conversation, autonomous plan, resume, URL gate, isolation; 0 model calls');
 } finally { store.db.close(); fs.rmSync(temp, { recursive: true, force: true }); }
