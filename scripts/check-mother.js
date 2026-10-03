@@ -256,5 +256,12 @@ try {
     ask: async () => ({ data: { action: 'respond', reply: 'تحقیق شروع شد و عامل‌ها فعال شدند.' }, usage: {} }) });
   if (reviewCalls !== 2 || !inventedStart.text.includes('کاری شروع نشده'))
     throw new Error('a conversational reply falsely announced agent execution');
+  const documentReview = await motherTurn({ principalId: pid, dossierId: planned.dossierId,
+    userText: `نیت اصلی #${root.id} را با سند «The Cult of Mithras in Ostia»، به‌ویژه صفحات ۳۵۷ و ۳۵۸، دوباره بررسی کن. مهرابهٔ خانهٔ دیانا را با دورا-اروپوس مقایسه کن و برای هرکدام عبارت دقیق شاهد و صفحه بیاور.`,
+    team, crawl: async () => { throw new Error('a document page number reopened the previous website'); },
+    ask: async () => { throw new Error('a named existing intention needs no fresh routing call'); } });
+  if (documentReview.action.type !== 'team_completed' || documentReview.action.nodeId !== root.id ||
+      teamCalls !== 3)
+    throw new Error('review of a named document did not resume its research intention');
   console.log('mother check passed — conversation, autonomous plan, resume, URL gate, isolation; 0 model calls');
 } finally { store.db.close(); fs.rmSync(temp, { recursive: true, force: true }); }

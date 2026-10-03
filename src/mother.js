@@ -39,7 +39,8 @@ const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبی�
 const explicitResearch = (text) => /(?:تحقیق|پژوهش|بررسی|جست[‌\s-]*وجو|کاوش).{0,100}(?:کن|بکن|شروع|بگرد)|(?:برو|بگرد|پیدا کن|منبع بیار|منابع بیار).{0,100}(?:تحقیق|پژوهش|منبع|درباره|راجع)|\b(?:research|investigate|search for)\b/i.test(text);
 const explicitEvidence = (text) => /(?:منبع|منابع|نقل[‌\s-]*قول|عبارت شاهد|نمونه[ٔ‌ی\s]*مستند|شواهد).{0,120}(?:بیاور|بیار|پیدا کن|ارائه بده|نشان بده|ذکر کن|جدا کن|مقایسه کن)|(?:بیاور|بیار|پیدا کن|ارائه بده).{0,120}(?:منبع|نقل[‌\s-]*قول|شاهد|مستند)/i.test(text);
 const explicitContinue = (text) => /(?:ادامه بده|ادامه‌اش بده|از سر بگیر|resume|continue)/i.test(text);
-const explicitResume = (text) => explicitContinue(text) || /(?:فعال(?:ش|شان|شون|شان را|شون رو)?\s*کن|شروع(?:ش|شان|شون)?\s*کن|پیگیری(?:ش|شان|شون)?\s*کن)/i.test(text);
+const explicitResume = (text) => explicitContinue(text) || /(?:فعال(?:ش|شان|شون|شان را|شون رو)?\s*کن|شروع(?:ش|شان|شون)?\s*کن|پیگیری(?:ش|شان|شون)?\s*کن)/i.test(text) ||
+  /نیت(?:\s+اصلی)?\s*#?\s*[0-9۰-۹٠-٩]+[\s\S]{0,240}دوباره\s+بررسی\s+کن/i.test(text);
 const asksQueuedStatus = (text) => /(?:در صف|تأیید مادر|تایید مادر|زیرپرسش‌های باز|زیرسوال‌های باز)/i.test(text);
 const asksAgentStatus = (text) => /(?:عامل|ایجنت).{0,35}(?:کجای|چیکار|کار|فعال|وضعیت)|وضعیت.{0,35}(?:عامل|ایجنت)/i.test(text);
 const asksResearchStatus = (text) => asksQueuedStatus(text) || asksAgentStatus(text) ||
@@ -57,7 +58,7 @@ function approvedAxes(userText, previous) {
   return axes.length === 3 ? axes : [];
 }
 const asksAboutSite = (text) => /[؟?]|(?:آیا|عبارت شاهد|نقل[‌\s-]*قول|وضعیت ادعا|نتیجه|توضیح بده|خلاصه کن)/i.test(text);
-const refersToPage = (text) => /(?:صفحه|لینک|پیوند|سایت|نشانی|url)/i.test(text);
+const refersToPage = (text) => /(?:این|همین|آن|همان)[\s‌]*(?:صفحه|لینک|پیوند|سایت|نشانی)|(?:صفحه|لینک|پیوند|سایت|نشانی)[\s‌]*(?:قبلی|بالا|پیشین|را\s*(?:بخوان|بخون|باز\s*کن|بررسی\s*کن))/i.test(text);
 const siteContinue = (text) => /(?:ادامه.{0,20}(?:صفحه|لینک|پیوند|سایت|خزش|استخراج)|(?:صفحه|لینک|پیوند|سایت|خزش).{0,20}ادامه)/i.test(text);
 const userUrlsIn = (text) => [...String(text).matchAll(/https?:\/\/[^\s<>"']+/gi)]
   .map((m) => publicUserUrl(m[0].replace(/[).,،؛]+$/, ''))).filter(Boolean);
