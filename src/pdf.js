@@ -28,9 +28,11 @@ export async function pdftotextAvailable() {
 }
 
 /**
- * @returns {{text:string, pages:number, perPage:string[], scanned:boolean}}
- * `scanned` means the text layer is empty or near-empty, so the pages are images.
+ * @returns {{text:string, pages:number, perPage:string[], scanned:boolean, visionPages:number[]}}
+ * A PDF can mix selectable text and image-only (or blank) pages.
  */
+export const pageNeedsVision = (text) => String(text ?? '').trim().length < 80;
+
 export async function extractPdf(buffer) {
   if (!await pdftotextAvailable()) {
     throw new Error('pdftotext نصب نیست. روی سرور: apt install -y poppler-utils');
@@ -54,15 +56,17 @@ export async function extractPdf(buffer) {
     });
 
     // pdftotext separates pages with a form feed.
-    const perPage = stdout.split('\f');
-    if (!pages) pages = perPage.length;
+    const parts = stdout.split('\f');
+    if (parts.at(-1) === '') parts.pop();
+    if (!pages) pages = parts.length;
+    const perPage = Array.from({ length: pages }, (_, i) => parts[i] ?? '');
 
     const text = stdout.replace(/\f/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
 
-    // A text layer that averages under ~80 characters a page is not a text layer.
-    const scanned = text.length < Math.max(200, pages * 80);
+    const visionPages = perPage.flatMap((pageText, i) => pageNeedsVision(pageText) ? [i + 1] : []);
+    const scanned = visionPages.length > 0;
 
-    return { text, pages, perPage, scanned };
+    return { text, pages, perPage, scanned, visionPages };
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -72,7 +76,7 @@ export async function extractPdf(buffer) {
 export const estimateVisionTokens = (pages) => pages * 1600;
 
 /** Keep only one rasterized page in memory while a book is read. */
-export async function* scannedPages(buffer, { from = 1, to, dpi = 150 } = {}) {
+export async function* scannedPages(buffer, { from = 1, to, dpi = 150, skipPages = new Set() } = {}) {
   if (!await pdftotextAvailable()) throw new Error('poppler-utils نصب نیست.');
   const dir = await mkdtemp(path.join(tmpdir(), 'asc-scan-'));
   const file = path.join(dir, 'in.pdf');
@@ -80,6 +84,7 @@ export async function* scannedPages(buffer, { from = 1, to, dpi = 150 } = {}) {
   try {
     await writeFile(file, buffer);
     for (let page = from; page <= to; page++) {
+      if (skipPages.has(page)) { yield { page, buffer: null }; continue; }
       await run('pdftoppm', ['-f', String(page), '-l', String(page),
         '-singlefile', '-png', '-r', String(dpi), file, output],
       { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });

@@ -152,6 +152,13 @@ a{color:var(--copper-strong)}
 .agent-card-head span{color:var(--copper-strong)}
 .agent-card p{margin:6px 0;color:var(--ink);font-size:11px;font-weight:700;line-height:1.65}
 .agent-card small{display:block;color:var(--muted);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
+.lead-heading{margin-top:18px!important}
+.lead-card{margin-top:7px;padding:9px 10px;border:1px solid #425366;border-radius:5px;background:#203246}
+.lead-card[data-status=approved]{border-right:3px solid var(--green)}
+.lead-card[data-status=pending]{border-right:3px solid var(--copper)}
+.lead-card[data-status=deferred]{border-right:3px solid #7c8a99}
+.lead-card strong{display:block;color:var(--ink);font-size:11px;line-height:1.7}
+.lead-card small{display:block;margin-top:3px;color:var(--muted);font-size:10px;line-height:1.6}
 .section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #d3d0c6}
 .section-heading span{font-size:13px;font-weight:800}.section-heading small{color:#a27b67;font:700 9px var(--latin);letter-spacing:.07em;direction:ltr;white-space:nowrap}
 .section-note{margin:0 0 12px;color:var(--muted);font-size:10px;line-height:1.75}

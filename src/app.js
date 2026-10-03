@@ -673,20 +673,20 @@ async function handleDocument(chatId, principalId, { fileId, fileSize, filename,
           `📎 <b>${esc(filename || 'سند')}</b>\n\n${esc(m)}`),
       });
     } catch (err) {
-      // A scanned PDF has no text layer, so it can only be read through vision.
-      // That is expensive enough to quote a price and ask first.
+      // Image-only pages in a mixed PDF need vision; text pages are read locally.
       if (!err.scanned) throw err;
       const token = String(fileId).slice(-40);
       pendingScans.set(token, { fileId, filename, mime, dossierId, pages: err.scanned.pages });
-      const perPage = Math.round(err.scanned.estTokens / err.scanned.pages * 0.6);
-      const est = perPage * err.scanned.pages;
+      const visionPages = err.scanned.visionPages ?? err.scanned.pages;
+      const perPage = Math.round(err.scanned.estTokens / Math.max(1, visionPages) * 0.6);
+      const est = perPage * visionPages;
       await tg.edit(chatId, status.message_id, [
         `📎 <b>${esc(filename || 'سند')}</b>`, '',
-        `${err.scanned.pages} صفحه · <b>اسکن‌شده، بدون لایه‌ی متنی</b>`, '',
-        'باید صفحه‌به‌صفحه با vision خوانده شود.',
-        `تخمین: ~${toman(perPage)} تومان هر صفحه · <b>${toman(est)} تومان</b> برای همه`,
+        `${err.scanned.pages} صفحه · <b>${visionPages} صفحه نیازمند خواندن تصویر</b>`, '',
+        'صفحات دارای متن محلی خوانده می‌شوند؛ باقی صفحه‌ها با vision بررسی می‌شوند.',
+        `تخمین: ~${toman(perPage)} تومان هر صفحهٔ تصویری · <b>${toman(est)} تومان</b> برای همه`,
       ].join('\n'), [
-        [{ text: `📄 ۲۰ صفحه‌ی اول (~${toman(perPage * 20)}ت)`, callback_data: `scan20:${token}` }],
+        [{ text: '📄 ۲۰ صفحه‌ی اول', callback_data: `scan20:${token}` }],
         [{ text: `📚 همه (~${toman(est)}ت)`, callback_data: `scan:${token}` },
          { text: '✖️ بی‌خیال', callback_data: 'scancancel:0' }],
       ]);

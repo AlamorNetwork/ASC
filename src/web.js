@@ -223,6 +223,7 @@ async function importFile(pid, input, progress) {
   } catch (err) {
     if (err.savedScan?.documentId) await bindUpload(meta, dossierId, err.savedScan.documentId);
     if (err.scanned) return { dossierId, needsVision: true, pages: err.scanned.pages,
+      visionPages: err.scanned.visionPages,
       uploadId: meta.id, readPages: prior?.read_pages ?? 0 };
     throw err;
   }
@@ -237,6 +238,7 @@ function state(pid, dossierId, fresh = false) {
   return { dossiers, selected: chosen, investigation: investigationView(investigation),
     documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
     researchNodes: chosen ? store.dossierResearchNodes(pid, chosen.id) : [],
+    researchLeads: chosen ? store.researchLeads(pid, chosen.id) : [],
     sources: chosen ? store.sourceCatalogue(pid, chosen.id) : [],
     siteCrawls: chosen ? store.dossierSiteCrawls(pid, chosen.id) : [],
     claims: chosen ? store.dossierClaims(pid, chosen.id) : [],
@@ -295,7 +297,8 @@ async function route(req, res) {
       ? requireDossier(pid, url.searchParams.get('dossierId'))
       : store.getDossier(pid, settings.activeDossier(pid));
     return response(res, 200, { dossierId: dossier?.id ?? null,
-      nodes: dossier ? store.dossierResearchProgress(pid, dossier.id) : [] });
+      nodes: dossier ? store.dossierResearchProgress(pid, dossier.id) : [],
+      leads: dossier ? store.researchLeads(pid, dossier.id) : [] });
   }
   if (url.pathname === '/api/research-nodes' && req.method === 'POST') {
     const input = await readJson(req);

@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false;
-let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', monitorTimer = null;
+let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', leadSnapshot = '', monitorTimer = null;
 const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
@@ -21,7 +21,7 @@ async function pollAgentMonitor() {
   const dossierId = selected;
   try {
     const live = await api(`/api/research-progress?dossierId=${dossierId}`);
-    if (selected === dossierId && !freshCase) renderAgentMonitor(live.nodes);
+    if (selected === dossierId && !freshCase) { renderAgentMonitor(live.nodes); renderLeadMonitor(live.leads); }
   } catch { /* the next refresh can retry without interrupting the conversation */ }
 }
 function startAgentMonitor() {
@@ -71,6 +71,7 @@ function render(data) {
   const claims = Array.isArray(data.claims) ? data.claims : [];
   $('claims-list').innerHTML = claims.length ? claims.slice(-15).reverse().map((c) => `<div class="claim ${c.status === 'verified' ? '' : 'found'}">${c.status === 'verified' ? '✓ تأیید' : '◇ نیاز به بررسی'} · ${esc(c.text)}<small>${esc(c.source_title || c.source_url || 'منبع نامشخص')}</small></div>`).join('') : '<p class="muted">هنوز شاهدی ثبت نشده است.</p>';
   renderAgentMonitor(data.researchNodes);
+  renderLeadMonitor(data.researchLeads);
   renderResearch(data.researchNodes);
   renderSources(data.sources);
   renderInvestigation();
@@ -85,14 +86,22 @@ function renderAgentMonitor(rawNodes) {
     return;
   }
   const order = { running: 0, failed: 1, paused: 2, pending: 3, done: 4 };
-  const statusNames = { pending:'در صف', running:'در حال کار', paused:'مکث', done:'تکمیل', failed:'خطا' };
+  const statusNames = { pending:'در صف', running:'در حال کار', paused:'مکث', done:'این گام تکمیل', failed:'خطا' };
   const roles = { coordinator:'عامل مادر', 'source-analyst':'عامل اسناد', 'web-researcher':'عامل وب', local:'عامل محلی' };
   const running = nodes.filter((n) => n.status === 'running').length;
   const done = nodes.filter((n) => n.status === 'done').length;
   const cards = [...nodes].sort((a, b) => (order[a.status] ?? 5) - (order[b.status] ?? 5) || Number(a.id) - Number(b.id))
-    .map((n) => `<div class="agent-card" data-status="${esc(n.status || 'pending')}"><div class="agent-card-head"><strong>${esc(roles[n.assigned_role] || n.assigned_role || 'عامل')}</strong><span>${esc(statusNames[n.status] || n.status || 'در صف')}</span></div><p>${esc(n.title)}</p><small>${esc(n.progress_stage || (n.status === 'pending' ? 'منتظر شروع' : n.open_question || 'گام تازه ثبت نشده است'))}</small></div>`).join('');
+    .map((n) => `<div class="agent-card" data-status="${esc(n.status || 'pending')}"><div class="agent-card-head"><strong>${esc(roles[n.assigned_role] || n.assigned_role || 'عامل')}${n.parent_id ? ` · زیر #${fa(n.parent_id)}` : ''}</strong><span>${esc(statusNames[n.status] || n.status || 'در صف')}</span></div><p>${esc(n.title)}</p><small>${esc(n.progress_stage || (n.status === 'pending' ? 'منتظر شروع' : n.open_question || 'گام تازه ثبت نشده است'))}</small></div>`).join('');
   const html = `<div class="agent-count">${fa(running)} فعال · ${fa(done)} تکمیل · ${fa(nodes.length)} نیت</div>${cards}`;
   if (monitorSnapshot !== html) { box.innerHTML = html; monitorSnapshot = html; }
+}
+function renderLeadMonitor(rawLeads) {
+  const box = $('lead-monitor');
+  const leads = Array.isArray(rawLeads) ? rawLeads.slice(-20).reverse() : [];
+  const status = { pending:'در انتظار بازبینی', approved:'تأیید و ارجاع شد', deferred:'فعلاً تأیید نشد' };
+  const html = leads.length ? leads.map((lead) => `<div class="lead-card" data-status="${esc(lead.status)}"><strong>${esc(lead.question)}</strong><small>از زیرنیت #${fa(lead.source_node_id)} · ${esc(status[lead.status] || lead.status)}${lead.child_node_id ? ` · پیگیری در #${fa(lead.child_node_id)}` : ''}</small>${lead.review_note ? `<small>${esc(lead.review_note)}</small>` : ''}</div>`).join('')
+    : '<p class="muted">هنوز سرنخی بررسی نشده است.</p>';
+  if (leadSnapshot !== html) { box.innerHTML = html; leadSnapshot = html; }
 }
 function safeWebUrl(value) {
   try {
@@ -156,9 +165,10 @@ function renderSources(rawSources) {
     const title = esc(source.title || source.url || 'منبع بی‌عنوان');
     const heading = url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : `<strong>${title}</strong>`;
     const pages = source.pages ? ` · ${fa(source.readPages ?? 0)}/${fa(source.pages)} صفحه` : '';
+    const noOutput = source.noOutputPageCount ? ` · ${fa(source.noOutputPageCount)} صفحه بدون خروجی ویژن` : '';
     const status = source.analysisStatus ? ` · ${esc(source.analysisStatus)}` : '';
     const relations = Array.isArray(source.relations) ? source.relations.slice(0, 5) : [];
-    return `<li><div class="source-heading">${heading}</div><small>${esc(source.type || 'منبع')}${pages}${status}</small>${source.summary ? `<p>${esc(source.summary)}</p>` : ''}${relations.length ? `<details><summary>ارتباط بخش‌ها</summary><ul>${relations.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></details>` : ''}</li>`;
+    return `<li><div class="source-heading">${heading}</div><small>${esc(source.type || 'منبع')}${pages}${noOutput}${status}</small>${source.summary ? `<p>${esc(source.summary)}</p>` : ''}${relations.length ? `<details><summary>ارتباط بخش‌ها</summary><ul>${relations.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></details>` : ''}</li>`;
   }).join('')}</ul>` : '<p class="muted">هنوز منبعی در این پرونده ثبت نشده است.</p>';
 }
 function renderInvestigation() {
@@ -269,7 +279,7 @@ async function watch(id, title) {
         try {
           const live = await api(`/api/research-progress${selected ? `?dossierId=${selected}` : ''}`);
           if (!selected && live.dossierId) selected = Number(live.dossierId);
-          renderAgentMonitor(live.nodes);
+          renderAgentMonitor(live.nodes); renderLeadMonitor(live.leads);
         } catch { /* live panel may fail without losing the underlying job */ }
       }
       const summary = job.summary || job.result?.summary;

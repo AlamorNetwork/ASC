@@ -308,6 +308,35 @@ CREATE TABLE IF NOT EXISTS research_nodes (
 );
 CREATE INDEX IF NOT EXISTS research_nodes_dossier ON research_nodes(principal_id,dossier_id,parent_id,id);
 
+CREATE TABLE IF NOT EXISTS research_leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  principal_id TEXT NOT NULL,
+  dossier_id INTEGER NOT NULL REFERENCES dossiers(id),
+  root_id INTEGER NOT NULL REFERENCES research_nodes(id),
+  source_node_id INTEGER NOT NULL REFERENCES research_nodes(id),
+  question_key TEXT NOT NULL,
+  question TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  role TEXT,
+  review_note TEXT,
+  child_node_id INTEGER REFERENCES research_nodes(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(principal_id,root_id,question_key)
+);
+CREATE INDEX IF NOT EXISTS research_leads_dossier ON research_leads(principal_id,dossier_id,root_id,id);
+
+CREATE TABLE IF NOT EXISTS document_page_reads (
+  principal_id TEXT NOT NULL,
+  dossier_id INTEGER NOT NULL REFERENCES dossiers(id),
+  document_id INTEGER NOT NULL REFERENCES documents(id),
+  page INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  char_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(principal_id,document_id,page)
+);
+
 CREATE TABLE IF NOT EXISTS source_library (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   principal_id TEXT NOT NULL,
@@ -610,6 +639,55 @@ export const dossierResearchProgress = (principalId, dossierId) => db.prepare(`
   FROM research_nodes WHERE principal_id=? AND dossier_id=? ORDER BY id
 `).all(principalId, dossierId);
 
+export const researchLeadKey = (question) => String(question ?? '').normalize('NFKC').toLowerCase()
+  .replace(/[\p{P}\p{S}]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+
+export function recordResearchLead(principalId, dossierId, rootId, sourceNodeId, question) {
+  const root = getResearchNode(principalId, rootId);
+  const source = getResearchNode(principalId, sourceNodeId);
+  if (!root || root.dossier_id !== dossierId || root.parent_id ||
+      !source || source.dossier_id !== dossierId) throw new Error('سرنخ خارج از نیت اصلی است.');
+  const key = researchLeadKey(question);
+  if (key.length < 5) return null;
+  const at = new Date().toISOString();
+  db.prepare(`INSERT INTO research_leads
+    (principal_id,dossier_id,root_id,source_node_id,question_key,question,created_at,updated_at)
+    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(principal_id,root_id,question_key) DO NOTHING`)
+    .run(principalId, dossierId, rootId, sourceNodeId, key, String(question).trim().slice(0, 500), at, at);
+  return db.prepare(`SELECT * FROM research_leads WHERE principal_id=? AND root_id=? AND question_key=?`)
+    .get(principalId, rootId, key);
+}
+
+export const researchLeads = (principalId, dossierId, rootId = null) => rootId
+  ? db.prepare(`SELECT * FROM research_leads WHERE principal_id=? AND dossier_id=? AND root_id=? ORDER BY id`)
+    .all(principalId, dossierId, rootId)
+  : db.prepare(`SELECT * FROM research_leads WHERE principal_id=? AND dossier_id=? ORDER BY id`)
+    .all(principalId, dossierId);
+
+export function deferResearchLead(principalId, dossierId, id, note = '') {
+  return db.prepare(`UPDATE research_leads SET status='deferred',review_note=?,updated_at=?
+    WHERE principal_id=? AND dossier_id=? AND id=? AND status='pending'`)
+    .run(String(note).slice(0, 350), new Date().toISOString(), principalId, dossierId, id).changes;
+}
+
+/** Create the follow-up and record the mother's approval atomically. */
+export function promoteResearchLead(principalId, dossierId, id, role, note = '') {
+  if (!['source-analyst', 'web-researcher'].includes(role)) throw new Error('نقش سرنخ نامعتبر است.');
+  db.exec('BEGIN');
+  try {
+    const lead = db.prepare(`SELECT * FROM research_leads WHERE principal_id=? AND dossier_id=? AND id=?`)
+      .get(principalId, dossierId, id);
+    if (!lead || lead.status !== 'pending') { db.exec('ROLLBACK'); return null; }
+    const childId = createResearchNode({ principalId, dossierId, parentId: lead.source_node_id,
+      title: lead.question, openQuestion: lead.question, assignedRole: role });
+    setResearchNodeStage(principalId, childId, `سرنخ #${id} با تأیید عامل مادر؛ در صف بررسی`);
+    db.prepare(`UPDATE research_leads SET status='approved',role=?,review_note=?,child_node_id=?,updated_at=?
+      WHERE id=?`).run(role, String(note).slice(0, 350), childId, new Date().toISOString(), id);
+    db.exec('COMMIT');
+    return childId;
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
+}
+
 export function updateResearchNode(principalId, id, { status, openQuestion, result }) {
   if (!['pending','running','paused','done','failed'].includes(status)) throw new Error('وضعیت نیت نامعتبر است.');
   return db.prepare(`UPDATE research_nodes SET status=?,open_question=?,result_json=?,updated_at=?
@@ -643,10 +721,15 @@ export function sourceCatalogue(principalId, dossierId) {
   return [...docs.map((d) => {
     let analysis = null;
     try { analysis = JSON.parse(d.analysis_json); } catch { /* incomplete analysis */ }
+    const pageReads = documentPageReads(principalId, d.id);
+    const blank = pageReads.filter((r) => r.outcome === 'blank');
+    const noOutput = pageReads.filter((r) => r.outcome === 'model_no_text');
     return { id: `document-${d.id}`, type: d.source_url ? 'site' : 'document', documentId: d.id, title: d.filename,
       summary: analysis?.overview ?? d.source_summary ?? '', url: d.source_url ?? null,
       readPages: d.read_pages ?? d.pages,
       pages: d.pages, analysisStatus: analysis ? 'done' : 'pending',
+      blankPageCount: blank.length, blankPages: blank.slice(0, 20).map((r) => r.page),
+      noOutputPageCount: noOutput.length, noOutputPages: noOutput.slice(0, 20).map((r) => r.page),
       relations: Array.isArray(analysis?.structure) ? analysis.structure.slice(0, 8) : [],
       openQuestions: Array.isArray(analysis?.openQuestions) ? analysis.openQuestions.slice(0, 8) : [] };
   }), ...sites.map((s) => ({ id: `site-${s.id}`, type: s.source_kind, title: s.title,
@@ -737,7 +820,7 @@ export function insertChunks(principalId, dossierId, documentId, rows) {
 }
 
 /** Commit a scanned page and its cursor together; a crash cannot leave one without the other. */
-export function saveScannedPage(principalId, dossierId, documentId, page, text, costToman, rows) {
+export function saveScannedPage(principalId, dossierId, documentId, page, text, costToman, rows, outcome = 'vision_text') {
   const doc = getDocument(principalId, documentId);
   if (!doc || doc.dossier_id !== dossierId) throw new Error('سند برای این کاربر پیدا نشد.');
   if (page !== (doc.read_pages ?? 0) + 1) throw new Error(`صفحهٔ بعدی باید ${(doc.read_pages ?? 0) + 1} باشد.`);
@@ -746,6 +829,9 @@ export function saveScannedPage(principalId, dossierId, documentId, page, text, 
   try {
     for (const r of rows) insertChunkStmt.run(principalId, dossierId, documentId,
       r.seq, page, r.text, null, now);
+    db.prepare(`INSERT INTO document_page_reads
+      (principal_id,dossier_id,document_id,page,outcome,char_count,updated_at)
+      VALUES(?,?,?,?,?,?,?)`).run(principalId, dossierId, documentId, page, outcome, text.length, now);
     advanceDocument(documentId, { readPages: page, addedChars: text.length, addedCost: costToman });
     db.exec('COMMIT');
   } catch (err) {
@@ -754,6 +840,11 @@ export function saveScannedPage(principalId, dossierId, documentId, page, text, 
   }
   return rows.length;
 }
+
+export const documentPageReads = (principalId, documentId) => db.prepare(`
+  SELECT page,outcome,char_count FROM document_page_reads
+  WHERE principal_id=? AND document_id=? ORDER BY page
+`).all(principalId, documentId);
 
 export const setChunkEmbedding = (id, blob) =>
   db.prepare(`UPDATE chunks SET embedding = ? WHERE id = ?`).run(blob, id);

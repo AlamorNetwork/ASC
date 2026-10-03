@@ -14,7 +14,7 @@ import { chat, chatJson } from './llm.js';
 import { modelFor } from './settings.js';
 import { verifyAgainstText } from './verify.js';
 import { gateClaims } from './support.js';
-import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages, scannedPages } from './pdf.js';
+import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages, scannedPages, pageNeedsVision } from './pdf.js';
 import { chunkText, embedPending } from './chunks.js';
 import * as store from './db.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
@@ -106,7 +106,8 @@ export async function extractText({ buffer, filename, mime, kind, allowVision, p
     }
     if (!allowVision) {
       const err = new Error('scanned');
-      err.scanned = { pages: pdf.pages, estTokens: estimateVisionTokens(pdf.pages) };
+      err.scanned = { pages: pdf.pages, visionPages: pdf.visionPages.length,
+        estTokens: estimateVisionTokens(pdf.visionPages.length) };
       throw err;
     }
 
@@ -281,7 +282,7 @@ export async function extractClaimsFor({ principalId, documentId, onProgress }) 
 export async function ingestScannedPages({
   principalId, dossierId, buffer, filename, mime, pages, fromPage = 1,
   pageLimit = null, resumeDocumentId = null, onProgress,
-  pagesIterator = scannedPages, readPage = null,
+  pagesIterator = scannedPages, readPage = null, localPerPage = null,
 }) {
   const hash = sha256(buffer);
   const prior = resumeDocumentId ? store.getDocument(principalId, resumeDocumentId)
@@ -300,10 +301,15 @@ export async function ingestScannedPages({
   let costKnown = true;
   let chunks = 0;
   let seq = store.maxChunkSeq(documentId) + 1;
+  const skipPages = new Set();
+  for (let page = start; page <= last; page++)
+    if (localPerPage && !pageNeedsVision(localPerPage[page - 1])) skipPages.add(page);
   try {
-    for await (const { page, buffer: png } of pagesIterator(buffer, { from: start, to: last })) {
+    for await (const { page, buffer: png } of pagesIterator(buffer, { from: start, to: last, skipPages })) {
       checkpoint(principalId, `پیش از صفحه ${page}`);
-      const result = readPage ? await readPage(page, png) : await chat({
+      const local = skipPages.has(page);
+      const result = local ? { text: localPerPage[page - 1], usage: { costToman: 0 } }
+        : readPage ? await readPage(page, png) : await chat({
         model: modelFor('capture'), system: PAGE_SYSTEM,
         content: [
           { type: 'image_url', image_url: { url: dataUrl('image/png', png) } },
@@ -312,19 +318,19 @@ export async function ingestScannedPages({
         maxTokens: 2500, noThinking: false,
       });
       const raw = String(result.text ?? '').trim();
-      if (!raw) throw new Error(`ویژن برای صفحه ${page} متن برنگرداند.`);
-      const text = raw === '[خالی]' ? '' : raw;
+      const outcome = local ? 'local_text' : raw === '[خالی]' ? 'blank' : raw ? 'vision_text' : 'model_no_text';
+      const text = outcome === 'blank' || outcome === 'model_no_text' ? '' : raw;
       const price = result.usage?.costToman ?? 0;
-      if (!price && !result.usage?.costUsd) costKnown = false;
+      if (!local && !price && !result.usage?.costUsd) costKnown = false;
       // A title page may contain fewer than chunkText's 40-character threshold.
       const parts = chunkText(text);
       if (text && !parts.length) parts.push(text);
       const rows = parts.map((part) => ({ seq: seq++, page, text: part }));
-      store.saveScannedPage(principalId, dossierId, documentId, page, text, price, rows);
+      store.saveScannedPage(principalId, dossierId, documentId, page, text, price, rows, outcome);
       perPage.push(text);
       chunks += rows.length;
       costToman += price;
-      onProgress?.(`صفحه ${page} از ${last} ذخیره شد` +
+      onProgress?.(`صفحه ${page} از ${last} ${outcome === 'model_no_text' ? 'بدون خروجی مدل ثبت شد؛ ادامه می‌دهم' : outcome === 'blank' ? 'خالی ثبت شد' : 'ذخیره شد'}` +
         (costKnown ? ` · ${Math.round(costToman).toLocaleString('fa-IR')} تومان` : ' · هزینه را از پنل ارائه‌دهنده ببین'));
     }
   } catch (err) {
@@ -361,7 +367,7 @@ export async function ingestToDossier({
     if (pdf.scanned) {
       const scan = await ingestScannedPages({
         principalId, dossierId, buffer, filename, mime, pages: pdf.pages,
-        fromPage, pageLimit, resumeDocumentId, onProgress,
+        fromPage, pageLimit, resumeDocumentId, onProgress, localPerPage: pdf.perPage,
       });
       let costToman = scan.costToman;
       let embedded = 0;

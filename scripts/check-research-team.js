@@ -31,7 +31,7 @@ try {
       const packet = JSON.parse(content);
       supervisorSawStates = packet.workerStates?.length > 0 &&
         packet.workerStates.every((w) => w.status === 'done' && w.stage);
-      return { data: { summary: 'نتیجه مقدماتی', open_questions: ['چه منبع دیگری؟'] } };
+      return { data: { summary: 'نتیجه مقدماتی', open_questions: ['چه منبع دیگری؟'], approved_leads: [] } };
     }
     active++; peak = Math.max(peak, active);
     observedLive ||= store.dossierResearchNodes(pid, dossierId)
@@ -94,6 +94,109 @@ try {
       store.getResearchNode(pid, dryRoot).status !== 'paused' ||
       store.getResearchNode(pid, dryChild).status !== 'paused')
     throw new Error('a dry web search lost its resumable frontier');
+  const leadDossier = Number(store.insertDossier({ principalId: pid, topic: 'زنجیرهٔ سرنخ' }));
+  const leadRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'پرسش اصلی', assignedRole: 'coordinator' });
+  const questions = ['روایت نخست چه می‌گوید؟', 'منشأ روایت دوم چیست؟',
+    'کدام منبع دیدگاه سوم را نقد می‌کند؟', 'آیا متن چهارم مستقل است؟'];
+  const firstLeadWorker = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    parentId: leadRoot, title: questions[0], assignedRole: 'source-analyst' });
+  let leadWorkerCalls = 0, leadMotherCalls = 0;
+  const leadAsk = async ({ system, content }) => {
+    if (system.includes('هماهنگ‌کننده')) {
+      leadMotherCalls++;
+      const packet = JSON.parse(content);
+      const candidate = packet.leadCandidates?.[0];
+      if (candidate && !packet.workerStates?.some((n) => n.id === candidate.fromNodeId))
+        throw new Error('mother saw a lead without its source agent');
+      return { data: { summary: 'گزارش زنجیره', approved_leads: candidate
+        ? [{ lead_id: candidate.id, role: 'local', reason: 'پرسش بعدی قابل بررسی است' }] : [] } };
+    }
+    leadWorkerCalls++;
+    const current = /زیرپرسش: ([^\n]+)/.exec(content)?.[1];
+    const next = questions[questions.indexOf(current) + 1];
+    return { data: { summary: `گام ${current} بررسی شد`,
+      findings: [{ text: 'عبارت در سند است', passage_id: 1, quote: 'عبارت دقیق منبع' }],
+      open_questions: next ? [next] : [] } };
+  };
+  const leadSearch = async () => [{ id: 10, document_id: 10, page: 4,
+    text: 'این صفحه عبارت دقیق منبع را نشان می‌دهد و پرسش بعدی قابل بررسی است.' }];
+  const queued = await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: leadRoot, ask: leadAsk, search: leadSearch, crawl: async () => ({ pagesSaved: 0 }) });
+  const leadNodes = store.dossierResearchNodes(pid, leadDossier);
+  const leads = store.researchLeads(pid, leadDossier, leadRoot);
+  if (leadWorkerCalls !== 3 || leadMotherCalls !== 3 || leadNodes.length !== 5 ||
+      leads.length !== 3 || leads.some((lead) => lead.status !== 'approved' || !lead.child_node_id) ||
+      store.researchLeads('b', leadDossier).length ||
+      !queued.incomplete.length || store.getResearchNode(pid, leadRoot).status !== 'paused' ||
+      leadNodes.find((n) => n.title === questions[1])?.parent_id !== firstLeadWorker ||
+      leadNodes.find((n) => n.title === questions[3])?.status !== 'pending')
+    throw new Error('mother-approved leads did not form a bounded durable chain');
+  await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: leadRoot, ask: leadAsk, search: leadSearch });
+  if (leadWorkerCalls !== 4 || store.getResearchNode(pid, leadRoot).status !== 'done' ||
+      store.researchLeads(pid, leadDossier, leadRoot).length !== 3)
+    throw new Error('resuming a queued lead repeated finished work');
+  const outageRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'قطعی هنگام داوری' });
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier, parentId: outageRoot,
+    title: 'شاهد اولیهٔ قطعی' });
+  let outageWorkers = 0, outageMotherCalls = 0;
+  const outageAsk = async ({ system, content }) => {
+    if (system.includes('هماهنگ‌کننده')) {
+      outageMotherCalls++;
+      if (outageMotherCalls === 1) throw new Error('coordinator offline');
+      const candidate = JSON.parse(content).leadCandidates?.[0];
+      return { data: { summary: 'بررسی انجام شد', approved_leads: candidate
+        ? [{ lead_id: candidate.id, role: 'local', reason: 'پیگیری شود' }] : [] } };
+    }
+    outageWorkers++;
+    return { data: { summary: 'شاهد خوانده شد', findings: [],
+      open_questions: outageWorkers === 1 ? ['منشأ این شاهد را چه کسی ثبت کرده است؟'] : [] } };
+  };
+  const waiting = await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: outageRoot, ask: outageAsk, search: leadSearch });
+  if (waiting.pendingLeads !== 1 || store.getResearchNode(pid, outageRoot).status !== 'paused')
+    throw new Error('coordinator outage discarded an unreviewed lead');
+  await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: outageRoot, ask: outageAsk, search: leadSearch });
+  if (outageWorkers !== 2 || store.getResearchNode(pid, outageRoot).status !== 'done' ||
+      store.researchLeads(pid, leadDossier, outageRoot)[0]?.status !== 'approved')
+    throw new Error('pending lead did not resume after coordinator recovery');
+  const rejectedRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'شناسهٔ ساختگی' });
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier, parentId: rejectedRoot,
+    title: 'شاهد اولیهٔ دیگر' });
+  await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: rejectedRoot, search: leadSearch,
+    ask: async ({ system }) => system.includes('هماهنگ‌کننده')
+      ? { data: { summary: 'داوری شد', approved_leads: [{ lead_id: 99999, role: 'web' }] } }
+      : { data: { summary: 'سند خوانده شد', open_questions: ['منبع مستقل کجاست؟'] } } });
+  if (store.researchLeads(pid, leadDossier, rejectedRoot)[0]?.status !== 'deferred' ||
+      store.dossierResearchNodes(pid, leadDossier).filter((n) => n.parent_id === rejectedRoot).length !== 1)
+    throw new Error('invented lead id became a new agent task');
+  const formatRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'بازبینی پاسخ ناقص مادر' });
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier, parentId: formatRoot,
+    title: 'نقل اولیه' });
+  let reviewCalls = 0, formatWorkers = 0;
+  await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: formatRoot, search: leadSearch,
+    ask: async ({ system, content }) => {
+      if (system.includes('فقط دربارهٔ شناسه‌های')) {
+        reviewCalls++;
+        return { data: { approved_leads: [{
+          lead_id: JSON.parse(content).leadCandidates[0].id, role: 'local', reason: 'مهم است' }] } };
+      }
+      if (system.includes('هماهنگ‌کننده')) return { data: { summary: 'جمع‌بندی',
+        ...(formatWorkers > 1 ? { approved_leads: [] } : {}) } };
+      formatWorkers++;
+      return { data: { summary: 'خوانده شد', open_questions:
+        formatWorkers === 1 ? ['آیا شاهد دوم مستقل است؟'] : [] } };
+    } });
+  if (reviewCalls !== 1 || formatWorkers !== 2 ||
+      store.researchLeads(pid, leadDossier, formatRoot)[0]?.status !== 'approved')
+    throw new Error('mother failed to recover from a missing lead-review field');
   const interrupted = store.createResearchNode({ principalId: pid, dossierId, title: 'کار قطع‌شده' });
   store.updateResearchNode(pid, interrupted, { status: 'running' });
   store.setResearchNodeStage(pid, interrupted, 'خواندن منبع');
@@ -101,7 +204,7 @@ try {
   if (store.getResearchNode(pid, interrupted).status !== 'paused' ||
       !store.getResearchNode(pid, interrupted).progress_stage.includes('آمادهٔ ادامه'))
     throw new Error('restart lost the agent checkpoint');
-  console.log('research team check passed — parallel agents, live checkpoints, supervisor review, resume, isolation; 0 paid calls');
+  console.log('research team check passed — parallel agents, mother-approved lead chain, bounded resume, isolation; 0 paid calls');
 } finally {
   store.db.close();
   fs.rmSync(temp, { recursive: true, force: true });

@@ -23,6 +23,7 @@ const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبی�
 - می‌توانی دربارهٔ فرضیه یا سناریوی خلاف واقع گفتگو کنی؛ آن را روشن با برچسب فرضیه از شواهد تاریخی جدا نگه دار و به جای رد کردن بی‌دلیل درخواست، محدودیت شواهد را بگو.
 - فهرست منابع فقط می‌گوید چه چیزی ثبت شده؛ «گذرگاه‌های متن» همان بخش‌های واقعاً خوانده‌شده‌اند. در پاسخ دربارهٔ محتوای سند، به گذرگاه [n] و صفحه/سند آن ارجاع بده. خلاصهٔ تحلیلی و دفترچهٔ تحقیق شاهد مستقل نیستند.
 - اگر صفحات خوانده‌شده کمتر از کل صفحات است، پوشش را ناقص بگو. اگر سندی در فهرست نیست یا متن مرتبط پیدا نشده، نگو فایل اصلی را بررسی کرده‌ای؛ دقیق بگو چه چیزی در دسترس است و چه چیزی هنوز باید خوانده شود.
+- noOutputPages یعنی ویژن برای آن صفحات متن نداده؛ پردازش فایل ادامه یافته اما آن صفحات شاهدِ خوانده‌شده نیستند و باید جدا بازبینی شوند.
 - اگر روشن نیست کاربر چه اقدامی می‌خواهد، با respond یک پرسش کوتاه بپرس.`;
 
 const explicitResearch = (text) => /(?:تحقیق|پژوهش|بررسی|جست[‌\s-]*وجو|کاوش).{0,100}(?:کن|بکن|شروع|بگرد)|(?:برو|بگرد|پیدا کن|منبع بیار|منابع بیار).{0,100}(?:تحقیق|پژوهش|منبع|درباره|راجع)|\b(?:research|investigate|search for)\b/i.test(text);
@@ -89,6 +90,8 @@ export function motherSourceContext(principalId, dossierId, question) {
   const sources = catalogue.slice(-10).map((s) => ({
     id: s.id, documentId: s.documentId, title: clean(s.title, 140), type: s.type, url: s.url,
     readPages: s.readPages, pages: s.pages, analysisStatus: s.analysisStatus,
+    blankPageCount: s.blankPageCount, blankPages: s.blankPages,
+    noOutputPageCount: s.noOutputPageCount, noOutputPages: s.noOutputPages,
     overview: clean(s.summary, 350),
   }));
   const terms = String(question).replace(/https?:\/\/\S+/g, ' ').match(/[\p{L}\p{N}]+/gu) ?? [];
@@ -123,7 +126,10 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
       agents: store.dossierResearchProgress(principalId, dossier.id)
         .filter((n) => n.status !== 'done').slice(-16).map((n) => ({ id: n.id,
           parentId: n.parent_id, role: n.assigned_role, status: n.status,
-          stage: n.progress_stage, question: clean(n.open_question || n.title, 160) })) } : null,
+          stage: n.progress_stage, question: clean(n.open_question || n.title, 160) })),
+      leads: store.researchLeads(principalId, dossier.id).slice(-16).map((lead) => ({
+        id: lead.id, rootId: lead.root_id, status: lead.status,
+        question: clean(lead.question, 160), childNodeId: lead.child_node_id })) } : null,
       roots, recentConversation: history }), maxTokens: 1300 }); }
   catch (err) {
     onProgress?.(`تصمیم ساختاری پاسخ نداد؛ مسیر گفت‌وگوی عادی: ${clean(err.message, 100)}`);
@@ -198,6 +204,8 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
   const result = await team({ principalId, dossierId: active.id, nodeId: root.id, onProgress });
   const answer = [clean(result.summary, 1800) || 'گزارش عامل‌ها ذخیره شد.',
     result.openQuestions?.length ? `پرسش باز: ${clean(result.openQuestions[0], 350)}` : null,
+    result.approvedLeadNodes?.length ? `${result.approvedLeadNodes.length} سرنخ با تأیید عامل مادر به زیرنیت تبدیل شد.` : null,
+    result.pendingLeads ? `${result.pendingLeads} سرنخ هنوز در انتظار بازبینی مادر است.` : null,
     result.incomplete?.length ? `${result.incomplete.length} زیرنیت ناتمام است؛ با گفتن «ادامه بده» از همان‌جا پیش می‌روم.` : null]
     .filter(Boolean).join('\n\n');
   store.addMessage({ principalId, dossierId: active.id, role: 'assistant', text: answer });

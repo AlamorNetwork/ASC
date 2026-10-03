@@ -64,10 +64,17 @@ try {
   if (newNode.status !== 201) throw new Error(`research node ${newNode.status}`);
   const nodeId = (await newNode.json()).id;
   store.setResearchNodeStage('test-web-owner', nodeId, 'جست‌وجوی متن اسناد پرونده');
+  const lead = store.recordResearchLead('test-web-owner', planCase, nodeId, nodeId,
+    'منشأ این روایت در سند چیست؟');
+  const followupId = store.promoteResearchLead('test-web-owner', planCase, lead.id,
+    'source-analyst', 'پرسش از سند قابل پیگیری است');
   const live = await fetch(`${url}/api/research-progress?dossierId=${planCase}`, { headers: { Cookie: cookie } });
-  const liveNodes = (await live.json()).nodes;
+  const liveData = await live.json();
+  const liveNodes = liveData.nodes;
   if (live.status !== 200 || !liveNodes.some((n) => n.id === nodeId &&
       n.progress_stage === 'جست‌وجوی متن اسناد پرونده') ||
+      !liveNodes.some((n) => n.id === followupId && n.parent_id === nodeId) ||
+      !liveData.leads.some((item) => item.id === lead.id && item.child_node_id === followupId) ||
       liveNodes.some((n) => 'result_json' in n))
     throw new Error('agent checkpoint is not live in the web API');
   const otherDossier = Number(store.insertDossier({ principalId: 'another-owner', topic: 'private' }));
