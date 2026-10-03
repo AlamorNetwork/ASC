@@ -426,6 +426,8 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
       : result.pauseReason === 'budget' ? 'سقف هزینه پر شده است؛ پس از تنظیم بودجه از همان‌جا ادامه می‌دهم.'
         : result.pauseReason === 'time_limit' ? 'سقف زمان این اجرا پر شد؛ مسیر و زیرنیت‌ها برای ادامه محفوظ‌اند.'
           : result.pauseReason === 'mother_paused' ? 'عامل مادر پیگیری بیشتر را فعلاً بی‌ثمر تشخیص داد؛ مسیر برای بازبینی محفوظ است.'
+            : result.pauseReason === 'no_actionable_lead' ? 'هنوز شاهد یا مسیر تازهٔ قابل‌پیگیری پیدا نشد. تکرار همان جست‌وجو کمکی نمی‌کند؛ منبع تازه یا زاویهٔ جست‌وجوی متفاوت لازم است.'
+              : result.pauseReason === 'mother_unavailable' ? 'داوری عامل مادر پاسخ نداد؛ گزارش عامل‌ها ذخیره شده و بعداً قابل بازبینی است.'
         : 'با گفتن «ادامه بده» از همان‌جا پیش می‌روم.'}` : null]
     .filter(Boolean).join('\n\n');
   store.addMessage({ principalId, dossierId: active.id, role: 'assistant', text: answer });

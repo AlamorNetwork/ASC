@@ -277,6 +277,55 @@ try {
   if (pausedWorkers !== 1 || pausedResult.pauseReason !== 'mother_paused' ||
       !pausedResult.incomplete.length)
     throw new Error('mother could not pause a low-value trail without losing its next task');
+  const dryBranchRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'یافتن نمونهٔ مستقل دیگر' });
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    parentId: dryBranchRoot, title: 'گزارش موجود را بررسی کن' });
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    parentId: dryBranchRoot, title: 'نمونهٔ دوم را در وب پیدا کن', assignedRole: 'web-researcher' });
+  const dryBranch = await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: dryBranchRoot, search: leadSearch, crawl: async () => ({ pagesSaved: 0 }),
+    discover: async () => ({ evidence: [] }),
+    ask: async ({ system }) => system.includes('هماهنگ‌کننده')
+      ? { data: { summary: 'نمونهٔ دوم پیدا نشد', approved_leads: [], next_action: 'continue' } }
+      : { data: { summary: 'منبع اول بررسی شد', open_questions: [] } } });
+  if (dryBranch.incomplete.length !== 1 || dryBranch.pauseReason !== 'no_actionable_lead')
+    throw new Error('a dry worker was reported as an ordinary continue-able research round');
+  const adaptiveDossier = Number(store.insertDossier({ principalId: pid, topic: 'تغییر مسیر پس از بن‌بست' }));
+  const adaptiveRoot = store.createResearchNode({ principalId: pid, dossierId: adaptiveDossier,
+    title: 'نمونهٔ مستقل دیگری پیدا کن' });
+  store.createResearchNode({ principalId: pid, dossierId: adaptiveDossier,
+    parentId: adaptiveRoot, title: 'شاهد موجود را بررسی کن' });
+  const exhaustedWeb = store.createResearchNode({ principalId: pid, dossierId: adaptiveDossier,
+    parentId: adaptiveRoot, title: 'عبارت تکراری اول', assignedRole: 'web-researcher' });
+  let adaptiveSearches = 0, adaptiveReviews = 0;
+  const adaptiveResult = await runResearchTeam({ principalId: pid, dossierId: adaptiveDossier,
+    nodeId: adaptiveRoot, search: leadSearch,
+    discover: async (query) => {
+      adaptiveSearches++;
+      return { evidence: query === 'عبارت تکراری اول' ? [] : [{ id: 1,
+        url: 'https://example.org/second-example', title: 'Second example',
+        text: 'متن نمونه دوم با عبارت مستقل', fullText: 'متن نمونه دوم با عبارت مستقل '.repeat(8) }] };
+    },
+    ask: async ({ system, content }) => {
+      if (system.includes('هماهنگ‌کننده')) {
+        adaptiveReviews++;
+        const packet = JSON.parse(content);
+        if (adaptiveReviews === 1 && !packet.workerStates.some((n) =>
+          n.id === exhaustedWeb && n.status === 'paused' && n.openQuestion))
+          throw new Error('mother could not see why the web agent stopped');
+        return { data: { summary: 'مسیر جایگزین بررسی شد', approved_leads: [],
+          new_subtasks: adaptiveReviews === 1 ? [{ from_node_id: exhaustedWeb,
+            question: 'نمونهٔ دوم در گزارش باستان‌شناسی مستقل کجاست؟',
+            role: 'web', reason: 'عبارت قبلی هیچ منبعی نداد' }] : [] } };
+      }
+      return { data: { summary: 'گذرگاه بررسی شد', open_questions: [] } };
+    } });
+  if (adaptiveSearches !== 2 || adaptiveResult.incomplete.length ||
+      store.getResearchNode(pid, exhaustedWeb).status !== 'done' ||
+      !store.researchLeads(pid, adaptiveDossier, adaptiveRoot)
+        .some((lead) => lead.source_node_id === exhaustedWeb && lead.child_node_id))
+    throw new Error('mother did not replace an exhausted search with a traceable alternative');
   const outageRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
     title: 'قطعی هنگام داوری' });
   store.createResearchNode({ principalId: pid, dossierId: leadDossier, parentId: outageRoot,
