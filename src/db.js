@@ -562,9 +562,10 @@ export const allSettings = () =>
   db.prepare(`SELECT key, value FROM settings ORDER BY key`).all();
 
 export const addMessage = (m) => db.prepare(`
-  INSERT INTO messages (principal_id, dossier_id, role, text, cost_toman, created_at)
-  VALUES (?,?,?,?,?,?)
-`).run(m.principalId, m.dossierId ?? null, m.role, m.text, m.costToman ?? 0, new Date().toISOString()).lastInsertRowid;
+  INSERT INTO messages (principal_id, dossier_id, role, text, cost_toman, prompt_json, created_at)
+  VALUES (?,?,?,?,?,?,?)
+`).run(m.principalId, m.dossierId ?? null, m.role, m.text, m.costToman ?? 0,
+  m.prompt ? JSON.stringify(m.prompt) : null, new Date().toISOString()).lastInsertRowid;
 
 // ---------------------------------------------------------- documents & chunks
 
@@ -1054,7 +1055,7 @@ export const saveAnalysisBatch = (principalId, documentId, level, n, sourceHash,
 
 /** Oldest-first, so it can be handed straight to a model as conversation history. */
 export const conversation = (principalId, dossierId, limit = 20) =>
-  db.prepare(`SELECT role, text FROM messages
+  db.prepare(`SELECT id, role, text, prompt_json FROM messages
               WHERE principal_id = ? AND dossier_id IS ?
               ORDER BY id DESC LIMIT ?`)
     .all(principalId, dossierId, limit).reverse();
@@ -1083,6 +1084,7 @@ function addColumn(table, column, type) {
 // A document is identified by its bytes, so re-sending the same file resumes it
 // rather than paying to read the same pages again.
 addColumn('documents', 'sha256', 'TEXT');
+addColumn('messages', 'prompt_json', 'TEXT');
 addColumn('documents', 'read_pages', 'INTEGER');
 addColumn('research_nodes', 'progress_stage', 'TEXT');
 // A watch can carry its own question, so "keep looking into this" is not limited to

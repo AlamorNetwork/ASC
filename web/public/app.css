@@ -100,6 +100,13 @@ a{color:var(--copper-strong)}
 .message.user .who{color:#576576}
 .message.user .who:before{content:'●';font-size:8px}
 .message p{margin:0;font-size:13px;unicode-bidi:plaintext}
+.question-box{margin-top:16px;padding:15px 16px;border:1px solid #6a584e;border-radius:10px;background:#25313d;white-space:normal}
+.question-label{margin-bottom:6px;color:var(--copper-strong);font-size:10px;font-weight:800}
+.question-box strong{display:block;color:var(--ink);font-size:13px;line-height:1.8}
+.question-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}
+.question-actions button{min-height:38px;padding:7px 12px;border:1px solid #6a7480;border-radius:6px;background:#1b2a3a;color:var(--ink);text-align:right;font-size:11px}
+.question-actions button:hover{border-color:var(--copper);background:#3a302e}
+.question-actions .question-free{border-color:transparent;background:transparent;color:var(--copper-strong)}
 .progress-card{flex:none;margin:0 25px 8px;padding:14px 18px;border:1px solid #b5c7b7;border-right:3px solid var(--green);border-radius:6px;background:#f0f6f0}
 .progress-head{display:flex;align-items:center;gap:9px}.progress-head strong{font-size:12px}.progress-head span:last-child{margin-right:auto;color:var(--muted);font:12px var(--latin)}
 .progress-track{height:4px;overflow:hidden;margin-top:12px;background:#cadbd0;border-radius:4px}

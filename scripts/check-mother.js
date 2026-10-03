@@ -21,6 +21,13 @@ try {
     ask: async () => ({ data: { action: 'respond', reply: 'سلام! آماده‌ام.' }, usage: {} }) });
   if (plain.text !== 'سلام! آماده‌ام.' || teamCalls || store.listDossiers(pid, 5).length)
     throw new Error('ordinary chat created research');
+  const clarified = await motherTurn({ principalId: pid, userText: 'کدام نسخه را بخوانی؟', team,
+    ask: async () => ({ data: { action: 'respond', reply: 'برای انتخاب متن، یک نکته لازم است.',
+      clarification: { question: 'کدام نسخه را بررسی کنم؟', options: ['نسخهٔ فارسی', 'نسخهٔ اصلی'] } }, usage: {} }) });
+  const savedPrompt = store.conversation(pid, null).at(-1);
+  if (clarified.action.type !== 'clarification' || teamCalls ||
+      JSON.parse(savedPrompt.prompt_json || 'null')?.options?.[0] !== 'نسخهٔ فارسی')
+    throw new Error('mother clarification was not saved for the answer box');
   const longText = 'آ'.repeat(9000);
   let receivedLength = 0;
   await motherTurn({ principalId: pid, userText: longText, team,

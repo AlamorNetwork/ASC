@@ -5,6 +5,23 @@ const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
 function toast(message) { clearTimeout(toastTimer); $('toast').textContent = message; $('toast').hidden = false; toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
+function questionBox(message) {
+  let prompt;
+  try { prompt = JSON.parse(message?.prompt_json || 'null'); } catch { return ''; }
+  if (!prompt?.question || typeof prompt.question !== 'string') return '';
+  const options = Array.isArray(prompt.options) ? prompt.options.slice(0, 3).filter((v) => typeof v === 'string' && v.trim()) : [];
+  return `<div class="question-box"><div class="question-label">پاسخ شما مسیر بعدی را مشخص می‌کند</div><strong>${esc(prompt.question)}</strong><div class="question-actions">${options.map((v) => `<button type="button" class="question-option" data-answer="${esc(v)}">${esc(v)}</button>`).join('')}<button type="button" class="question-free" data-free-answer>پاسخ خودم را می‌نویسم ↗</button></div></div>`;
+}
+function bindQuestionBox() {
+  for (const button of $('messages').querySelectorAll('[data-answer]')) button.onclick = () => {
+    if (busy) return;
+    $('tab-chat').click(); $('prompt').value = button.dataset.answer;
+    $('compose-form').requestSubmit();
+  };
+  for (const button of $('messages').querySelectorAll('[data-free-answer]')) button.onclick = () => {
+    $('tab-chat').click(); $('prompt').focus();
+  };
+}
 async function api(url, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (options.method && options.method !== 'GET') headers['X-CSRF-Token'] = csrf;
@@ -62,7 +79,9 @@ function render(data) {
   $('upload-target').textContent = freshCase || !selected
     ? 'مقصد فایل بعدی: پروندهٔ تازه'
     : `مقصد فایل بعدی: ${data.selected?.topic || 'پرونده'} (#${fa(selected)})`;
-  $('messages').innerHTML = (Array.isArray(data.messages) ? data.messages : []).map((m) => `<div class="message ${m.role === 'user' ? 'user' : 'assistant'}"><div class="who">${m.role === 'user' ? 'شما' : 'عامل مادر'}</div><p>${esc(m.text)}</p></div>`).join('');
+  const messages = Array.isArray(data.messages) ? data.messages : [];
+  $('messages').innerHTML = messages.map((m, i) => `<div class="message ${m.role === 'user' ? 'user' : 'assistant'}"><div class="who">${m.role === 'user' ? 'شما' : 'عامل مادر'}</div><p>${esc(m.text)}</p>${i === messages.length - 1 && m.role === 'assistant' ? questionBox(m) : ''}</div>`).join('');
+  bindQuestionBox();
   document.querySelector('.conversation').classList.toggle('has-messages', $('messages').childElementCount > 0);
   $('messages').scrollTop = $('messages').scrollHeight;
   $('document-list').innerHTML = (Array.isArray(data.documents) ? data.documents : []).map((d) => `<div class="doc-row"><span title="${esc(d.filename)}">◈ ${esc(d.filename)} ${d.pages ? `· ${fa(d.read_pages ?? d.pages)}/${fa(d.pages)}` : ''}</span><span class="doc-actions">${d.id && d.extraction !== 'model_vision_pages' ? `<button class="small-action" data-claims="${Number(d.id)}">ادعاها</button>` : ''}<button class="small-action" data-analyze="${Number(d.id)}" title="تحلیل متن ذخیره‌شده ممکن است هزینه داشته باشد">تحلیل عمیق</button><a class="small-action" href="/api/document-analysis?documentId=${Number(d.id)}" title="دریافت گزارش Markdown">MD</a></span></div>`).join('');
@@ -445,7 +464,7 @@ $('compose-form').onsubmit = async (e) => { e.preventDefault(); if (busy) return
   const requestMode = mode;
   if (requestMode === 'deep') return startDeep();
   try { setBusy(true); const r=await api(`/api/${requestMode}`, { method:'POST', json:{ message, question:message, dossierId:selected } });
-    $('prompt').value=''; addMessage('user',message);
+    $('prompt').value=''; $('messages').querySelectorAll('.question-box').forEach((box) => box.remove()); addMessage('user',message);
     if (r.id) watch(r.id,requestMode==='chat'?'عامل مادر در حال بررسی':'در حال تحقیق وب');
     else {
       selectResultDossier(r);

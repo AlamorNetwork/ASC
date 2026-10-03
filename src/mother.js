@@ -14,9 +14,10 @@ const clean = (v, n = 1000) => String(v ?? '').trim().slice(0, n);
 export const MAX_USER_TEXT_CHARS = 12000;
 const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبیعی و کوتاه گفتگو می‌کنی و فقط وقتی او صریحاً کاری خواست، عامل متخصص را مأمور می‌کنی. مدیریت نیت و زیرنیت با توست، نه کاربر.
 فقط JSON برگردان:
-{"reply":"پاسخ فارسی کوتاه","action":"respond|research_team|crawl_site|consult_sources","goal":"هدف پژوهش","target_root_id":null,"subtasks":[{"title":"پرسش دقیق","role":"local|web"}],"url":null}
+{"reply":"پاسخ فارسی کوتاه","action":"respond|research_team|crawl_site|consult_sources","clarification":{"question":"سؤال ضروری برای ادامه","options":["گزینهٔ اول","گزینهٔ دوم"]},"goal":"هدف پژوهش","target_root_id":null,"subtasks":[{"title":"پرسش دقیق","role":"local|web"}],"url":null}
 قواعد:
 - سلام، بحث، نظرخواهی، سؤال معمولی، جمع‌بندی و عبارت مبهم همگی respond هستند. پژوهش را خودکار از هر سؤال شروع نکن.
+- فقط اگر پاسخ کاربر واقعاً برای ادامه لازم است، clarification را همراه respond بده؛ در غیر این صورت null. حداکثر سه گزینهٔ کوتاه بده؛ کاربر همیشه می‌تواند آزاد بنویسد. برای اجرای نیت موجود یا انتخاب‌های معمولی دوباره تأیید نخواه.
 - research_team فقط وقتی کاربر صریحاً دستور تحقیق/جست‌وجو/بررسی می‌دهد. حداکثر سه زیرکار متمایز بساز: شاهد مستقیم، تفسیر یا شاهد مخالف، و منشأ روایت/منبع. از local برای اسناد پرونده و web برای منابع بیرونی استفاده کن.
 - اگر کاربر ادامهٔ یک نیت باز را می‌خواهد، شناسهٔ واقعی همان نیت اصلی را در target_root_id بگذار و subtasks را خالی بگذار مگر زیرپرسش تازه‌ای صریحاً بخواهد؛ نیت ساختگی نساز.
 - زیرنیت‌های pending که از سرنخ‌های approved ساخته شده‌اند قبلاً با تصمیم تو تأیید شده‌اند. برای اجرای آن‌ها تأیید یا انتخاب دوباره از کاربر نخواه. مکث پس از سقف دورهای خودکار به معنی رد یا نیاز به تأیید نیست؛ با درخواست «ادامه بده» همان نیت اصلی را از صف ادامه بده.
@@ -79,8 +80,13 @@ export function normalizePlan(data, userText, { hasDocs = false } = {}) {
     title: clean(data?.goal || requested, 350), role: hasDocs ? 'source-analyst' : 'web-researcher' });
   if (action === 'research_team' && !hasDocs && !/\b(سند|کتاب|فایل|پرونده)\b/.test(requested))
     for (const task of subtasks) task.role = 'web-researcher';
+  const question = clean(data?.clarification?.question, 350);
+  const clarification = action === 'respond' && question ? {
+    question, options: (Array.isArray(data?.clarification?.options) ? data.clarification.options : [])
+      .slice(0, 3).map((v) => clean(v, 90)).filter(Boolean),
+  } : null;
   return { action, reply: clean(data?.reply, 2000), goal: clean(data?.goal || requested, 350),
-    targetRootId,
+    targetRootId, clarification,
     subtasks, url, userUrls };
 }
 
@@ -240,10 +246,13 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
     const falselyStarted = dossier && /(?:تحقیق|عامل|زیرنیت|سرنخ).{0,100}(?:فعال شد|فعال شدند|شروع شد|در حال انجام|مشغول)|(?:فعال شد|فعال شدند|شروع شد).{0,100}(?:تحقیق|عامل|زیرنیت|سرنخ)/i.test(plan.reply);
     const answer = falselyStarted && !nodes.some((n) => n.status === 'running')
       ? `کاری شروع نشده است. ${reportState()}`
-      : plan.reply || 'منظورت را کمی دقیق‌تر بگو تا کار درست را انجام بدهم.';
+      : [plan.reply, plan.clarification?.question && !plan.reply.includes(plan.clarification.question)
+        ? plan.clarification.question : null].filter(Boolean).join('\n') ||
+        'منظورت را کمی دقیق‌تر بگو تا کار درست را انجام بدهم.';
     store.addMessage({ principalId, dossierId: dossier?.id ?? null, role: 'assistant', text: answer,
-      costToman: usage?.costToman ?? 0 });
-    return { text: answer, dossierId: dossier?.id ?? null, action: { type: 'respond' }, usage };
+      costToman: usage?.costToman ?? 0, prompt: falselyStarted ? null : plan.clarification });
+    return { text: answer, dossierId: dossier?.id ?? null,
+      action: { type: plan.clarification && !falselyStarted ? 'clarification' : 'respond' }, usage };
   }
   if (plan.action === 'research_team' && settings.budget() !== null && settings.budget() <= 0) {
     const answer = 'سقف هزینهٔ پژوهش صفر است؛ عامل‌ها را شروع نکردم. سقف را تغییر بده و دوباره دستور تحقیق بده.';
