@@ -236,17 +236,22 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
       siteError: siteResult[0]?.status === 'rejected' ? clean(siteResult[0].reason?.message, 200) : null,
       approvedLeadNodes: promoted, pendingLeads: waitingLeads.length,
       incomplete: children.filter((n) => n.status !== 'done').map((n) => n.id) };
-    store.updateResearchNode(principalId, nodeId, { status: result.incomplete.length || waitingLeads.length ? 'paused' : 'done',
-      openQuestion: result.openQuestions[0] || null, result });
     const canContinue = promoted.length && followupRound < MAX_AUTONOMOUS_FOLLOWUPS &&
       (budget() === null || spendSince(mark).usd < budget());
+    if (promoted.length && !canContinue) result.pauseReason = followupRound >= MAX_AUTONOMOUS_FOLLOWUPS
+      ? 'followup_limit' : 'budget';
+    store.updateResearchNode(principalId, nodeId, { status: result.incomplete.length || waitingLeads.length ? 'paused' : 'done',
+      openQuestion: result.openQuestions[0] || null, result });
     if (canContinue) {
       stage(nodeId, `${promoted.length} سرنخ تأییدشده؛ آغاز پیگیری خودکار`);
       const continued = await runResearchTeam({ principalId, dossierId, nodeId, onProgress, ask, search,
         crawl, discover, followupRound: followupRound + 1, spendStart: mark });
       return { ...continued, approvedLeadNodes: [...promoted, ...(continued.approvedLeadNodes ?? [])] };
     }
-    stage(nodeId, result.incomplete.length ? `${result.incomplete.length} زیرنیت در صف/ناتمام؛ آمادهٔ ادامه`
+    stage(nodeId, result.pauseReason === 'followup_limit'
+      ? `${result.incomplete.length} زیرنیت تأییدشده در صف؛ سقف دورهای خودکار پر شد`
+      : result.pauseReason === 'budget' ? 'سقف هزینه پر شد؛ ادامه پس از تنظیم بودجه'
+      : result.incomplete.length ? `${result.incomplete.length} زیرنیت در صف/ناتمام؛ آمادهٔ ادامه`
       : waitingLeads.length ? `${waitingLeads.length} سرنخ در انتظار تصمیم مادر` : 'بازبینی و جمع‌بندی پایان یافت');
     return result;
   } catch (err) {

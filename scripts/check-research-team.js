@@ -128,7 +128,9 @@ try {
   if (leadWorkerCalls !== 3 || leadMotherCalls !== 3 || leadNodes.length !== 5 ||
       leads.length !== 3 || leads.some((lead) => lead.status !== 'approved' || !lead.child_node_id) ||
       store.researchLeads('b', leadDossier).length ||
-      !queued.incomplete.length || store.getResearchNode(pid, leadRoot).status !== 'paused' ||
+      !queued.incomplete.length || queued.pauseReason !== 'followup_limit' ||
+      store.getResearchNode(pid, leadRoot).status !== 'paused' ||
+      JSON.parse(store.getResearchNode(pid, leadRoot).result_json || '{}').pauseReason !== 'followup_limit' ||
       leadNodes.find((n) => n.title === questions[1])?.parent_id !== firstLeadWorker ||
       leadNodes.find((n) => n.title === questions[3])?.status !== 'pending')
     throw new Error('mother-approved leads did not form a bounded durable chain');

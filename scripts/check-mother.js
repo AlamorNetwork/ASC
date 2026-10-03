@@ -83,5 +83,33 @@ try {
     throw new Error('zero budget still started agents');
   if (store.dossierResearchNodes('other', planned.dossierId).length)
     throw new Error('other principal sees intentions');
+  settings.setBudget(null);
+  const queuedDossier = Number(store.insertDossier({ principalId: pid, topic: 'صف پژوهش' }));
+  const queuedRoot = store.createResearchNode({ principalId: pid, dossierId: queuedDossier,
+    title: 'مسیر پژوهش', assignedRole: 'coordinator' });
+  const sourceNode = store.createResearchNode({ principalId: pid, dossierId: queuedDossier,
+    parentId: queuedRoot, title: 'شاهد نخست' });
+  const lead = store.recordResearchLead(pid, queuedDossier, queuedRoot, sourceNode,
+    'آیا شاهد دوم مستقل است؟');
+  const queuedChild = store.promoteResearchLead(pid, queuedDossier, lead.id,
+    'web-researcher', 'مادر تأیید کرد');
+  let resumedQueue = 0;
+  const queueTeam = async ({ nodeId }) => {
+    if (nodeId !== queuedRoot) throw new Error('wrong queued root resumed');
+    resumedQueue++;
+    return { summary: 'صف بررسی شد', incomplete: [queuedChild], pauseReason: 'followup_limit' };
+  };
+  const status = await motherTurn({ principalId: pid, dossierId: queuedDossier,
+    userText: 'دو عامل در صف بررسی‌اند و مادر تأیید کرده؛ باید دوباره تأیید کنم؟',
+    team: queueTeam, ask: async () => { throw new Error('status must use stored state'); } });
+  if (!status.text.includes('تأیید دوباره') || resumedQueue)
+    throw new Error('approved queue was described as requiring user approval');
+  const continueQueued = await motherTurn({ principalId: pid, dossierId: queuedDossier,
+    userText: 'ادامه بده', team: queueTeam,
+    ask: async () => { throw new Error('resume must not depend on planner'); } });
+  if (resumedQueue !== 1 || continueQueued.action.nodeId !== queuedRoot ||
+      !continueQueued.text.includes('سقف دورهای خودکار') ||
+      store.dossierResearchNodes(pid, queuedDossier).length !== 3)
+    throw new Error('mother did not resume approved queue from the original root');
   console.log('mother check passed — conversation, autonomous plan, resume, URL gate, isolation; 0 model calls');
 } finally { store.db.close(); fs.rmSync(temp, { recursive: true, force: true }); }
