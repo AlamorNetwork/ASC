@@ -110,8 +110,10 @@ try {
   const blocked = await fetch(`${url}/api/upload?name=book.pdf`, { method: 'POST',
     headers: { Cookie: cookie, Origin: 'https://wrong.example', 'X-CSRF-Token': csrf }, body: 'pdf' });
   if (blocked.status !== 403) throw new Error('cross-origin upload was accepted');
-  const upload = await fetch(`${url}/api/upload?name=book.pdf`, { method: 'POST',
-    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'pdf' });
+  // These requests test upload visibility and dossier routing. A fake .pdf would
+  // start real pdftotext work in the background and race the test database teardown.
+  const upload = await fetch(`${url}/api/upload?name=book.txt`, { method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'txt' });
   if (upload.status !== 201) throw new Error(`upload ${upload.status}: ${await upload.text()}`);
   const meta = await upload.json();
   if (meta.size !== 3) throw new Error('upload bytes were not saved');
@@ -126,7 +128,7 @@ try {
     userText: 'به چه فایل‌هایی دسترسی داری؟', ask: async () => {
       throw new Error('inventory of unread uploads must not call a model');
     } });
-  if (!pendingAnswer.text.includes('book.pdf') || !pendingAnswer.text.includes('هنوز'))
+  if (!pendingAnswer.text.includes('book.txt') || !pendingAnswer.text.includes('هنوز'))
     throw new Error('mother did not explain that uploaded book has not been read');
   const sampleDoc = Number(store.insertDocument({ principalId: 'test-web-owner',
     dossierId: meta.dossierId, filename: 'notes.txt', kind: 'text', extraction: 'local' }));
@@ -181,24 +183,24 @@ try {
       store.getInvestigation('test-web-owner', interrupted).state !== 'paused' ||
       store.getInvestigation('another-user', otherPrincipal).state !== 'running')
     throw new Error('web recovery paused the wrong investigation');
-  for (const filename of ['first.pdf', 'second.pdf']) {
+  for (const filename of ['first.txt', 'second.txt']) {
     const saved = await fetch(`${url}/api/upload?name=${filename}&dossierId=${dossierId}`, { method: 'POST',
-      headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'pdf' });
+      headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'txt' });
     if (saved.status !== 201 || (await saved.json()).dossierId !== dossierId)
       throw new Error(`${filename} was not bound to the selected dossier`);
   }
   const fresh = await fetch(`${url}/api/state?fresh=1`, { headers: { Cookie: cookie } });
   if ((await fresh.json()).selected !== null) throw new Error('explicit new dossier view was lost');
-  const freshUpload = await fetch(`${url}/api/upload?name=unrelated.pdf&newDossier=1`, { method: 'POST',
-    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'pdf' });
+  const freshUpload = await fetch(`${url}/api/upload?name=unrelated.txt&newDossier=1`, { method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'txt' });
   const freshMeta = await freshUpload.json();
   if (freshUpload.status !== 201 || !freshMeta.dossierId || freshMeta.dossierId === dossierId)
     throw new Error('new dossier upload inherited the old dossier');
   const afterFresh = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
   if ((await afterFresh.json()).selected?.id !== freshMeta.dossierId)
     throw new Error('new dossier did not become the active dossier');
-  const nextFile = await fetch(`${url}/api/upload?name=related.pdf&dossierId=${freshMeta.dossierId}`, { method: 'POST',
-    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'pdf' });
+  const nextFile = await fetch(`${url}/api/upload?name=related.txt&dossierId=${freshMeta.dossierId}`, { method: 'POST',
+    headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf }, body: 'txt' });
   if (nextFile.status !== 201 || (await nextFile.json()).dossierId !== freshMeta.dossierId)
     throw new Error('second file did not join the new dossier');
   const savedFetch = globalThis.fetch;
