@@ -430,7 +430,19 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
     dossierId: active.id, url, title: url, why: 'نشانی داده‌شده توسط کاربر' });
   onProgress?.(`دستیار مادر: ${existing.size} زیرنیت ثبت شد؛ عامل‌ها شروع کردند`);
   const result = await team({ principalId, dossierId: active.id, nodeId: root.id, onProgress });
-  const answer = [`نیت اصلی #${root.id}`, clean(result.summary, 1800) || 'گزارش عامل‌ها ذخیره شد.',
+  const checkedQuotes = [...new Map((result.reports ?? []).flatMap((entry) =>
+    (entry.report?.findings ?? []).filter((finding) => finding.quote &&
+      (finding.documentId || finding.sourceUrl)).map((finding) => {
+      const document = finding.documentId ? store.getDocument(principalId, finding.documentId) : null;
+      const source = document?.dossier_id === active.id
+        ? `${document.filename}${finding.page ? `، صفحه ${finding.page}` : ''}`
+        : finding.sourceUrl;
+      const key = `${source}|${finding.quote}`;
+      return [key, `«${finding.quote}» — ${source}`];
+    }))).values()].slice(-4);
+  const answer = [`نیت اصلی #${root.id}`,
+    result.summary ? `جمع‌بندی مقدماتی مدل: ${clean(result.summary, 1800)}` : 'گزارش عامل‌ها ذخیره شد.',
+    checkedQuotes.length ? `عبارت‌های منطبق با متن منبع (تطبیق لفظی، نه تأیید مستقل تاریخی):\n${checkedQuotes.join('\n')}` : null,
     result.openQuestions?.length ? `پرسش باز: ${clean(result.openQuestions[0], 350)}` : null,
     result.approvedLeadNodes?.length ? `${result.approvedLeadNodes.length} سرنخ با تأیید عامل مادر به زیرنیت تبدیل شد.` : null,
     result.pendingLeads ? `${result.pendingLeads} سرنخ هنوز در انتظار بازبینی مادر است.` : null,
@@ -439,7 +451,9 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
       : result.pauseReason === 'budget' ? 'سقف هزینه پر شده است؛ پس از تنظیم بودجه از همان‌جا ادامه می‌دهم.'
         : result.pauseReason === 'time_limit' ? 'سقف زمان این اجرا پر شد؛ مسیر و زیرنیت‌ها برای ادامه محفوظ‌اند.'
           : result.pauseReason === 'mother_paused' ? 'عامل مادر پیگیری بیشتر را فعلاً بی‌ثمر تشخیص داد؛ مسیر برای بازبینی محفوظ است.'
-            : result.pauseReason === 'no_actionable_lead' ? 'هنوز شاهد یا مسیر تازهٔ قابل‌پیگیری پیدا نشد. تکرار همان جست‌وجو کمکی نمی‌کند؛ منبع تازه یا زاویهٔ جست‌وجوی متفاوت لازم است.'
+            : result.pauseReason === 'no_actionable_lead' ? checkedQuotes.length
+              ? 'یافته‌های بالا ثبت شدند؛ برای پرسشِ باقی‌مانده مسیر یا منبع تازه لازم است.'
+              : 'هنوز شاهد یا مسیر تازهٔ قابل‌پیگیری پیدا نشد. تکرار همان جست‌وجو کمکی نمی‌کند؛ منبع تازه یا زاویهٔ جست‌وجوی متفاوت لازم است.'
               : result.pauseReason === 'mother_unavailable' ? 'داوری عامل مادر پاسخ نداد؛ گزارش عامل‌ها ذخیره شده و بعداً قابل بازبینی است.'
         : 'با گفتن «ادامه بده» از همان‌جا پیش می‌روم.'}` : null]
     .filter(Boolean).join('\n\n');

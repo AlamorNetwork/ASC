@@ -292,5 +292,19 @@ try {
     userText: `بررسی نیت #${freshRoot}`, team: freshTeam,
     ask: async () => ({ data: { action: 'respond', reply: 'آیا ادامه بدهم؟' }, usage: {} }) });
   if (freshRuns !== 2) throw new Error('named research root did not run');
+  const quoted = await motherTurn({ principalId: pid, dossierId: freshDossier,
+    userText: `بررسی نیت #${freshRoot}`,
+    team: async () => ({ summary: 'این سند اثبات می‌کند که همهٔ مهرابه‌ها روزمینی بودند.',
+      reports: [{ question: 'سند اوستیا', report: { findings: [{
+        documentId: newDoc, page: 7,
+        quote: 'Most Mithraea in Ostia were not underground sanctuaries.' }] } }],
+      incomplete: [999], pauseReason: 'no_actionable_lead' }),
+    ask: async () => ({ data: { action: 'respond', reply: 'آیا ادامه دهم؟' }, usage: {} }) });
+  if (!quoted.text.includes('The Cult of Mithras in Ostia.pdf') ||
+      !quoted.text.includes('صفحه 7') ||
+      !quoted.text.includes('Most Mithraea in Ostia were not underground sanctuaries.') ||
+      quoted.text.includes('هنوز شاهد یا مسیر تازه') ||
+      !quoted.text.includes('جمع‌بندی مقدماتی'))
+    throw new Error('mother hid the checked quote behind an overconfident summary and stale pause message');
   console.log('mother check passed — conversation, autonomous plan, resume, URL gate, isolation; 0 model calls');
 } finally { store.db.close(); fs.rmSync(temp, { recursive: true, force: true }); }
