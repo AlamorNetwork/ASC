@@ -679,7 +679,15 @@ export function promoteResearchLead(principalId, dossierId, id, role, note = '')
     const lead = db.prepare(`SELECT * FROM research_leads WHERE principal_id=? AND dossier_id=? AND id=?`)
       .get(principalId, dossierId, id);
     if (!lead || lead.status !== 'pending') { db.exec('ROLLBACK'); return null; }
-    const childId = createResearchNode({ principalId, dossierId, parentId: lead.source_node_id,
+    // A long research trail can exceed the tree's six-level display/storage limit.
+    // Keep the exact origin in research_leads.source_node_id and attach later work
+    // to the root, so an approved lead is not silently stranded at that depth.
+    let parentId = lead.source_node_id;
+    let depth = 1;
+    for (let cursor = getResearchNode(principalId, parentId); cursor?.parent_id;
+      cursor = getResearchNode(principalId, cursor.parent_id)) depth++;
+    if (depth >= 5) parentId = lead.root_id;
+    const childId = createResearchNode({ principalId, dossierId, parentId,
       title: lead.question, openQuestion: lead.question, assignedRole: role });
     setResearchNodeStage(principalId, childId, `سرنخ #${id} با تأیید عامل مادر؛ در صف بررسی`);
     db.prepare(`UPDATE research_leads SET status='approved',role=?,review_note=?,child_node_id=?,updated_at=?

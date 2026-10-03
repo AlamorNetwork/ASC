@@ -6,7 +6,8 @@ import path from 'node:path';
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'asc-team-check-'));
 process.env.ASC_DB = path.join(temp, 'check.db');
 const store = await import('../src/db.js');
-const { runResearchTeam } = await import('../src/research-team.js');
+const { runResearchTeam, autoRoundLimit } = await import('../src/research-team.js');
+const { recordSpend } = await import('../src/llm.js');
 try {
   const pid = 'a';
   const dossierId = Number(store.insertDossier({ principalId: pid, topic: 'آزمون' }));
@@ -156,7 +157,8 @@ try {
       if (candidate && !packet.workerStates?.some((n) => n.id === candidate.fromNodeId))
         throw new Error('mother saw a lead without its source agent');
       return { data: { summary: 'گزارش زنجیره', approved_leads: candidate
-        ? [{ lead_id: candidate.id, role: 'local', reason: 'پرسش بعدی قابل بررسی است' }] : [] } };
+        ? [{ lead_id: candidate.id, role: 'local', reason: 'پرسش بعدی قابل بررسی است' }] : [],
+        search_round_limit: 2 } };
     }
     leadWorkerCalls++;
     const current = /زیرپرسش: ([^\n]+)/.exec(content)?.[1];
@@ -185,6 +187,96 @@ try {
   if (leadWorkerCalls !== 4 || store.getResearchNode(pid, leadRoot).status !== 'done' ||
       store.researchLeads(pid, leadDossier, leadRoot).length !== 3)
     throw new Error('resuming a queued lead repeated finished work');
+  if (autoRoundLimit(999) !== 12 || autoRoundLimit(-1) !== 6)
+    throw new Error('the model escaped the absolute search-depth guard');
+  const autonomousRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'پیگیری طولانیِ خودکار' });
+  const autoQuestions = Array.from({ length: 8 }, (_, i) => `شاهد متمایز شماره ${i + 1} چیست؟`);
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    parentId: autonomousRoot, title: autoQuestions[0] });
+  let autoWorkers = 0, autoReviews = 0;
+  const autonomous = await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: autonomousRoot, search: leadSearch,
+    ask: async ({ system, content }) => {
+      if (system.includes('هماهنگ‌کننده')) {
+        autoReviews++;
+        const candidate = JSON.parse(content).leadCandidates?.[0];
+        return { data: { summary: 'ادامهٔ همان پرسش', search_round_limit: autoReviews === 1 ? 3 : 8,
+          next_action: 'continue', approved_leads: candidate
+            ? [{ lead_id: candidate.id, role: 'local', reason: 'شاهد بعدی' }] : [] } };
+      }
+      autoWorkers++;
+      const current = /زیرپرسش: ([^\n]+)/.exec(content)?.[1];
+      const next = autoQuestions[autoQuestions.indexOf(current) + 1];
+      return { data: { summary: 'بررسی شد', findings: [], open_questions: next ? [next] : [] } };
+    } });
+  if (autoWorkers !== 8 || autoReviews !== 8 || autonomous.incomplete.length ||
+      store.getResearchNode(pid, autonomousRoot).status !== 'done' ||
+      store.dossierResearchNodes(pid, leadDossier).filter((n) => n.id === autonomousRoot ||
+        n.title.startsWith('شاهد متمایز شماره')).length !== 9)
+    throw new Error('mother could not extend and finish a long research trail autonomously');
+  const initiativeRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'شکاف در منبع' });
+  const initiativeSource = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    parentId: initiativeRoot, title: 'بررسی نخست' });
+  let initiativeWorkers = 0;
+  const initiative = await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: initiativeRoot, search: leadSearch,
+    discover: async () => ({ evidence: [{ id: 1, url: 'https://example.org/independent',
+      title: 'Independent', text: 'متن شاهد مستقل برای بررسی',
+      fullText: 'متن شاهد مستقل برای بررسی '.repeat(8) }] }),
+    ask: async ({ system }) => {
+      if (system.includes('هماهنگ‌کننده')) return { data: { summary: 'شکاف مشخص شد',
+        approved_leads: [], new_subtasks: initiativeWorkers === 1 ? [{
+          from_node_id: initiativeSource, question: 'منبع مستقل این گزارش کجاست؟',
+          role: 'web', reason: 'گزارش نخست منبع مستقل را مشخص نکرد' }] : [] } };
+      initiativeWorkers++;
+      return { data: { summary: 'منبع مستقل در این گذرگاه نیست', open_questions: [] } };
+    } });
+  const initiativeLead = store.researchLeads(pid, leadDossier, initiativeRoot)[0];
+  if (initiativeWorkers !== 2 || !initiativeLead?.child_node_id ||
+      initiativeLead.source_node_id !== initiativeSource ||
+      store.getResearchNode(pid, initiativeLead.child_node_id).assigned_role !== 'web-researcher' ||
+      initiative.incomplete.length)
+    throw new Error('mother could not create and execute a traceable subintent from an agent report');
+  const budgetRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'کار هزینه‌دار' });
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    parentId: budgetRoot, title: 'پرسش پیش از سقف' });
+  let budgetWorkers = 0;
+  const budgetResult = await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: budgetRoot, search: leadSearch,
+    ask: async ({ system, content }) => {
+      if (system.includes('هماهنگ‌کننده')) {
+        recordSpend({ costUsd: 0.06 }, { model: 'test/fake-meter' });
+        return { data: { summary: 'سرنخ موجود است', search_round_limit: 12,
+          approved_leads: [{ lead_id: JSON.parse(content).leadCandidates[0].id,
+            role: 'local', reason: 'مهم است' }] } };
+      }
+      budgetWorkers++;
+      return { data: { summary: 'گام نخست', open_questions: ['پرسش پس از سقف'] } };
+    } });
+  if (budgetWorkers !== 1 || budgetResult.pauseReason !== 'budget' ||
+      !budgetResult.incomplete.length)
+    throw new Error('model-adjusted search depth escaped the user cost ceiling');
+  const pausedRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    title: 'توقف به تشخیص مادر' });
+  store.createResearchNode({ principalId: pid, dossierId: leadDossier,
+    parentId: pausedRoot, title: 'نخستین شاهد' });
+  let pausedWorkers = 0;
+  const pausedResult = await runResearchTeam({ principalId: pid, dossierId: leadDossier,
+    nodeId: pausedRoot, search: leadSearch,
+    ask: async ({ system, content }) => {
+      if (system.includes('هماهنگ‌کننده')) return { data: { summary: 'نیازمند منبع تازه',
+        next_action: 'pause', search_round_limit: 12,
+        approved_leads: [{ lead_id: JSON.parse(content).leadCandidates[0].id,
+          role: 'web', reason: 'بعداً بررسی شود' }] } };
+      pausedWorkers++;
+      return { data: { summary: 'بررسی شد', open_questions: ['شاهد دوم در کجاست؟'] } };
+    } });
+  if (pausedWorkers !== 1 || pausedResult.pauseReason !== 'mother_paused' ||
+      !pausedResult.incomplete.length)
+    throw new Error('mother could not pause a low-value trail without losing its next task');
   const outageRoot = store.createResearchNode({ principalId: pid, dossierId: leadDossier,
     title: 'قطعی هنگام داوری' });
   store.createResearchNode({ principalId: pid, dossierId: leadDossier, parentId: outageRoot,

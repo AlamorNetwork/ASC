@@ -166,8 +166,13 @@ Talk to ASC normally in the web workspace. When you explicitly ask it to researc
 topic, its coordinator chooses the root question and up to three distinct subquestions,
 saves them before work starts, and sends local-document or web-search agents in
 parallel. A plain question or request for conversation does not launch research.
-Say "ادامه بده" in that dossier to continue an unfinished root without repeating
-completed agents. The intention tree shows status and open questions; it is managed
+The coordinator reviews agent reports, approves traceable leads, can create one new
+subquestion from a documented gap, and runs approved follow-ups automatically.
+It may set the search depth from 1 to 12 rounds; the default is 6. A single run also
+stops at 25 minutes or when the user-set research spending ceiling is reached.
+Only the user can raise that spending ceiling. If a run stops, say "ادامه بده" in
+that dossier to resume its saved frontier without repeating completed agents.
+The intention tree shows status, round progress and open questions; it is managed
 from chat. `MODEL_COORDINATOR` handles planning and synthesis (falling back to the
 structure model until set with `/model coordinator MODEL@PROVIDER`); workers use
 `MODEL_STRUCTURE`. Each web agent searches for its own subquestion and reads fetched

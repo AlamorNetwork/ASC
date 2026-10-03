@@ -424,6 +424,8 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
     result.incomplete?.length ? `${result.incomplete.length} زیرنیت ناتمام است؛ ${result.pauseReason === 'followup_limit'
       ? 'سقف دورهای خودکار پر شد. زیرنیت‌های تأییدشده در صف محفوظ‌اند؛ با «ادامه بده» از همان‌جا اجرا می‌شوند و تأیید دوباره لازم نیست.'
       : result.pauseReason === 'budget' ? 'سقف هزینه پر شده است؛ پس از تنظیم بودجه از همان‌جا ادامه می‌دهم.'
+        : result.pauseReason === 'time_limit' ? 'سقف زمان این اجرا پر شد؛ مسیر و زیرنیت‌ها برای ادامه محفوظ‌اند.'
+          : result.pauseReason === 'mother_paused' ? 'عامل مادر پیگیری بیشتر را فعلاً بی‌ثمر تشخیص داد؛ مسیر برای بازبینی محفوظ است.'
         : 'با گفتن «ادامه بده» از همان‌جا پیش می‌روم.'}` : null]
     .filter(Boolean).join('\n\n');
   store.addMessage({ principalId, dossierId: active.id, role: 'assistant', text: answer });
