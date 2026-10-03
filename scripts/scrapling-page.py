@@ -2,6 +2,8 @@
 import ipaddress
 import fcntl
 import json
+import os
+import shutil
 import socket
 import sys
 from pathlib import Path
@@ -48,9 +50,13 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError('local browser is busy; retry this page later') from exc
+        executable = (os.environ.get('SCRAPLING_CHROME_PATH')
+                      or shutil.which('google-chrome-stable')
+                      or shutil.which('chromium'))
+        browser = {'executable_path': executable} if executable else {}
         DynamicFetcher.fetch(url, headless=True, timeout=15000, wait=1000,
                              disable_resources=True, google_search=False,
-                             page_setup=before, page_action=after)
+                             page_setup=before, page_action=after, **browser)
     if not permitted(captured.get("url", ""), allowed):
         raise ValueError("browser left the allowed site")
     print(json.dumps(captured, ensure_ascii=False))
