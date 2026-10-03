@@ -53,7 +53,7 @@ try {
       subtasks: [{ title: 'شاهد مستقیم', role: 'web' },
         { title: 'دیدگاه مخالف', role: 'web' }] }, usage: {} }) });
   const root = store.dossierResearchNodes(pid, planned.dossierId).find((n) => !n.parent_id);
-  if (!root || teamCalls !== 1 || planned.text !== 'نتیجهٔ مقدماتی\n\nپرسش باز: منبع دوم؟')
+  if (!root || teamCalls !== 1 || !planned.text.includes('نتیجهٔ مقدماتی\n\nپرسش باز: منبع دوم؟'))
     throw new Error('explicit research was not delegated');
   const resumed = await motherTurn({ principalId: pid, dossierId: planned.dossierId,
     userText: 'ادامه بده', team,
@@ -137,6 +137,38 @@ try {
   if (!madeUp.text.includes('نامعلوم') ||
       store.dossierClaims(pid, planned.dossierId).at(-1).status === 'verified')
     throw new Error('an unsupported page quote was promoted to verified');
+  const axesDossier = Number(store.insertDossier({ principalId: pid, topic: 'پژوهش تطبیقی عدد دوازده' }));
+  const unrelatedRoot = store.createResearchNode({ principalId: pid, dossierId: axesDossier,
+    title: 'پژوهش قدیمی دربارهٔ اسارت بابلی' });
+  store.updateResearchNode(pid, unrelatedRoot, { status: 'paused', openQuestion: 'منبع بابلی؟' });
+  store.addMessage({ principalId: pid, dossierId: axesDossier, role: 'assistant',
+    text: 'سه محور را پیشنهاد می‌کنم: ۱. نمادهای زودیاک در مهرابه‌های رومی ۲. منشأ دوازده حواری و دوازده سبط ۳. منشأ دوازده امام در سنت امامیه. اگر موافق باشید، پژوهش را آغاز کنیم.' });
+  let axesRoot = null;
+  const axesTeam = async ({ nodeId }) => {
+    axesRoot = nodeId;
+    const children = store.dossierResearchNodes(pid, axesDossier).filter((n) => n.parent_id === nodeId);
+    if (children.length !== 3 || !children[0].title.includes('زودیاک') ||
+        !children[1].title.includes('حواری') || !children[2].title.includes('امام'))
+      throw new Error('approved three axes were replaced with another research topic');
+    store.updateResearchNode(pid, nodeId, { status: 'paused', openQuestion: 'سه محور ناتمام' });
+    return { summary: 'سه محور ثبت شد', incomplete: children.map((n) => n.id) };
+  };
+  const approvedAxes = await motherTurn({ principalId: pid, dossierId: axesDossier,
+    userText: 'بله لطفا هر 3 را موازی ببر جلو', team: axesTeam,
+    ask: async () => ({ data: { action: 'respond', reply: 'پژوهش برای هر سه محور کلید خورد.' }, usage: {} }) });
+  if (!axesRoot || axesRoot === unrelatedRoot || approvedAxes.action.nodeId !== axesRoot)
+    throw new Error('clear approval produced only a false start message');
+  const resumedAxes = await motherTurn({ principalId: pid, dossierId: axesDossier,
+    userText: 'ادامه بده', team: axesTeam,
+    ask: async () => { throw new Error('a recent explicit research root should resume without guessing'); } });
+  if (resumedAxes.action.nodeId !== axesRoot)
+    throw new Error('continue resumed the unrelated older research root');
+  const falseStart = await motherTurn({ principalId: pid, dossierId: axesDossier,
+    userText: 'از این محور چه می‌دانی؟', team: async () => {
+      throw new Error('ordinary chat should not start a team');
+    }, ask: async () => ({ data: { action: 'respond', reply: 'پژوهش برای این محور کلید خورد.' }, usage: {} }) });
+  if (!falseStart.text.includes('کاری شروع نشده است'))
+    throw new Error('a fake research-start claim reached the user');
   const nonInstruction = normalizePlan({ action: 'research_team', goal: 'سلام' }, 'سلام، نظرت چیه؟');
   if (nonInstruction.action !== 'respond') throw new Error('ordinary chat launched research');
   const settings = await import('../src/settings.js');
