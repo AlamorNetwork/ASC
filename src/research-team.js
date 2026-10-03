@@ -81,8 +81,8 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
       try {
         const passages = web
           ? (await discover(node.open_question || node.title, {
-            // The mother already chose the question. Avoid buying another planning call.
-            ask: async () => ({ data: { queries: [] }, usage: {} }),
+            // A subquestion is a goal, not a search query. Plan short terms first.
+            plannerModel: modelFor('coordinator'),
             onProgress: (event) => stage(node.id, clean(event.detail ?? event.stage ?? 'پیگیری سرنخ وب', 190)),
           })).evidence.slice(0, 5).map((e) => ({ text: e.text, source_url: e.url,
             source_title: e.title, id: `web-${e.id}` }))

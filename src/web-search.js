@@ -5,6 +5,23 @@
 const HEADERS = { 'User-Agent': 'ASC-Research/1.0 (source discovery)',
   Accept: 'application/rss+xml,application/json;q=0.9,*/*;q=0.5' };
 
+const STOP = new Set(['آیا', 'برای', 'درباره', 'همه', 'یک', 'نمونه', 'مستند', 'پیدا', 'کن', 'کدام',
+  'چگونه', 'بودند', 'هستند', 'شوند', 'است', 'نیست', 'آنها', 'های', 'شود', 'دارد', 'the', 'and',
+  'for', 'with', 'from', 'what', 'which', 'were', 'was', 'are', 'above', 'below', 'ground',
+  'source', 'sources', 'evidence', 'archaeology']);
+const canonical = (s) => String(s ?? '').normalize('NFKC').toLowerCase()
+  .replace(/[يى]/g, 'ی').replace(/ك/g, 'ک').replace(/[\u200c\u200d]/g, ' ');
+
+/** A search hit is only a lead if its own title/snippet mentions the topic. */
+export function leadRelevance(query, lead) {
+  const terms = [...new Set(canonical(query).match(/[\p{L}\p{N}]{3,}/gu) ?? [])]
+    .filter((word) => !STOP.has(word));
+  if (!terms.length) return 1;
+  const title = canonical(lead.title);
+  const snippet = canonical(lead.snippet);
+  return terms.reduce((score, word) => score + (title.includes(word) ? 3 : snippet.includes(word) ? 1 : 0), 0);
+}
+
 function decodeXml(s) {
   return String(s ?? '').replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&(?:amp|lt|gt|quot|apos|#(\d+));/g, (m, n) => {
@@ -70,5 +87,9 @@ export async function searchWeb(query, { limit = 8, fetcher = fetch } = {}) {
     } catch (err) { errors.push(`${engine.name}: ${err.message}`); }
     if (results.length >= limit) break;
   }
-  return { results: results.slice(0, limit), errors };
+  const ranked = results.map((lead) => ({ lead, score: leadRelevance(clean, lead) }))
+    .filter(({ score }) => score >= 2)
+    .sort((a, b) => b.score - a.score);
+  if (!ranked.length && results.length) errors.push(`${results.length} search hits did not mention the question's subject`);
+  return { results: ranked.slice(0, limit).map(({ lead }) => lead), errors };
 }

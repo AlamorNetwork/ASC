@@ -74,8 +74,7 @@ try {
     discover: async (query, options) => {
       webQueries++;
       if (query !== 'شاهد بیرونی') throw new Error('wrong delegated question');
-      const planned = await options.ask();
-      if (planned.data.queries.length) throw new Error('web worker added extra planning calls');
+      if (!options.plannerModel) throw new Error('web worker skipped source-language query planning');
       return { evidence: [{ id: 0, url: 'https://example.org/evidence', title: 'Evidence',
         text: 'متن صفحه عبارت دقیق منبع را دارد و عامل باید آن را عیناً نقل کند.' }] };
     } });
