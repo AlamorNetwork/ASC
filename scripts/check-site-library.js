@@ -6,7 +6,13 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'asc-site-library-'));
 process.env.ASC_DB = path.join(temp, 'check.db');
 const store = await import('../src/db.js');
 const { collectSite } = await import('../src/site-library.js');
+const { robotsAllow } = await import('../src/site-crawl.js');
 try {
+  const rules = [{ allow: false, path: '/admin/' }, { allow: false, path: '/*?page=' }];
+  if (!robotsAllow('https://example.org/Mithraeum', rules) ||
+      robotsAllow('https://example.org/admin/', rules) ||
+      robotsAllow('https://example.org/Mithraeum?page=2', rules))
+    throw new Error('robots wildcard blocked a permitted page or allowed a forbidden one');
   const principalId = 'owner';
   const dossierId = Number(store.insertDossier({ principalId, topic: 'پرونده' }));
   const root = 'https://example.org/';

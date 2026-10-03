@@ -61,7 +61,9 @@ function requestOnce(url, address, limit, plain = false) {
     const client = u.protocol === 'https:' ? https : http;
     const req = client.get(u, {
       headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/xhtml+xml' },
-      lookup: (_host, _opts, cb) => cb(null, address.address, address.family),
+      lookup: (_host, opts, cb) => opts?.all
+        ? cb(null, [{ address: address.address, family: address.family }])
+        : cb(null, address.address, address.family),
       timeout: TIMEOUT_MS,
     }, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
@@ -134,16 +136,17 @@ async function robotsRules(origin) {
   } catch { return []; } // A missing or unavailable robots file does not make a site uncrawlable.
 }
 
-function robotsAllow(url, rules) {
+export function robotsAllow(url, rules) {
   const path = new URL(url).pathname + new URL(url).search;
   let winner;
   for (const rule of rules) {
     const exact = rule.path.endsWith('$');
     const value = exact ? rule.path.slice(0, -1) : rule.path;
-    const prefix = value.split('*', 1)[0];
-    if (path.startsWith(prefix) && (!exact || value.includes('*') || path === value) &&
-      (!winner || rule.path.length > winner.path.length ||
-        rule.path.length === winner.path.length && rule.allow)) winner = rule;
+    const pattern = `^${value.split('*').map((part) => part.replace(/[|\\{}()[\]^$+?.]/g, '\\$&')).join('.*')}${exact ? '$' : ''}`;
+    const specificity = value.replace(/\*/g, '').length;
+    if (new RegExp(pattern).test(path) &&
+      (!winner || specificity > winner.specificity ||
+        specificity === winner.specificity && rule.allow)) winner = { ...rule, specificity };
   }
   return winner?.allow ?? true;
 }

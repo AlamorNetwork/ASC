@@ -11,12 +11,14 @@ export async function collectSite({ principalId, dossierId, url, maxPages = 10,
   let old = {};
   try { old = JSON.parse(row.checkpoint_json); } catch { /* old bad cursor */ }
   let saved = row.pages_saved;
+  let firstPage = null;
   const initial = Array.isArray(old.nextUrls) && old.nextUrls.length ? old : undefined;
   if (row.state === 'done') return { crawlId: row.id, pagesSaved: saved, done: true, errors: [] };
   store.saveSiteCrawl(principalId, row.id, { checkpoint: initial ?? {}, state: 'running', pagesSaved: saved });
   try {
     const result = await crawl({ url: seed, maxPages, checkpoint: initial,
       onPage: async (page, cursor) => {
+        firstPage ??= { url: page.url, title: page.title || page.url, characters: page.text.length };
         if (page.text.length > 100) {
           const savedPage = store.saveCrawledPage({ principalId, dossierId, url: page.url,
             title: page.title || page.url, text: page.text, chunks: chunkText(page.text) });
@@ -31,7 +33,7 @@ export async function collectSite({ principalId, dossierId, url, maxPages = 10,
     store.saveSiteCrawl(principalId, row.id, { checkpoint: cursor,
       state: result.nextUrls.length ? 'paused' : 'done', pagesSaved: saved });
     return { crawlId: row.id, pagesSaved: saved, done: !result.nextUrls.length,
-      nextUrls: result.nextUrls.length, errors: result.errors };
+      nextUrls: result.nextUrls.length, errors: result.errors, firstPage };
   } catch (err) {
     // The onPage hook committed the last successful cursor before the failure.
     const latest = store.getOrCreateSiteCrawl(principalId, dossierId, seed);

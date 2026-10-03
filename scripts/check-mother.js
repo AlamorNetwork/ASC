@@ -88,7 +88,27 @@ try {
     throw new Error('mother read another principal\'s sources');
   const rejected = normalizePlan({ action: 'crawl_site', url: 'https://other.org/' },
     'این لینک را بخوان: https://example.org/');
-  if (rejected.action !== 'respond') throw new Error('model-invented URL was accepted');
+  if (rejected.action !== 'crawl_site' || rejected.url !== 'https://example.org/')
+    throw new Error('a user-supplied URL was replaced by a model-invented URL');
+  const noCrawl = normalizePlan({ action: 'crawl_site', url: 'https://other.org/' },
+    'این یک مثال است: https://example.org/');
+  if (noCrawl.action !== 'respond') throw new Error('a bare example URL was crawled');
+  let siteCalls = 0;
+  const site = async ({ url, dossierId }) => {
+    siteCalls++;
+    if (url !== 'https://example.org/page' || !dossierId) throw new Error('wrong page or dossier');
+    return { crawlId: 1, pagesSaved: 1, done: true, errors: [] };
+  };
+  const opened = await motherTurn({ principalId: pid, dossierId: planned.dossierId,
+    userText: 'این لینک رو ببین https://example.org/page', crawl: site,
+    ask: async () => { throw new Error('explicit URL must not wait for the planner'); } });
+  if (opened.action.type !== 'site_collected' || siteCalls !== 1)
+    throw new Error('mother promised to open a page without doing it');
+  const followup = await motherTurn({ principalId: pid, dossierId: planned.dossierId,
+    userText: 'بله، صفحه را بخوان', crawl: site,
+    ask: async () => { throw new Error('page followup must reuse the user URL'); } });
+  if (followup.action.type !== 'site_collected' || siteCalls !== 2)
+    throw new Error('mother forgot the page in the previous user message');
   const nonInstruction = normalizePlan({ action: 'research_team', goal: 'سلام' }, 'سلام، نظرت چیه؟');
   if (nonInstruction.action !== 'respond') throw new Error('ordinary chat launched research');
   const settings = await import('../src/settings.js');
