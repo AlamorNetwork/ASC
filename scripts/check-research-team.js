@@ -89,6 +89,47 @@ try {
     s.url === 'https://example.org/evidence' && s.documentId &&
     store.documentChunks(pid, s.documentId).some((chunk) => chunk.text.includes('عبارت دقیق منبع'))))
     throw new Error('search agent read a browser page without storing its source text');
+  const savedDossier = Number(store.insertDossier({ principalId: pid, topic: 'مهرابهٔ روزمینی' }));
+  const savedRoot = store.createResearchNode({ principalId: pid, dossierId: savedDossier,
+    title: 'آیا همهٔ مهرابه‌ها زیرزمینی بودند؟', assignedRole: 'coordinator' });
+  store.createResearchNode({ principalId: pid, dossierId: savedDossier, parentId: savedRoot,
+    title: 'نمونهٔ خلاف را در منبع بررسی کن', assignedRole: 'web-researcher' });
+  const savedUrl = 'https://example.org/mithraeum';
+  const savedText = 'The Dura-Europos Mithraeum was unusual in that it was totally above ground. '.repeat(5);
+  store.saveCrawledPage({ principalId: pid, dossierId: savedDossier, url: savedUrl,
+    title: 'Yale Mithraeum', text: savedText, chunks: [savedText] });
+  const savedCrawl = store.getOrCreateSiteCrawl(pid, savedDossier, savedUrl);
+  store.saveSiteCrawl(pid, savedCrawl.id, { checkpoint: {}, state: 'done', pagesSaved: 1 });
+  let repeatedSearches = 0;
+  const savedResult = await runResearchTeam({ principalId: pid, dossierId: savedDossier,
+    nodeId: savedRoot, crawl: async () => ({ pagesSaved: 0 }),
+    discover: async () => { repeatedSearches++; return { evidence: [] }; },
+    ask: async ({ system, content }) => system.includes('هماهنگ‌کننده')
+      ? { data: { summary: 'نمونهٔ روزمینی یافت شد', approved_leads: [] } }
+      : { data: { summary: 'دورااروپوس روزمینی بود', findings: [{
+        text: 'این مهرابه روزمینی بود', passage_id: 1,
+        quote: 'it was totally above ground' }], open_questions: [] } } });
+  if (repeatedSearches || savedResult.reports[0]?.report.findings[0]?.sourceUrl !== savedUrl ||
+      !savedResult.crawledPages?.some((p) => p.url === savedUrl))
+    throw new Error('a previously read page was ignored and the web agent searched again');
+  const blockedDossier = Number(store.insertDossier({ principalId: pid, topic: 'منبع بسته' }));
+  const blockedRoot = store.createResearchNode({ principalId: pid, dossierId: blockedDossier,
+    title: 'منبع را بررسی کن' });
+  store.createResearchNode({ principalId: pid, dossierId: blockedDossier, parentId: blockedRoot,
+    title: 'متن منبع', assignedRole: 'source-analyst' });
+  store.addSourceCandidate({ principalId: pid, dossierId: blockedDossier,
+    url: 'https://example.org/blocked', title: 'Blocked', why: 'Try once' });
+  let blockedAttempts = 0;
+  const blockedWork = { principalId: pid, dossierId: blockedDossier, nodeId: blockedRoot,
+    search: async () => [], crawl: async () => {
+      blockedAttempts++;
+      return { pagesSaved: 0, errors: [{ error: 'HTTP 403' }] };
+    } };
+  await runResearchTeam(blockedWork);
+  await runResearchTeam(blockedWork);
+  if (blockedAttempts !== 1 || !store.sourceCatalogue(pid, blockedDossier)
+    .some((s) => s.url === 'https://example.org/blocked' && s.analysisStatus === 'deferred'))
+    throw new Error('an unreadable source was crawled repeatedly');
   const dryRoot = store.createResearchNode({ principalId: pid, dossierId, title: 'سرنخ گمشده' });
   const dryChild = store.createResearchNode({ principalId: pid, dossierId, parentId: dryRoot,
     title: 'متن گمشده', assignedRole: 'web-researcher' });

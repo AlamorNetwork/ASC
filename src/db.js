@@ -762,6 +762,13 @@ export function addSourceCandidate({ principalId, dossierId, url, title, why }) 
     .run(principalId, dossierId, url, title || url, why || '', new Date().toISOString());
 }
 
+export function deferSourceCandidate(principalId, dossierId, url, reason) {
+  return db.prepare(`UPDATE source_library SET status='deferred', summary=?
+    WHERE principal_id=? AND dossier_id=? AND url=?
+      AND source_kind='web_lead' AND status='candidate'`)
+    .run(String(reason || 'خواندن منبع نتیجه نداد.').slice(0, 500), principalId, dossierId, url).changes;
+}
+
 export function saveCrawledPage({ principalId, dossierId, url, title, text, chunks }) {
   if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
   title = String(title || url).slice(0, 200);
