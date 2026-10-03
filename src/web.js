@@ -10,8 +10,10 @@ import * as settings from './settings.js';
 import { motherTurn, MAX_USER_TEXT_CHARS } from './mother.js';
 import { runResearch } from './research.js';
 import { deepInvestigate } from './deep.js';
-import { ingestToDossier, extractClaimsFor, sha256 } from './ingest.js';
-import { pdftotextAvailable } from './pdf.js';
+import { ingestToDossier, ingestGoogleOcrPages, extractClaimsFor, sha256 } from './ingest.js';
+import { pdftotextAvailable, extractPdf } from './pdf.js';
+import { googleOcrSettings, submitGoogleOcr, waitForGoogleOcr,
+  fetchGoogleOcrPages } from './google-document-ai.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
 import { researchLedger } from './research-ledger.js';
 import { analyzeDocument, documentAnalysisPath } from './document-analysis.js';
@@ -152,6 +154,11 @@ async function bindUpload(meta, dossierId, documentId = null) {
   await fsp.rename(temp, files.meta);
   return updated;
 }
+async function saveUploadMeta(meta) {
+  const files = uploadPaths(meta.id);
+  await fsp.writeFile(`${files.meta}.tmp`, JSON.stringify(meta), { mode: 0o600 });
+  await fsp.rename(`${files.meta}.tmp`, files.meta);
+}
 function startJob(kind, work) {
   if (running) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
   cancel.newInstruction(principal());
@@ -234,6 +241,35 @@ async function importFile(pid, input, progress) {
     await bindUpload(meta, dossierId, prior.id);
     return { dossierId, documentId: prior.id, alreadyRead: true };
   }
+  if (input.visionMode === 'google_ocr') {
+    if (!/\.pdf$/i.test(meta.name)) throw new Error('Google OCR فقط PDF می‌پذیرد.');
+    const google = googleOcrSettings();
+    const pdf = await extractPdf(buffer);
+    if (!pdf.pages || pdf.pages > 500) throw new Error('این پردازشگر Google حداکثر ۵۰۰ صفحه در هر کار دسته‌ای می‌پذیرد.');
+    let checkpoint = meta.googleOcr;
+    if (checkpoint?.state === 'submitting') throw new Error('ارسال قبلی نامشخص مانده است؛ برای جلوگیری از پرداخت تکراری شناسهٔ کار را در Google Cloud بررسی کن.');
+    if (!checkpoint?.operation) {
+      await saveUploadMeta({ ...meta, dossierId, googleOcr: { state: 'submitting', startedAt: new Date().toISOString() } });
+      progress('آپلود PDF در Google Cloud Storage…');
+      try {
+        checkpoint = await submitGoogleOcr({ pdf: buffer, uploadId: meta.id, settings: google });
+      } catch (err) {
+        if (err.safeToRetry) await saveUploadMeta({ ...meta, dossierId, googleOcr: null });
+        throw err;
+      }
+      await saveUploadMeta({ ...meta, dossierId, googleOcr: { ...checkpoint, state: 'running' } });
+    }
+    progress('Google Document AI: پردازش صفحه‌ها…');
+    const output = await waitForGoogleOcr(checkpoint.operation, { settings: google, onProgress: progress });
+    const pages = await fetchGoogleOcrPages(output, pdf.pages, { settings: google });
+    const result = ingestGoogleOcrPages({ principalId: pid, dossierId, buffer,
+      filename: meta.name, pages, onProgress: progress });
+    const textFile = path.join(uploadDir, `${meta.id}.ocr.txt`);
+    await fsp.writeFile(textFile, pages.map((text, i) => `--- صفحه ${i + 1} ---\n${text}`).join('\n\n'), { mode: 0o600 });
+    await saveUploadMeta({ ...meta, dossierId, documentId: result.documentId,
+      googleOcr: { ...checkpoint, state: 'done', output } });
+    return { dossierId, ...result, textDownload: true };
+  }
   const vision = visionPlan(input);
   try {
     const out = await ingestToDossier({ principalId: pid, dossierId, buffer,
@@ -257,7 +293,9 @@ function state(pid, dossierId, fresh = false) {
   const latest = chosen && store.latestDossierInvestigation(pid, chosen.id);
   const investigation = latest?.state === 'running' ? latest : chosen
     ? store.resumableInvestigation(pid, chosen.id) ?? latest : null;
-  return { dossiers, selected: chosen, investigation: investigationView(investigation),
+  let googleOcrReady = false;
+  try { googleOcrReady = fs.existsSync(googleOcrSettings().credentialsFile); } catch { /* optional provider */ }
+  return { dossiers, selected: chosen, investigation: investigationView(investigation), googleOcrReady,
     documents: chosen ? store.dossierDocuments(pid, chosen.id) : [],
     otherDossierDocuments: chosen ? store.documentsInOtherDossiers(pid, chosen.id) : [],
     pendingUploads: chosen ? pendingUploadsFor(pid, chosen.id) : [],
@@ -399,9 +437,20 @@ async function route(req, res, runTeam) {
   if (url.pathname === '/api/import' && req.method === 'POST') {
     const input = await readJson(req);
     if (!input.uploadId) throw new Error('فایل انتخاب نشده است.');
-    if (input.visionMode && !['all', 'batch'].includes(input.visionMode)) throw new Error('حالت خواندن نامعتبر است.');
+    if (input.visionMode && !['all', 'batch', 'google_ocr'].includes(input.visionMode)) throw new Error('حالت خواندن نامعتبر است.');
     await uploaded(input.uploadId, pid);
     return response(res, 202, startJob('import', (progress) => importFile(pid, input, progress)));
+  }
+  if (url.pathname === '/api/ocr-text' && req.method === 'GET') {
+    const meta = await uploaded(url.searchParams.get('uploadId'), pid);
+    if (!meta.documentId || !store.getDocument(pid, meta.documentId) ||
+        meta.googleOcr?.state !== 'done') throw new Error('متن OCR آماده نیست.');
+    const file = path.join(uploadDir, `${meta.id}.ocr.txt`);
+    const body = await fsp.readFile(file);
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="asc-ocr.txt"',
+      'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    return res.end(body);
   }
   if (url.pathname === '/api/chat' && req.method === 'POST') {
     const input = await readJson(req, 65536);

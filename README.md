@@ -9,6 +9,30 @@ glance what was actually checked and what was merely found.
 
 Persian-first. Zero npm dependencies (Node 22+ built-ins only: `fetch`, `node:sqlite`).
 
+### Optional Google Document AI for scanned books
+
+The web upload screen can send a PDF of up to 500 pages to Google Document AI
+**batch OCR**. ASC keeps the original PDF as the source, saves OCR text page by
+page in the selected dossier, and offers a UTF-8 text download with page markers.
+Blank pages remain blank; OCR text is a searchable transcript, not independent
+proof that a quote appears in the image. Claim verification therefore keeps its
+image-source caution. This path does not create a searchable PDF or silently
+call a claim-extraction model. Google processing and storage may incur charges
+outside ASC's model meter.
+
+Create a Google Cloud project with billing, enable Document AI, create an
+Enterprise Document OCR processor and a private Cloud Storage bucket in the
+processor's location. Give a service account Document AI API User and bucket
+object access, then put its JSON credentials on the server outside the checkout
+with restrictive permissions. Set the five `GOOGLE_DOCUMENT_AI_*` and
+`GOOGLE_APPLICATION_CREDENTIALS` values shown in `.env.example`, restart
+`asc-web`, and use **OCR گوگل** on an incomplete PDF in the web upload list.
+The cloud operation ID is saved before polling so a restart can resume without
+submitting the same book again. If submission was interrupted before Google
+returned an operation ID, ASC stops and asks for manual inspection to avoid
+accidental duplicate billing. Test the integration without cloud calls with
+`node scripts/check-google-document-ai.js`.
+
 ---
 
 ## The part that matters: four columns

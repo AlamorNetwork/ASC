@@ -69,6 +69,13 @@ export const config = {
     port: Number(env.WEB_PORT || 3000),
     principalId: env.WEB_PRINCIPAL_ID || '',
   },
+  googleDocumentAi: {
+    project: env.GOOGLE_DOCUMENT_AI_PROJECT || '',
+    location: env.GOOGLE_DOCUMENT_AI_LOCATION || '',
+    processor: env.GOOGLE_DOCUMENT_AI_PROCESSOR || '',
+    bucket: env.GOOGLE_DOCUMENT_AI_BUCKET || '',
+    credentialsFile: env.GOOGLE_APPLICATION_CREDENTIALS || '',
+  },
   router,
 
   /**

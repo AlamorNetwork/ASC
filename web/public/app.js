@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false;
+let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false, googleOcrReady = false;
 let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', leadSnapshot = '', monitorTimer = null, monitorNodes = [];
 const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
@@ -58,6 +58,7 @@ async function refresh() {
   }
 }
 function render(data) {
+  googleOcrReady = data.googleOcrReady === true;
   investigation = data.investigation ?? null;
   const dossiers = Array.isArray(data.dossiers) ? data.dossiers : [];
   const stats = data.stats || {};
@@ -285,7 +286,10 @@ async function loadUploads() {
     const progress = m.pages ? ` · ${fa(m.readPages ?? 0)}/${fa(m.pages)} صفحه` : '';
     const destination = m.dossierId ? `پرونده #${fa(m.dossierId)}` : m.newDossier ? 'پروندهٔ تازه' : 'پروندهٔ فعال';
     const state = m.documentId ? (m.pages && m.readPages < m.pages ? ' · خواندن ناتمام' : ' · وارد منابع شد') : ' · هنوز وارد منابع نشده';
-    return `<div class="upload-row"><span title="${esc(m.name)}">${esc(m.name)}<small>${destination}${progress}${state}</small></span><span class="upload-actions"><button class="small-action" data-upload="${esc(m.id)}" data-mode="detect">بررسی</button>${/\.pdf$/i.test(m.name) && (!m.pages || m.readPages < m.pages) ? `<button class="small-action" data-upload="${esc(m.id)}" data-mode="batch">۲۰ صفحه</button><button class="small-action" data-upload="${esc(m.id)}" data-mode="all">تا پایان</button>` : ''}</span></div>`;
+    const unreadPdf = /\.pdf$/i.test(m.name) && (!m.pages || m.readPages < m.pages);
+    const google = unreadPdf && googleOcrReady ? `<button class="small-action" data-upload="${esc(m.id)}" data-mode="google_ocr">${m.googleOcr?.operation ? 'ادامهٔ OCR گوگل' : 'OCR گوگل'}</button>` : '';
+    const text = m.googleOcr?.state === 'done' ? `<a class="small-action" href="/api/ocr-text?uploadId=${encodeURIComponent(m.id)}">متن صفحه‌دار</a>` : '';
+    return `<div class="upload-row"><span title="${esc(m.name)}">${esc(m.name)}<small>${destination}${progress}${state}</small></span><span class="upload-actions"><button class="small-action" data-upload="${esc(m.id)}" data-mode="detect">بررسی</button>${unreadPdf ? `<button class="small-action" data-upload="${esc(m.id)}" data-mode="batch">۲۰ صفحه</button><button class="small-action" data-upload="${esc(m.id)}" data-mode="all">تا پایان</button>` : ''}${google}${text}</span></div>`;
   }).join('') || '<p class="muted">فایلی در انتظار خواندن نیست.</p>';
   for (const b of document.querySelectorAll('[data-upload]')) b.onclick = () => beginImport(b.dataset.upload, b.dataset.mode);
 }
@@ -313,14 +317,16 @@ function showChatResult(result) {
 function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value; $('resume-deep').disabled = value; $('site-form').querySelector('button[type="submit"]').disabled = value; $('consult-form').querySelector('button[type="submit"]').disabled = value; }
 async function beginImport(id, visionMode = 'detect') {
   if (busy) return toast('یک کار دیگر در حال اجراست.');
-  if (visionMode !== 'detect' && !confirm(visionMode === 'all'
-    ? 'همهٔ صفحه‌های باقی‌مانده بررسی می‌شود. صفحه‌های دارای متن محلی خوانده می‌شوند و فقط صفحه‌های تصویری به مدل ویژن می‌روند؛ ممکن است هزینه و زمان داشته باشد. هر صفحه ذخیره می‌شود. شروع شود؟'
-    : '۲۰ صفحهٔ بعدی بررسی می‌شود؛ فقط صفحه‌های تصویری ممکن است هزینهٔ ویژن داشته باشند. شروع شود؟')) return;
+  if (visionMode !== 'detect' && !confirm(visionMode === 'google_ocr'
+    ? 'PDF برای OCR دسته‌ای به Google Cloud فرستاده می‌شود و ممکن است برای تمام صفحات، ذخیره‌سازی و شبکه هزینه داشته باشد. PDF اصلی حفظ می‌شود؛ متن صفحه‌دار در پرونده ذخیره خواهد شد. ادامه بدهیم؟'
+    : visionMode === 'all'
+      ? 'همهٔ صفحه‌های باقی‌مانده بررسی می‌شود. صفحه‌های دارای متن محلی خوانده می‌شوند و فقط صفحه‌های تصویری به مدل ویژن می‌روند؛ ممکن است هزینه و زمان داشته باشد. هر صفحه ذخیره می‌شود. شروع شود؟'
+      : '۲۰ صفحهٔ بعدی بررسی می‌شود؛ فقط صفحه‌های تصویری ممکن است هزینهٔ ویژن داشته باشند. شروع شود؟')) return;
   try {
     const r = await api('/api/import', { method: 'POST', json: {
       uploadId:id, dossierId:selected, visionMode:visionMode === 'detect' ? null : visionMode,
     } });
-    watch(r.id, visionMode === 'all' ? 'خواندن تا پایان' : visionMode === 'batch' ? 'خواندن ۲۰ صفحه' : 'بررسی سند');
+    watch(r.id, visionMode === 'google_ocr' ? 'Google Document AI OCR' : visionMode === 'all' ? 'خواندن تا پایان' : visionMode === 'batch' ? 'خواندن ۲۰ صفحه' : 'بررسی سند');
   } catch(e) { fail(e); }
 }
 async function watch(id, title) {
