@@ -18,7 +18,7 @@ const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبی�
 قواعد:
 - سلام، بحث، نظرخواهی، سؤال معمولی، جمع‌بندی و عبارت مبهم همگی respond هستند. پژوهش را خودکار از هر سؤال شروع نکن.
 - فقط اگر پاسخ کاربر واقعاً برای ادامه لازم است، clarification را همراه respond بده؛ در غیر این صورت null. حداکثر سه گزینهٔ کوتاه بده؛ کاربر همیشه می‌تواند آزاد بنویسد. برای اجرای نیت موجود یا انتخاب‌های معمولی دوباره تأیید نخواه.
-- research_team فقط وقتی کاربر صریحاً دستور تحقیق/جست‌وجو/بررسی می‌دهد. حداکثر سه زیرکار متمایز بساز: شاهد مستقیم، تفسیر یا شاهد مخالف، و منشأ روایت/منبع. از local برای اسناد پرونده و web برای منابع بیرونی استفاده کن.
+- research_team وقتی کاربر صریحاً تحقیق/جست‌وجو/بررسی، یا آوردن منبع، نقل‌قول دقیق و نمونهٔ مستند را می‌خواهد. درخواست شاهد قابل‌ردیابی سؤال معمولی نیست. حداکثر سه زیرکار متمایز بساز: شاهد مستقیم، تفسیر یا شاهد مخالف، و منشأ روایت/منبع. از local برای اسناد پرونده و web برای منابع بیرونی استفاده کن.
 - اگر کاربر ادامهٔ یک نیت باز را می‌خواهد، شناسهٔ واقعی همان نیت اصلی را در target_root_id بگذار و subtasks را خالی بگذار مگر زیرپرسش تازه‌ای صریحاً بخواهد؛ نیت ساختگی نساز.
 - زیرنیت‌های pending که از سرنخ‌های approved ساخته شده‌اند قبلاً با تصمیم تو تأیید شده‌اند. برای اجرای آن‌ها تأیید یا انتخاب دوباره از کاربر نخواه. مکث پس از سقف دورهای خودکار به معنی رد یا نیاز به تأیید نیست؛ با درخواست «ادامه بده» همان نیت اصلی را از صف ادامه بده.
 - وضعیت pending یعنی کار هنوز اجرا نشده؛ paused یعنی فعلاً متوقف است. فقط برای وضعیت running بگو عامل اکنون مشغول کار است. اگر اقدام واقعی research_team را انتخاب نکرده‌ای، ادعای آغاز عامل‌ها نکن.
@@ -34,6 +34,7 @@ const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبی�
 - اگر روشن نیست کاربر چه اقدامی می‌خواهد، با respond یک پرسش کوتاه بپرس.`;
 
 const explicitResearch = (text) => /(?:تحقیق|پژوهش|بررسی|جست[‌\s-]*وجو|کاوش).{0,100}(?:کن|بکن|شروع|بگرد)|(?:برو|بگرد|پیدا کن|منبع بیار|منابع بیار).{0,100}(?:تحقیق|پژوهش|منبع|درباره|راجع)|\b(?:research|investigate|search for)\b/i.test(text);
+const explicitEvidence = (text) => /(?:منبع|منابع|نقل[‌\s-]*قول|عبارت شاهد|نمونه[ٔ‌ی\s]*مستند|شواهد).{0,120}(?:بیاور|بیار|پیدا کن|ارائه بده|نشان بده|ذکر کن|جدا کن|مقایسه کن)|(?:بیاور|بیار|پیدا کن|ارائه بده).{0,120}(?:منبع|نقل[‌\s-]*قول|شاهد|مستند)/i.test(text);
 const explicitContinue = (text) => /(?:ادامه بده|ادامه‌اش بده|از سر بگیر|resume|continue)/i.test(text);
 const explicitResume = (text) => explicitContinue(text) || /(?:فعال(?:ش|شان|شون|شان را|شون رو)?\s*کن|شروع(?:ش|شان|شون)?\s*کن|پیگیری(?:ش|شان|شون)?\s*کن)/i.test(text);
 const asksQueuedStatus = (text) => /(?:در صف|تأیید مادر|تایید مادر|زیرپرسش‌های باز|زیرسوال‌های باز)/i.test(text);
@@ -58,7 +59,8 @@ export function normalizePlan(data, userText, { hasDocs = false } = {}) {
     ? Number(data.target_root_id) : null;
   let action = ['research_team','crawl_site','consult_sources'].includes(data?.action)
     ? data.action : 'respond';
-  if (action === 'research_team' && !explicitResearch(requested) && !(explicitResume(requested) && targetRootId))
+  if (action === 'respond' && explicitEvidence(requested)) action = 'research_team';
+  if (action === 'research_team' && !explicitResearch(requested) && !explicitEvidence(requested) && !(explicitResume(requested) && targetRootId))
     action = 'respond';
   if (action === 'consult_sources' && !explicitConsult(requested)) action = 'respond';
   const userUrls = [...requested.matchAll(/https?:\/\/[^\s<>"']+/gi)]
@@ -76,8 +78,13 @@ export function normalizePlan(data, userText, { hasDocs = false } = {}) {
   const subtasks = (Array.isArray(data?.subtasks) ? data.subtasks : []).slice(0, 3)
     .map((x) => ({ title: clean(x?.title, 350), role: x?.role === 'web' ? 'web-researcher' : 'source-analyst' }))
     .filter((x) => x.title);
-  if (action === 'research_team' && !subtasks.length && !targetRootId) subtasks.push({
-    title: clean(data?.goal || requested, 350), role: hasDocs ? 'source-analyst' : 'web-researcher' });
+  if (action === 'research_team' && !subtasks.length && !targetRootId) {
+    if (hasDocs && explicitEvidence(requested)) subtasks.push(
+      { title: clean(`شاهد در اسناد پرونده: ${requested}`, 350), role: 'source-analyst' },
+      { title: clean(`شاهد مستقل در وب: ${requested}`, 350), role: 'web-researcher' });
+    else subtasks.push({ title: clean(data?.goal || requested, 350),
+      role: hasDocs ? 'source-analyst' : 'web-researcher' });
+  }
   if (action === 'research_team' && !hasDocs && !/\b(سند|کتاب|فایل|پرونده)\b/.test(requested))
     for (const task of subtasks) task.role = 'web-researcher';
   const question = clean(data?.clarification?.question, 350);

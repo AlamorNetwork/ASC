@@ -21,6 +21,18 @@ try {
     ask: async () => ({ data: { action: 'respond', reply: 'سلام! آماده‌ام.' }, usage: {} }) });
   if (plain.text !== 'سلام! آماده‌ام.' || teamCalls || store.listDossiers(pid, 5).length)
     throw new Error('ordinary chat created research');
+  const evidenceRequest = 'هرودوت در کتاب ۱ چه می‌گوید؟ منبع و عبارت شاهد را بیاور.';
+  const evidencePlan = normalizePlan({ action: 'respond', reply: 'از حافظه پاسخ می‌دهم.' }, evidenceRequest);
+  if (evidencePlan.action !== 'research_team' || evidencePlan.subtasks[0]?.role !== 'web-researcher')
+    throw new Error('explicit source request was answered from model memory');
+  const mixedPlan = normalizePlan({ action: 'respond' }, 'یک نمونهٔ مستند خلاف آن پیدا کن', { hasDocs: true });
+  if (mixedPlan.subtasks.length !== 2 || mixedPlan.subtasks[0].title === mixedPlan.subtasks[1].title ||
+      mixedPlan.subtasks[1].role !== 'web-researcher')
+    throw new Error('source request with a dossier did not search local and web evidence');
+  const disputePlan = normalizePlan({ action: 'respond' },
+    'شواهد ارتباط و دلایل مخالفت با تداوم مستقیم را جدا کن و بگو پژوهشگران چه نتیجه‌ای گرفته‌اند.');
+  if (disputePlan.action !== 'research_team')
+    throw new Error('explicit comparison of evidence was treated as casual chat');
   const clarified = await motherTurn({ principalId: pid, userText: 'کدام نسخه را بخوانی؟', team,
     ask: async () => ({ data: { action: 'respond', reply: 'برای انتخاب متن، یک نکته لازم است.',
       clarification: { question: 'کدام نسخه را بررسی کنم؟', options: ['نسخهٔ فارسی', 'نسخهٔ اصلی'] } }, usage: {} }) });
