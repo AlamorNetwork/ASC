@@ -153,6 +153,11 @@ a{color:var(--copper-strong)}
 .agent-card p{margin:6px 0;color:var(--ink);font-size:11px;font-weight:700;line-height:1.65}
 .agent-card small{display:block;color:var(--muted);font-size:10px;line-height:1.6;overflow-wrap:anywhere}
 .agent-card .agent-card-question{margin-top:7px;padding-top:6px;border-top:1px solid var(--line);color:var(--ink-soft)}
+.agent-queue-action{display:grid;gap:7px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+.agent-resume{justify-self:start;min-height:44px;padding:8px 12px;border:1px solid var(--copper);border-radius:5px;background:#3b302c;color:#f1b68d;font:700 11px var(--font);cursor:pointer}
+.agent-resume:hover:not(:disabled){background:#563b30}
+.agent-resume:focus-visible{outline:2px solid #f1b68d;outline-offset:2px}
+.agent-resume:disabled{opacity:.55;cursor:not-allowed}
 .lead-heading{margin-top:18px!important}
 .lead-card{margin-top:7px;padding:9px 10px;border:1px solid #425366;border-radius:5px;background:#203246}
 .lead-card[data-status=approved]{border-right:3px solid var(--green)}

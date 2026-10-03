@@ -281,7 +281,7 @@ async function servePublic(res, pathname) {
     'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" });
   res.end(body);
 }
-async function route(req, res) {
+async function route(req, res, runTeam) {
   const url = new URL(req.url, 'http://localhost');
   if (!url.pathname.startsWith('/api/')) return servePublic(res, url.pathname);
   if (url.pathname === '/api/login' && req.method === 'POST') {
@@ -340,8 +340,10 @@ async function route(req, res) {
     const node = store.getResearchNode(pid, Number(input.nodeId));
     if (!node || node.parent_id) throw new Error('نیت اصلی پیدا نشد.');
     if (!['pending','paused','failed'].includes(node.status)) throw new Error('این نیت آمادهٔ اجرا نیست.');
+    if (settings.budget() !== null && settings.budget() <= 0)
+      throw new Error('سقف هزینهٔ پژوهش صفر است؛ عامل‌ها شروع نشدند.');
     return response(res, 202, startJob('team', (progress) =>
-      runResearchTeam({ principalId: pid, dossierId: node.dossier_id, nodeId: node.id, onProgress: progress })));
+      runTeam({ principalId: pid, dossierId: node.dossier_id, nodeId: node.id, onProgress: progress })));
   }
   if (url.pathname === '/api/site-crawl' && req.method === 'POST') {
     const input = await readJson(req);
@@ -494,7 +496,7 @@ async function route(req, res) {
   return error(res, 404, 'یافت نشد.');
 }
 
-export function createWebServer() {
+export function createWebServer({ runTeam = runResearchTeam } = {}) {
   if (!config.web.password || config.web.password.length < 16) throw new Error('WEB_PASSWORD must be at least 16 characters.');
   const secure = /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(config.web.origin);
   const localPreview = process.env.NODE_ENV !== 'production' &&
@@ -502,7 +504,7 @@ export function createWebServer() {
   if (!secure && !localPreview) throw new Error('WEB_ORIGIN must be the exact HTTPS origin of the web app.');
   principal();
   return http.createServer((req, res) => {
-    Promise.resolve(route(req, res)).catch((err) => {
+    Promise.resolve(route(req, res, runTeam)).catch((err) => {
       const badInput = /نامعتبر|نیست|خالی|لازم|سقف|پیدا نشد/.test(err.message);
       if (!badInput && !err.status) console.error('[web]', err);
       if (!res.headersSent && !res.destroyed) {

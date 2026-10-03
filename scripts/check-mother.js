@@ -104,6 +104,16 @@ try {
     team: queueTeam, ask: async () => { throw new Error('status must use stored state'); } });
   if (!status.text.includes('تأیید دوباره') || resumedQueue)
     throw new Error('approved queue was described as requiring user approval');
+  const idleStatus = await motherTurn({ principalId: pid, dossierId: queuedDossier,
+    userText: 'عامل‌های در صف واقعاً دارن کار می‌کنن؟', team: queueTeam,
+    ask: async () => ({ data: { action: 'respond', reply: 'بله، عامل‌ها الان فعال‌اند.' }, usage: {} }) });
+  if (!idleStatus.text.includes('اجرا نشده') || resumedQueue)
+    throw new Error('mother claimed queued agents are working while no job exists');
+  const agentStatus = await motherTurn({ principalId: pid, dossierId: queuedDossier,
+    userText: 'عامل‌ها کجای کارند؟', team: queueTeam,
+    ask: async () => ({ data: { action: 'respond', reply: 'الان مشغول تحقیق هستند.' }, usage: {} }) });
+  if (!agentStatus.text.includes('اجرا نشده') || resumedQueue)
+    throw new Error('mother relied on model fiction for a queued agent status question');
   const continueQueued = await motherTurn({ principalId: pid, dossierId: queuedDossier,
     userText: 'ادامه بده', team: queueTeam,
     ask: async () => { throw new Error('resume must not depend on planner'); } });

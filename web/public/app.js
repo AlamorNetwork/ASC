@@ -98,9 +98,29 @@ function renderAgentMonitor(rawNodes) {
   const roles = { coordinator:'عامل مادر', 'source-analyst':'عامل اسناد', 'web-researcher':'عامل وب', local:'عامل محلی' };
   const done = nodes.filter((n) => n.status === 'done').length;
   const cards = [...nodes].sort((a, b) => (order[a.status] ?? 5) - (order[b.status] ?? 5) || Number(a.id) - Number(b.id))
-    .map((n) => `<div class="agent-card" data-status="${esc(n.status || 'pending')}"><div class="agent-card-head"><strong>${esc(roles[n.assigned_role] || n.assigned_role || 'عامل')}${n.parent_id ? ` · زیر #${fa(n.parent_id)}` : ''}</strong><span>${esc(statusNames[n.status] || n.status || 'در صف')}</span></div><p>${esc(n.title)}</p><small>گام فعلی: ${esc(n.progress_stage || (n.status === 'pending' ? 'منتظر شروع' : 'گام تازه ثبت نشده است'))}</small>${n.open_question ? `<small class="agent-card-question">پرسش باز: ${esc(n.open_question)}</small>` : ''}</div>`).join('');
+    .map((n) => {
+      const approvedWaiting = !n.parent_id && n.status === 'paused' ? nodes.filter((child) =>
+        child.status === 'pending' && child.progress_stage?.includes('با تأیید عامل مادر') &&
+        ancestorOf(nodes, child.id) === Number(n.id)).length : 0;
+      const resume = approvedWaiting ? `<div class="agent-queue-action"><small>${fa(approvedWaiting)} عامل تأییدشده هنوز اجرا نشده‌اند.</small><button type="button" class="agent-resume" data-resume-root="${Number(n.id)}" ${busy || activeJob ? 'disabled' : ''}>ادامهٔ عامل‌های تأییدشده ←</button></div>` : '';
+      return `<div class="agent-card" data-status="${esc(n.status || 'pending')}"><div class="agent-card-head"><strong>${esc(roles[n.assigned_role] || n.assigned_role || 'عامل')}${n.parent_id ? ` · زیر #${fa(n.parent_id)}` : ''}</strong><span>${esc(statusNames[n.status] || n.status || 'در صف')}</span></div><p>${esc(n.title)}</p><small>گام فعلی: ${esc(n.progress_stage || (n.status === 'pending' ? 'منتظر شروع' : 'گام تازه ثبت نشده است'))}</small>${n.open_question ? `<small class="agent-card-question">پرسش باز: ${esc(n.open_question)}</small>` : ''}${resume}</div>`;
+    }).join('');
   const html = `<div class="agent-count">${fa(running)} فعال · ${fa(waiting)} در انتظار · ${fa(done)} تکمیل · ${fa(nodes.length)} نیت</div>${cards}`;
-  if (monitorSnapshot !== html) { box.innerHTML = html; monitorSnapshot = html; }
+  if (monitorSnapshot !== html) {
+    box.innerHTML = html; monitorSnapshot = html;
+    for (const button of box.querySelectorAll('[data-resume-root]')) button.onclick = async () => {
+      if (busy || activeJob) return toast('یک کار دیگر در حال اجراست.');
+      try {
+        const job = await api('/api/research-nodes/run', { method:'POST', json:{ nodeId:Number(button.dataset.resumeRoot) } });
+        watch(job.id, 'پیگیری عامل‌های تأییدشده');
+      } catch (err) { fail(err); }
+    };
+  }
+}
+function ancestorOf(nodes, id) {
+  let node = nodes.find((item) => Number(item.id) === Number(id));
+  for (let i = 0; node?.parent_id && i < 8; i++) node = nodes.find((item) => Number(item.id) === Number(node.parent_id));
+  return node && !node.parent_id ? Number(node.id) : null;
 }
 function renderLeadMonitor(rawLeads) {
   const box = $('lead-monitor');

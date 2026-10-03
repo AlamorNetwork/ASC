@@ -12,8 +12,19 @@ const { createWebServer, visionPlan, deepCeiling } = await import('../src/web.js
 const { motherSourceContext, motherTurn } = await import('../src/mother.js');
 const { ingestToDossier } = await import('../src/ingest.js');
 const store = await import('../src/db.js');
+const settings = await import('../src/settings.js');
 const { db } = store;
-const server = createWebServer();
+let resumedTeam = null;
+const server = createWebServer({ runTeam: async (input) => {
+  resumedTeam = input;
+  const child = store.dossierResearchNodes(input.principalId, input.dossierId)
+    .find((node) => node.parent_id === input.nodeId && node.status === 'pending');
+  if (!child) throw new Error('approved follow-up was not available to the worker');
+  store.updateResearchNode(input.principalId, child.id, { status: 'done', result: { summary: 'بررسی شد' } });
+  store.updateResearchNode(input.principalId, input.nodeId, { status: 'done', result: { summary: 'گزارش' } });
+  input.onProgress('عامل تأییدشده اجرا شد');
+  return { summary: 'گزارش', incomplete: [] };
+} });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const url = `http://127.0.0.1:${server.address().port}`;
 const origin = process.env.WEB_ORIGIN;
@@ -40,6 +51,8 @@ try {
       markup.includes('id="research-node-form"'))
     throw new Error('web chat still requires manual research routing');
   const script = fs.readFileSync(path.join(import.meta.dirname, '..', 'web', 'public', 'app.js'), 'utf8');
+  if (!script.includes('data-resume-root') || !script.includes('/api/research-nodes/run'))
+    throw new Error('approved queued agents have no direct resume control');
   const htmlIds = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
   const referencedIds = new Set([...script.matchAll(/\$\('([^']+)'\)/g)].map((match) => match[1]));
   const absent = [...referencedIds].filter((id) => !htmlIds.has(id));
@@ -94,6 +107,21 @@ try {
       !liveData.leads.some((item) => item.id === lead.id && item.child_node_id === followupId) ||
       liveNodes.some((n) => 'result_json' in n))
     throw new Error('agent checkpoint is not live in the web API');
+  settings.setBudget(0);
+  const blockedResume = await fetch(`${url}/api/research-nodes/run`, { method: 'POST',
+    headers: chatHeaders, body: JSON.stringify({ nodeId }) });
+  if (blockedResume.status !== 400 || resumedTeam)
+    throw new Error('zero budget still dispatched the queued research team');
+  settings.setBudget(null);
+  const resume = await fetch(`${url}/api/research-nodes/run`, { method: 'POST',
+    headers: chatHeaders, body: JSON.stringify({ nodeId }) });
+  if (resume.status !== 202) throw new Error(`approved queue could not start: ${resume.status}`);
+  const resumeId = (await resume.json()).id;
+  const resumedJob = await fetch(`${url}/api/jobs/${resumeId}`, { headers: { Cookie: cookie } });
+  const resumedData = await resumedJob.json();
+  if (resumedData.state !== 'done' || resumedData.stage !== 'عامل تأییدشده اجرا شد' ||
+      resumedTeam?.nodeId !== nodeId || store.getResearchNode('test-web-owner', followupId).status !== 'done')
+    throw new Error('resume control did not actually dispatch the approved agent');
   const otherDossier = Number(store.insertDossier({ principalId: 'another-owner', topic: 'private' }));
   const foreignProgress = await fetch(`${url}/api/research-progress?dossierId=${otherDossier}`, { headers: { Cookie: cookie } });
   if (foreignProgress.status === 200) throw new Error('other principal agent progress was exposed');
