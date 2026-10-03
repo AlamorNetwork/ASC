@@ -109,6 +109,34 @@ try {
     ask: async () => { throw new Error('page followup must reuse the user URL'); } });
   if (followup.action.type !== 'site_collected' || siteCalls !== 2)
     throw new Error('mother forgot the page in the previous user message');
+  const groundedUrl = 'https://example.org/mithraeum';
+  const groundedText = 'The Mithraeum was built entirely above ground, rather than underground. ' +
+    'The preserved walls show a purpose-built meeting room.';
+  const grounded = await motherTurn({ principalId: pid, dossierId: planned.dossierId,
+    userText: `این صفحه را بخوان و بگو زیرزمینی بود؟ عبارت شاهد و وضعیت ادعا را بیاور: ${groundedUrl}`,
+    crawl: async ({ dossierId }) => {
+      store.saveCrawledPage({ principalId: pid, dossierId, url: groundedUrl,
+        title: 'Mithraeum', text: groundedText, chunks: [groundedText] });
+      return { pagesSaved: 1, done: true, errors: [],
+        firstPage: { url: groundedUrl, title: 'Mithraeum', characters: groundedText.length, via: 'direct' } };
+    },
+    ask: async () => ({ data: { answer: 'روی زمین ساخته شده بود.',
+      claim: 'این مهرابه روی زمین ساخته شده بود.', verdict: 'supported',
+      quote: 'The Mithraeum was built entirely above ground' }, usage: {} }),
+  });
+  if (!grounded.text.includes('The Mithraeum was built entirely above ground') ||
+      !grounded.text.includes('روی زمین') ||
+      !store.dossierClaims(pid, planned.dossierId).some((c) => c.source_url === groundedUrl && c.status === 'verified'))
+    throw new Error('mother saved a page but did not answer the user from its checked text');
+  const madeUp = await motherTurn({ principalId: pid, dossierId: planned.dossierId,
+    userText: `این صفحه را بررسی کن؛ آیا زیرزمینی بود؟ ${groundedUrl}`,
+    crawl: async () => ({ pagesSaved: 1, done: true, errors: [] }),
+    ask: async () => ({ data: { answer: 'زیرزمین بود.', claim: 'این مهرابه زیرزمینی بود.',
+      verdict: 'supported', quote: 'This Mithraeum was entirely underground' }, usage: {} }),
+  });
+  if (!madeUp.text.includes('نامعلوم') ||
+      store.dossierClaims(pid, planned.dossierId).at(-1).status === 'verified')
+    throw new Error('an unsupported page quote was promoted to verified');
   const nonInstruction = normalizePlan({ action: 'research_team', goal: 'سلام' }, 'سلام، نظرت چیه؟');
   if (nonInstruction.action !== 'respond') throw new Error('ordinary chat launched research');
   const settings = await import('../src/settings.js');
