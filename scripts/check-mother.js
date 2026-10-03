@@ -21,6 +21,14 @@ try {
     ask: async () => ({ data: { action: 'respond', reply: 'سلام! آماده‌ام.' }, usage: {} }) });
   if (plain.text !== 'سلام! آماده‌ام.' || teamCalls || store.listDossiers(pid, 5).length)
     throw new Error('ordinary chat created research');
+  const longText = 'آ'.repeat(9000);
+  let receivedLength = 0;
+  await motherTurn({ principalId: pid, userText: longText, team,
+    ask: async ({ content }) => {
+      receivedLength = JSON.parse(content).userMessage.length;
+      return { data: { action: 'respond', reply: 'خواندم.' }, usage: {} };
+    } });
+  if (receivedLength !== longText.length) throw new Error('mother silently truncated a valid long message');
   const planned = await motherTurn({ principalId: pid, userText: 'برو دربارهٔ میترا تحقیق کن', team,
     ask: async () => ({ data: { action: 'research_team', goal: 'خاستگاه میترا',
       subtasks: [{ title: 'شاهد مستقیم', role: 'web' },

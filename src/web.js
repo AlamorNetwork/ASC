@@ -7,7 +7,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import { config } from './config.js';
 import * as store from './db.js';
 import * as settings from './settings.js';
-import { motherTurn } from './mother.js';
+import { motherTurn, MAX_USER_TEXT_CHARS } from './mother.js';
 import { runResearch } from './research.js';
 import { deepInvestigate } from './deep.js';
 import { ingestToDossier, extractClaimsFor, sha256 } from './ingest.js';
@@ -42,13 +42,24 @@ function principal() {
 }
 function readJson(req, limit = 16384) {
   return new Promise((resolve, reject) => {
-    let size = 0, text = '';
+    let size = 0, text = '', tooLarge = false;
     req.on('data', (chunk) => {
+      if (tooLarge) return;
       size += chunk.length;
-      if (size > limit) { reject(new Error('درخواست خیلی بزرگ است.')); req.destroy(); return; }
+      if (size > limit) {
+        tooLarge = true;
+        text = '';
+        const err = new Error('درخواست خیلی بزرگ است.');
+        err.status = 413;
+        reject(err);
+        return;
+      }
       text += chunk;
     });
-    req.on('end', () => { try { resolve(JSON.parse(text || '{}')); } catch { reject(new Error('JSON نامعتبر است.')); } });
+    req.on('end', () => {
+      if (tooLarge) return;
+      try { resolve(JSON.parse(text || '{}')); } catch { reject(new Error('JSON نامعتبر است.')); }
+    });
     req.on('error', reject);
   });
 }
@@ -391,8 +402,13 @@ async function route(req, res) {
     return response(res, 202, startJob('import', (progress) => importFile(pid, input, progress)));
   }
   if (url.pathname === '/api/chat' && req.method === 'POST') {
-    const input = await readJson(req);
-    const message = String(input.message ?? '').trim().slice(0, 4000);
+    const input = await readJson(req, 65536);
+    const message = String(input.message ?? '').trim();
+    if (message.length > MAX_USER_TEXT_CHARS) {
+      const err = new Error(`پیام بیش از ${MAX_USER_TEXT_CHARS} نویسه است؛ متن بلند را به‌صورت فایل بفرست یا به چند پیام تقسیم کن.`);
+      err.status = 413;
+      throw err;
+    }
     if (!message) throw new Error('پیام خالی است.');
     const dossier = input.dossierId ? requireDossier(pid, input.dossierId) : null;
     return response(res, 202, startJob('chat', (progress) => motherTurn({
@@ -488,9 +504,9 @@ export function createWebServer() {
   return http.createServer((req, res) => {
     Promise.resolve(route(req, res)).catch((err) => {
       const badInput = /نامعتبر|نیست|خالی|لازم|سقف|پیدا نشد/.test(err.message);
-      if (!badInput) console.error('[web]', err);
+      if (!badInput && !err.status) console.error('[web]', err);
       if (!res.headersSent && !res.destroyed) {
-        error(res, badInput ? 400 : 500, badInput ? err.message : 'خطای داخلی؛ گزارش سرور را بررسی کن.');
+        error(res, err.status ?? (badInput ? 400 : 500), err.status || badInput ? err.message : 'خطای داخلی؛ گزارش سرور را بررسی کن.');
       }
     });
   });

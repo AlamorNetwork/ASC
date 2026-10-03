@@ -11,6 +11,7 @@ import { pendingUploadsFor } from './upload-state.js';
 import net from 'node:net';
 
 const clean = (v, n = 1000) => String(v ?? '').trim().slice(0, n);
+export const MAX_USER_TEXT_CHARS = 12000;
 const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبیعی و کوتاه گفتگو می‌کنی و فقط وقتی او صریحاً کاری خواست، عامل متخصص را مأمور می‌کنی. مدیریت نیت و زیرنیت با توست، نه کاربر.
 فقط JSON برگردان:
 {"reply":"پاسخ فارسی کوتاه","action":"respond|research_team|crawl_site|consult_sources","goal":"هدف پژوهش","target_root_id":null,"subtasks":[{"title":"پرسش دقیق","role":"local|web"}],"url":null}
@@ -44,7 +45,7 @@ function publicUserUrl(value) {
 }
 
 export function normalizePlan(data, userText, { hasDocs = false } = {}) {
-  const requested = clean(userText, 4000);
+  const requested = clean(userText, MAX_USER_TEXT_CHARS);
   const targetRootId = Number.isSafeInteger(Number(data?.target_root_id)) && Number(data?.target_root_id) > 0
     ? Number(data.target_root_id) : null;
   let action = ['research_team','crawl_site','consult_sources'].includes(data?.action)
@@ -129,7 +130,7 @@ export function motherSourceContext(principalId, dossierId, question) {
 
 export async function motherTurn({ principalId, dossierId = null, userText, onProgress,
   ask = chatJson, team = runResearchTeam, crawl = collectSite, consult = consultSources }) {
-  const text = clean(userText, 4000);
+  const text = clean(userText, MAX_USER_TEXT_CHARS);
   if (!text) throw new Error('پیام خالی است.');
   const { dossier, history, roots } = recentContext(principalId, dossierId);
   if (dossier && asksForFiles(text) && !store.dossierDocuments(principalId, dossier.id).length) {

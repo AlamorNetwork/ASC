@@ -55,6 +55,21 @@ try {
   if (login.status !== 200) throw new Error(`login ${login.status}: ${await login.text()}`);
   const cookie = login.headers.get('set-cookie').split(';')[0];
   const { csrf } = await login.json();
+  const chatHeaders = { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' };
+  const oversizedMessage = await fetch(`${url}/api/chat`, { method: 'POST',
+    headers: chatHeaders, body: JSON.stringify({ message: 'آ'.repeat(40000) }) });
+  const rejected = await oversizedMessage.json();
+  if (oversizedMessage.status !== 413 || !rejected.error?.includes('بزرگ'))
+    throw new Error(`oversized message did not receive a clear HTTP 413: ${oversizedMessage.status} ${rejected.error}`);
+  const excessiveText = await fetch(`${url}/api/chat`, { method: 'POST',
+    headers: chatHeaders, body: JSON.stringify({ message: 'آ'.repeat(20000) }) });
+  const rejectedText = await excessiveText.json();
+  if (excessiveText.status !== 413 || !rejectedText.error?.includes('نویسه'))
+    throw new Error('message over the text limit was truncated or sent to a model');
+  const longerMessage = await fetch(`${url}/api/chat`, { method: 'POST',
+    headers: chatHeaders, body: JSON.stringify({ message: 'آ'.repeat(9000), dossierId: 999999 }) });
+  if (longerMessage.status !== 400 || !(await longerMessage.json()).error?.includes('پرونده'))
+    throw new Error('a valid long Persian message was stopped by the transport limit');
   store.addMessage({ principalId: 'test-web-owner', dossierId: null, role: 'user', text: 'سلام' });
   const state = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
   if (state.status !== 200 || !(await state.json()).messages.some((m) => m.text === 'سلام'))
