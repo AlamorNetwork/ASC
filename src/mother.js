@@ -34,8 +34,11 @@ const SYSTEM = `تو دستیار مادر ASC هستی. با کاربر طبی�
 
 const explicitResearch = (text) => /(?:تحقیق|پژوهش|بررسی|جست[‌\s-]*وجو|کاوش).{0,100}(?:کن|بکن|شروع|بگرد)|(?:برو|بگرد|پیدا کن|منبع بیار|منابع بیار).{0,100}(?:تحقیق|پژوهش|منبع|درباره|راجع)|\b(?:research|investigate|search for)\b/i.test(text);
 const explicitContinue = (text) => /(?:ادامه بده|ادامه‌اش بده|از سر بگیر|resume|continue)/i.test(text);
+const explicitResume = (text) => explicitContinue(text) || /(?:فعال(?:ش|شان|شون|شان را|شون رو)?\s*کن|شروع(?:ش|شان|شون)?\s*کن|پیگیری(?:ش|شان|شون)?\s*کن)/i.test(text);
 const asksQueuedStatus = (text) => /(?:در صف|تأیید مادر|تایید مادر|زیرپرسش‌های باز|زیرسوال‌های باز)/i.test(text);
 const asksAgentStatus = (text) => /(?:عامل|ایجنت).{0,35}(?:کجای|چیکار|کار|فعال|وضعیت)|وضعیت.{0,35}(?:عامل|ایجنت)/i.test(text);
+const asksResearchStatus = (text) => asksQueuedStatus(text) || asksAgentStatus(text) ||
+  /(?:شروع به کار|تحقیق.{0,25}(?:شروع|در حال|وضعیت)|(?:شروع|در حال).{0,25}تحقیق)/i.test(text);
 const explicitCrawl = (text) => /(?:بخون|بخوان|اسکرپ|خزش|خزیدن|استخراج|جمع کن|تحلیل کن|بررسی کن|crawl|scrape)/i.test(text);
 const explicitConsult = (text) => /(?:پرپلکسیتی|perplexity|مشاور منابع|مشاوره.*منبع)/i.test(text);
 const asksForFiles = (text) => /(?:چه|کدام|لیست|فهرست).{0,65}(?:فایل|سند|کتاب|منبع)|(?:فایل|سند|کتاب).{0,65}(?:داری|داریم|دسترسی)/i.test(text);
@@ -54,7 +57,7 @@ export function normalizePlan(data, userText, { hasDocs = false } = {}) {
     ? Number(data.target_root_id) : null;
   let action = ['research_team','crawl_site','consult_sources'].includes(data?.action)
     ? data.action : 'respond';
-  if (action === 'research_team' && !explicitResearch(requested) && !(explicitContinue(requested) && targetRootId))
+  if (action === 'research_team' && !explicitResearch(requested) && !(explicitResume(requested) && targetRootId))
     action = 'respond';
   if (action === 'consult_sources' && !explicitConsult(requested)) action = 'respond';
   const userUrls = [...requested.matchAll(/https?:\/\/[^\s<>"']+/gi)]
@@ -154,22 +157,53 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
     }
   }
   const nodes = dossier ? store.dossierResearchNodes(principalId, dossier.id) : [];
-  const approvedQueued = dossier ? store.researchLeads(principalId, dossier.id)
+  const leads = dossier ? store.researchLeads(principalId, dossier.id) : [];
+  const approvedQueued = leads
     .filter((lead) => lead.status === 'approved' && nodes.some((n) =>
-      n.id === lead.child_node_id && n.status === 'pending')) : [];
-  // A resume instruction is authorization to run work the mother already approved.
-  // Resolve the root from durable state so a weak planner cannot ask for approval again.
-  const queuedRootIds = [...new Set(approvedQueued.map((lead) => lead.root_id))];
-  const resumeRootId = explicitContinue(text) && queuedRootIds.length === 1 ? queuedRootIds[0] : null;
-  if (dossier && approvedQueued.length && (asksQueuedStatus(text) || asksAgentStatus(text)) &&
-      /[؟?]|(?:وضعیت|چرا|باید|چیکار|کار.{0,15}(?:می|نمی)|هیچ کاری|کجای)/i.test(text) &&
-      !explicitContinue(text)) {
-    const budgetPaused = queuedRootIds.some((id) => {
-      try { return JSON.parse(nodes.find((n) => n.id === id)?.result_json || '{}').pauseReason === 'budget'; }
+      n.id === lead.child_node_id && n.status === 'pending'));
+  const openRoots = nodes.filter((n) => !n.parent_id && ['pending', 'paused', 'failed'].includes(n.status));
+  const referencedIds = [...text.matchAll(/#\s*([0-9۰-۹٠-٩]+)/g)]
+    .map((m) => Number(m[1].replace(/[۰-۹]/g, (c) => String(c.charCodeAt(0) - 1776))
+      .replace(/[٠-٩]/g, (c) => String(c.charCodeAt(0) - 1632))));
+  const rootOf = (id) => {
+    let node = nodes.find((item) => item.id === id);
+    while (node?.parent_id) node = nodes.find((item) => item.id === node.parent_id);
+    return node?.id ?? leads.find((item) => item.id === id)?.root_id ?? null;
+  };
+  const referencedRoots = [...new Set(referencedIds.map(rootOf).filter(Boolean))]
+    .filter((id) => openRoots.some((root) => root.id === id));
+  const resumeRootId = explicitResume(text) && dossier
+    ? referencedRoots.length === 1 ? referencedRoots[0]
+      : referencedIds.length ? null
+        : openRoots.length === 1 ? openRoots[0].id : null
+    : null;
+  const reportState = () => {
+    const running = nodes.filter((n) => n.status === 'running').length;
+    const pending = nodes.filter((n) => n.status === 'pending' && n.parent_id).length;
+    const awaitingReview = leads.filter((lead) => lead.status === 'pending').length;
+    const paused = openRoots.filter((n) => n.status === 'paused').length;
+    const budgetPaused = openRoots.some((n) => {
+      try { return JSON.parse(n.result_json || '{}').pauseReason === 'budget'; }
       catch { return false; }
     });
-    const reason = budgetPaused ? 'سقف هزینه پر شده است' : 'اجرای خودکار مکث کرده است';
-    const answer = `${approvedQueued.length} زیرنیت تأییدشده در صف است؛ «در صف» یعنی هنوز اجرا نشده‌اند، نه اینکه عامل‌ها الآن کار می‌کنند. این‌ها به تأیید دوبارهٔ تو نیاز ندارند؛ ${reason} و نقطهٔ ادامه ذخیره شده است. ${budgetPaused ? 'پس از تنظیم بودجه، ' : ''}دکمهٔ «ادامهٔ عامل‌های تأییدشده» را بزن یا بگو «ادامه بده» تا از همین صف اجرا شوند.`;
+    return `${running ? `${running} عامل در حال اجراست.` : 'اکنون هیچ عاملی در حال اجرا نیست.'} ${pending} زیرنیت در صف هنوز اجرا نشده و ${awaitingReview} سرنخ در انتظار تصمیم مادر است. ${paused ? `${paused} نیت اصلی مکث کرده است.` : ''} ${approvedQueued.length ? 'زیرنیت‌های تأییدشده به تأیید دوباره نیاز ندارند. ' : ''}${budgetPaused ? 'سقف هزینه را تنظیم کن؛ سپس ' : ''}${openRoots.length ? 'برای ادامهٔ همین نیت بگو «ادامه بده».' : ''}`.trim();
+  };
+  if (dossier && explicitResume(text) && !resumeRootId &&
+      (openRoots.length > 1 || referencedIds.length)) {
+    const answer = `نیتِ مورد نظر مشخص نیست. ${reportState()} نیت‌های باز: ${openRoots.map((n) => `#${n.id} ${clean(n.title, 70)}`).join('، ')}. شناسهٔ نیت اصلی را بگو تا همان را ادامه بدهم.`;
+    store.addMessage({ principalId, dossierId: dossier.id, role: 'user', text });
+    store.addMessage({ principalId, dossierId: dossier.id, role: 'assistant', text: answer });
+    return { text: answer, dossierId: dossier.id, action: { type: 'respond' }, usage: null };
+  }
+  if (dossier && explicitResume(text) && !resumeRootId && !explicitResearch(text)) {
+    const answer = `نیتِ باز برای ادامه در این پرونده پیدا نشد. ${reportState()}`;
+    store.addMessage({ principalId, dossierId: dossier.id, role: 'user', text });
+    store.addMessage({ principalId, dossierId: dossier.id, role: 'assistant', text: answer });
+    return { text: answer, dossierId: dossier.id, action: { type: 'respond' }, usage: null };
+  }
+  if (dossier && asksResearchStatus(text) && /[؟?]|(?:وضعیت|چرا|باید|چیکار|کجای|در صف|دارن کار|در حال کار)/i.test(text) &&
+      !explicitResume(text)) {
+    const answer = reportState();
     store.addMessage({ principalId, dossierId: dossier.id, role: 'user', text });
     store.addMessage({ principalId, dossierId: dossier.id, role: 'assistant', text: answer });
     return { text: answer, dossierId: dossier.id, action: { type: 'respond' }, usage: null };
@@ -203,7 +237,10 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
   const plan = normalizePlan(data, text, { hasDocs: !!dossier && store.dossierDocuments(principalId, dossier.id).length > 0 });
   if (plan.action === 'respond') {
     store.addMessage({ principalId, dossierId: dossier?.id ?? null, role: 'user', text });
-    const answer = plan.reply || 'منظورت را کمی دقیق‌تر بگو تا کار درست را انجام بدهم.';
+    const falselyStarted = dossier && /(?:تحقیق|عامل|زیرنیت|سرنخ).{0,100}(?:فعال شد|فعال شدند|شروع شد|در حال انجام|مشغول)|(?:فعال شد|فعال شدند|شروع شد).{0,100}(?:تحقیق|عامل|زیرنیت|سرنخ)/i.test(plan.reply);
+    const answer = falselyStarted && !nodes.some((n) => n.status === 'running')
+      ? `کاری شروع نشده است. ${reportState()}`
+      : plan.reply || 'منظورت را کمی دقیق‌تر بگو تا کار درست را انجام بدهم.';
     store.addMessage({ principalId, dossierId: dossier?.id ?? null, role: 'assistant', text: answer,
       costToman: usage?.costToman ?? 0 });
     return { text: answer, dossierId: dossier?.id ?? null, action: { type: 'respond' }, usage };
@@ -272,5 +309,5 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
     .filter(Boolean).join('\n\n');
   store.addMessage({ principalId, dossierId: active.id, role: 'assistant', text: answer });
   return { text: answer, dossierId: active.id,
-    action: { type: result.incomplete?.length ? 'team_paused' : 'team_completed', nodeId: root.id }, usage };
+    action: { type: result.incomplete?.length || result.pendingLeads ? 'team_paused' : 'team_completed', nodeId: root.id }, usage };
 }

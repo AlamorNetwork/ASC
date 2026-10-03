@@ -121,5 +121,41 @@ try {
       !continueQueued.text.includes('سقف دورهای خودکار') ||
       store.dossierResearchNodes(pid, queuedDossier).length !== 3)
     throw new Error('mother did not resume approved queue from the original root');
+  const reviewDossier = Number(store.insertDossier({ principalId: pid, topic: 'کتاب استرابو' }));
+  const reviewRoot = store.createResearchNode({ principalId: pid, dossierId: reviewDossier,
+    title: 'تحقیق کتاب یازدهم', assignedRole: 'coordinator' });
+  const reviewedSource = store.createResearchNode({ principalId: pid, dossierId: reviewDossier,
+    parentId: reviewRoot, title: 'شاهد نخست' });
+  store.updateResearchNode(pid, reviewedSource, { status: 'done', result: { summary: 'گزارش ثبت شد' } });
+  const pendingLead = store.recordResearchLead(pid, reviewDossier, reviewRoot, reviewedSource,
+    'آیا گزارش استرابو با متن کتاب سازگار است؟');
+  store.updateResearchNode(pid, reviewRoot, { status: 'paused', result: { pendingLeads: 1 } });
+  let reviewCalls = 0;
+  const reviewTeam = async ({ nodeId }) => {
+    if (nodeId !== reviewRoot) throw new Error('wrong pending-lead root resumed');
+    reviewCalls++;
+    return { summary: 'بازبینی سرنخ انجام شد', pendingLeads: 0, incomplete: [] };
+  };
+  const reviewStatus = await motherTurn({ principalId: pid, dossierId: reviewDossier,
+    userText: 'الان عامل‌ها شروع به کار کردن؟', team: reviewTeam,
+    ask: async () => { throw new Error('status must use actual nodes and leads'); } });
+  if (!reviewStatus.text.includes('هیچ عاملی') || !reviewStatus.text.includes('1 سرنخ') || reviewCalls)
+    throw new Error('mother invented active agents while leads await review');
+  const activated = await motherTurn({ principalId: pid, dossierId: reviewDossier,
+    userText: 'بله لطفا فعالش کن', team: reviewTeam,
+    ask: async () => { throw new Error('explicit activation must dispatch, not just say yes'); } });
+  if (reviewCalls !== 1 || activated.action.nodeId !== reviewRoot ||
+      store.researchLeads(pid, reviewDossier)[0].id !== pendingLead.id)
+    throw new Error('activation failed to dispatch the paused root with pending leads');
+  const resumedReview = await motherTurn({ principalId: pid, dossierId: reviewDossier,
+    userText: 'الان شروع به کار کردن؟ اگر نکرده‌اید ادامه بده', team: reviewTeam,
+    ask: async () => { throw new Error('conditional continuation must dispatch'); } });
+  if (reviewCalls !== 2 || resumedReview.action.nodeId !== reviewRoot)
+    throw new Error('conditional continuation did not resume pending-lead review');
+  const inventedStart = await motherTurn({ principalId: pid, dossierId: reviewDossier,
+    userText: 'خب چه خبر؟', team: reviewTeam,
+    ask: async () => ({ data: { action: 'respond', reply: 'تحقیق شروع شد و عامل‌ها فعال شدند.' }, usage: {} }) });
+  if (reviewCalls !== 2 || !inventedStart.text.includes('کاری شروع نشده'))
+    throw new Error('a conversational reply falsely announced agent execution');
   console.log('mother check passed — conversation, autonomous plan, resume, URL gate, isolation; 0 model calls');
 } finally { store.db.close(); fs.rmSync(temp, { recursive: true, force: true }); }
