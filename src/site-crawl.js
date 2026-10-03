@@ -185,7 +185,7 @@ function parseHtml(html, url, origin) {
  * recrawling; returned nextUrls can be passed back as checkpoint.nextUrls.
  * fetchPage(url) is an optional test adapter returning { html, url? }.
  */
-export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchPage } = {}) {
+export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchPage, fallbackPage } = {}) {
   const seed = canonical(url);
   const origin = new URL(seed).origin;
   if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error('maxPages must be a positive integer');
@@ -213,22 +213,33 @@ export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchP
   const errors = [];
   const retryLater = [];
   let totalBytes = 0;
+  let fallbackCalls = 0;
   const rules = fetchPage ? [] : await robotsRules(origin);
   while (queue.length && pages.length + errors.length < limit) {
     if (TOTAL_BYTES - totalBytes < PAGE_BYTES) break;
     const target = queue.shift();
     try {
       if (!robotsAllow(target, rules)) throw new Error('blocked by robots.txt');
-      const result = await (fetchPage
-        ? fetchPage(target)
-        : defaultFetchPage(target, origin, PAGE_BYTES));
+      let result;
+      let nativeError;
+      try { result = await (fetchPage ? fetchPage(target) : defaultFetchPage(target, origin, PAGE_BYTES)); }
+      catch (error) { nativeError = error; }
+      const shortPage = result && parseHtml(result.html, result.url ?? target, origin).text.length < 120;
+      if ((nativeError || shortPage) && fallbackPage && fallbackCalls < 2) {
+        fallbackCalls++;
+        try { result = await fallbackPage(target); }
+        catch (error) {
+          if (nativeError) throw new Error(`${nativeError.message}; enhanced fetch: ${error.message}`);
+        }
+      }
+      if (!result) throw nativeError;
       const finalUrl = canonical(result?.url ?? target, undefined, origin);
       if (typeof result?.html !== 'string') throw new Error('HTML response required');
       const bytes = Buffer.byteLength(result.html, 'utf8');
       if (bytes > PAGE_BYTES) throw new Error('page exceeds byte limit');
       totalBytes += bytes;
       const parsed = parseHtml(result.html, finalUrl, origin);
-      const page = { url: finalUrl, ...parsed };
+      const page = { url: finalUrl, ...parsed, via: result.via || 'direct' };
       pages.push(page);
       visited.add(finalUrl);
       for (const link of parsed.links) enqueue(link);

@@ -3,6 +3,8 @@ import * as store from './db.js';
 import { crawlSite } from './site-crawl.js';
 import { chunkText } from './chunks.js';
 import { checkpoint as stopPoint } from './cancel.js';
+import { config } from './config.js';
+import { enhancedPage } from './page-fetchers.js';
 
 export async function collectSite({ principalId, dossierId, url, maxPages = 10,
   onProgress, crawl = crawlSite }) {
@@ -17,8 +19,11 @@ export async function collectSite({ principalId, dossierId, url, maxPages = 10,
   store.saveSiteCrawl(principalId, row.id, { checkpoint: initial ?? {}, state: 'running', pagesSaved: saved });
   try {
     const result = await crawl({ url: seed, maxPages, checkpoint: initial,
+      fallbackPage: config.webExtraction.fallback.length
+        ? (target) => enhancedPage(target, config.webExtraction) : undefined,
       onPage: async (page, cursor) => {
-        firstPage ??= { url: page.url, title: page.title || page.url, characters: page.text.length };
+        firstPage ??= { url: page.url, title: page.title || page.url,
+          characters: page.text.length, via: page.via };
         if (page.text.length > 100) {
           const savedPage = store.saveCrawledPage({ principalId, dossierId, url: page.url,
             title: page.title || page.url, text: page.text, chunks: chunkText(page.text) });
@@ -26,7 +31,7 @@ export async function collectSite({ principalId, dossierId, url, maxPages = 10,
         }
         store.saveSiteCrawl(principalId, row.id, { checkpoint: cursor,
           state: 'running', pagesSaved: saved });
-        onProgress?.(`${saved} صفحه ذخیره شد · ${page.title || page.url}`);
+        onProgress?.(`${saved} صفحه ذخیره شد · ${page.title || page.url} · ${page.via || 'direct'}`);
         stopPoint(principalId, 'خزیدن سایت');
       } });
     const cursor = { nextUrls: result.nextUrls, visited: result.visited };

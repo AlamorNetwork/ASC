@@ -179,7 +179,25 @@ The source library lists documents, analysis overviews and cross-section links.
 Submit a site URL to read up to 10 same-origin HTML pages per run; submit the same URL
 again to continue. Pages and the crawl cursor are stored after each page. The crawler
 rejects private destinations and observes `robots.txt` where available. It cannot
-read sign-in pages, JavaScript-only pages, PDFs, or an unlimited site. An existing
+read sign-in pages, PDFs, or an unlimited site. For JavaScript-only pages or native
+fetch failures, optional fallbacks can render one page with a local
+[Scrapling](https://github.com/D4Vinci/Scrapling) browser or the hosted
+[Firecrawl](https://github.com/firecrawl/firecrawl) scrape API. The fallback never
+changes the same-origin, robots, page-size, or persisted-cursor rules. It makes at
+most two fallback calls in one crawl batch.
+
+The fallbacks are disabled until explicitly configured. On the server, run
+`bash scripts/setup-scrapling.sh` if local Chromium fits, then set
+`WEB_FETCH_FALLBACK=scrapling`, `SCRAPLING_PYTHON=/opt/asc-scrapling/bin/python`,
+and an exact `SCRAPLING_ALLOWED_HOSTS` list in `.env`. To use Firecrawl credits
+instead, set `WEB_FETCH_FALLBACK=firecrawl` and `FIRECRAWL_API_KEY`. The chain
+`WEB_FETCH_FALLBACK=scrapling,firecrawl` tries the local browser first. Restart
+`asc-web` after editing `.env`. Firecrawl is billed outside ASC's model meter;
+its cloud API may receive page URLs and content. Scrapling's Chromium download
+and runtime need additional disk and memory. Neither service is required for the
+ordinary crawler.
+
+An existing
 document's **Deep analysis** button analyzes all its stored text; this is separate
 from crawling and can incur model charges.
 
@@ -193,7 +211,7 @@ ceiling. Check reported usage before routine use.
 
 Free local checks: `node scripts/check-mother.js`, `node scripts/check-research-team.js`,
 `node scripts/check-site-crawl.js`, `node scripts/check-site-library.js`, and
-`node scripts/check-source-consult.js`.
+`node scripts/check-page-fetchers.js`, and `node scripts/check-source-consult.js`.
 
 ### Scanned books and vision comparison
 

@@ -176,7 +176,8 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
     try {
       const result = await crawl({ principalId, dossierId: active.id, url, maxPages: 10, onProgress });
       const errors = result.errors?.length ? ` ${result.errors.length} صفحه خطا داشت.` : '';
-      const detail = result.firstPage ? ` صفحهٔ بازشده: ${result.firstPage.title} (${result.firstPage.url})؛ ${result.firstPage.characters} نویسهٔ متن.` : '';
+      const via = { direct: 'مستقیم', scrapling: 'مرورگر محلی', firecrawl: 'Firecrawl' }[result.firstPage?.via] || 'مستقیم';
+      const detail = result.firstPage ? ` صفحهٔ بازشده: ${result.firstPage.title} (${result.firstPage.url})؛ ${result.firstPage.characters} نویسهٔ متن؛ روش خواندن: ${via}.` : '';
       const answer = result.pagesSaved
         ? `${result.pagesSaved} صفحه از ${new URL(url).hostname} در پرونده ذخیره شد.${detail}${errors}${result.done ? '' : ' صفحه‌های باقی‌مانده در صف ذخیره‌اند؛ برای ادامه بگو «خواندن سایت را ادامه بده».'}`
         : `از ${new URL(url).hostname} هنوز صفحهٔ قابل‌خواندنی ذخیره نشد.${errors} ${result.errors?.[0]?.error ?? 'محتوای این صفحه در پاسخ سایت قابل خواندن نبود.'}`;

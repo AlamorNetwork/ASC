@@ -69,6 +69,12 @@ export const config = {
     port: Number(env.WEB_PORT || 3000),
     principalId: env.WEB_PRINCIPAL_ID || '',
   },
+  webExtraction: {
+    fallback: (env.WEB_FETCH_FALLBACK || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    firecrawlKey: env.FIRECRAWL_API_KEY || '',
+    scraplingPython: env.SCRAPLING_PYTHON || '',
+    scraplingAllowedHosts: (env.SCRAPLING_ALLOWED_HOSTS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  },
   googleDocumentAi: {
     project: env.GOOGLE_DOCUMENT_AI_PROJECT || '',
     location: env.GOOGLE_DOCUMENT_AI_LOCATION || '',
