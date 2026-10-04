@@ -139,6 +139,13 @@ pass them through Telegram's hosted Bot API. The upload itself never calls a mod
 Select **Read** after upload to extract and index the file. A scanned book asks
 separately before reading the next 20 pages with vision. Chat, web research, claims,
 evidence status and a Markdown research ledger are available in the same interface.
+The workspace has separate pages for the mother conversation, source library, live
+agent tree, and evidence. The source library lists documents from every dossier owned
+by the signed-in principal. It offers stored passages, a document-specific conversation,
+and a PDF preview/download when the original upload is still on this server. The
+original cannot be reconstructed from OCR text if it was imported elsewhere. A case
+can be deleted from the case rail after an explicit confirmation; its documents,
+research state and conversations are removed, while copies in other cases survive.
 After a file has been read, **Deep analysis** walks every stored section, checks each
 quoted detail against that section, and writes a resumable `document-N-analysis.md`
 beside the dossier ledger. It describes topics, events, people, concepts, links between
@@ -236,9 +243,12 @@ four short passages by book ID. It sees a small catalogue in each turn, not the
 entire book. Text and page-specific quotes remain necessary for evidence;
 model-generated summaries are only navigation hints.
 
-The generated index is `data/asc-ledgers/<principal-id>/library.md` when the
-database is `data/asc.db`. It updates after PDF import and deep analysis, and
-is rebuilt on a library read. The SQLite database remains authoritative; keep
+The generated book index is `data/asc-ledgers/<principal-id>/library.md` and the
+all-document index is `data/asc-ledgers/<principal-id>/sources.md` when the database
+is `data/asc.db`. Both update after import, OCR and deep analysis, and rebuild at
+web startup. The source index can also be downloaded from the library page. The
+mother can discover and retrieve passages across its owner's dossiers, with each
+passage labelled by dossier and document ID. The SQLite database remains authoritative; keep
 it when migrating servers. Check this path for another database name with
 `node scripts/check-library.js` (free, no model calls).
 

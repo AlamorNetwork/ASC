@@ -721,6 +721,64 @@ export const dossierDocuments = (principalId, dossierId) =>
   db.prepare(`SELECT * FROM documents WHERE principal_id = ? AND dossier_id = ? ORDER BY id`)
     .all(principalId, dossierId);
 
+/** Every stored document this principal owns, with its real dossier and analysis. */
+export const sourceInventory = (principalId) => db.prepare(`
+  SELECT d.id,d.dossier_id,d.filename,d.kind,d.pages,d.read_pages,d.char_count,
+         o.topic AS dossier_topic,a.result_json AS analysis_json,
+         (SELECT c.text FROM chunks c WHERE c.principal_id=d.principal_id
+          AND c.document_id=d.id ORDER BY c.seq LIMIT 1) AS opening_text
+  FROM documents d JOIN dossiers o ON o.id=d.dossier_id AND o.principal_id=d.principal_id
+  LEFT JOIN document_analysis_synthesis a ON a.principal_id=d.principal_id AND a.document_id=d.id
+  WHERE d.principal_id=? ORDER BY d.id DESC
+`).all(principalId);
+
+/** Remove one owner's dossier and its dependent rows as a single SQLite transaction. */
+export function deleteDossier(principalId, dossierId) {
+  const id = Number(dossierId);
+  if (!Number.isSafeInteger(id) || id < 1) return null;
+  const dossier = getDossier(principalId, id);
+  if (!dossier) return null;
+  const documentIds = dossierDocuments(principalId, id).map((doc) => doc.id);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const remove = (table, column = 'dossier_id') => db.prepare(
+      `DELETE FROM ${table} WHERE principal_id=? AND ${column}=?`
+    ).run(principalId, id);
+    remove('research_leads');
+    db.prepare(`UPDATE research_nodes SET parent_id=NULL WHERE principal_id=? AND dossier_id=?`)
+      .run(principalId, id);
+    remove('research_nodes');
+    remove('document_page_reads');
+    remove('source_library');
+    remove('site_crawls');
+    for (const docId of documentIds) {
+      for (const table of ['document_analysis_sections', 'document_analysis_synthesis',
+        'document_analysis_batches']) db.prepare(
+        `DELETE FROM ${table} WHERE principal_id=? AND document_id=?`
+      ).run(principalId, docId);
+    }
+    remove('chunks');
+    remove('documents');
+    remove('claims');
+    remove('episodes');
+    db.prepare(`DELETE FROM intention_runs WHERE principal_id=? AND intention_id IN
+      (SELECT id FROM intentions WHERE principal_id=? AND dossier_id=?)`)
+      .run(principalId, principalId, id);
+    remove('intentions');
+    remove('investigations');
+    remove('messages');
+    remove('predictions');
+    db.prepare(`DELETE FROM dossier_links WHERE principal_id=? AND (a_id=? OR b_id=?)`)
+      .run(principalId, id, id);
+    remove('dossiers', 'id');
+    if (dossier.capture_id) db.prepare(`DELETE FROM captures WHERE principal_id=? AND id=?
+      AND NOT EXISTS (SELECT 1 FROM dossiers WHERE capture_id=?)`)
+      .run(principalId, dossier.capture_id, dossier.capture_id);
+    db.exec('COMMIT');
+    return { dossier, documentIds };
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
+}
+
 export const documentsInOtherDossiers = (principalId, dossierId, limit = 8) => db.prepare(`
   SELECT d.id,d.filename,d.dossier_id AS dossierId,d.pages,d.read_pages AS readPages,
          o.topic AS dossierTopic
@@ -1058,6 +1116,19 @@ export function searchChunks(principalId, dossierId, query, limit = 20) {
   }
 }
 
+/** Mother-agent retrieval across this principal's entire library. */
+export function searchOwnerChunks(principalId, query, limit = 8) {
+  const terms = String(query).replace(/["'()*:^-]/g, ' ').split(/\s+/)
+    .filter((word) => word.length > 1).slice(0, 12);
+  if (!terms.length) return [];
+  try {
+    return db.prepare(`SELECT c.id,c.dossier_id,c.document_id,c.seq,c.page,c.text,f.rank
+      FROM chunks_fts f JOIN chunks c ON c.id=f.rowid
+      WHERE f.chunks_fts MATCH ? AND c.principal_id=? ORDER BY f.rank LIMIT ?`)
+      .all(terms.map((word) => `"${word}"`).join(' OR '), principalId, limit);
+  } catch { return []; }
+}
+
 export const documentText = (principalId, documentId) =>
   db.prepare(`SELECT text FROM chunks WHERE principal_id = ? AND document_id = ? ORDER BY seq`)
     .all(principalId, documentId).map((r) => r.text).join('\n');
@@ -1065,6 +1136,23 @@ export const documentText = (principalId, documentId) =>
 export const documentChunks = (principalId, documentId) =>
   db.prepare(`SELECT id, seq, page, text FROM chunks WHERE principal_id = ? AND document_id = ? ORDER BY seq`)
     .all(principalId, documentId);
+
+export function documentPassages(principalId, documentId, query = '', limit = 6, { fallback = true } = {}) {
+  const doc = getDocument(principalId, documentId);
+  if (!doc) return null;
+  const terms = String(query).replace(/["'()*:^-]/g, ' ').split(/\s+/)
+    .filter((word) => word.length > 1).slice(0, 10);
+  if (terms.length) try {
+    const hits = db.prepare(`SELECT c.id,c.seq,c.page,c.text FROM chunks_fts f
+      JOIN chunks c ON c.id=f.rowid WHERE f.chunks_fts MATCH ?
+      AND c.principal_id=? AND c.document_id=? ORDER BY f.rank LIMIT ?`)
+      .all(terms.map((word) => `"${word}"`).join(' OR '), principalId, documentId, limit);
+    if (hits.length) return hits;
+  } catch { /* fall back to first stored passages */ }
+  if (terms.length && !fallback) return [];
+  return db.prepare(`SELECT id,seq,page,text FROM chunks WHERE principal_id=? AND document_id=?
+    ORDER BY seq LIMIT ?`).all(principalId, documentId, limit);
+}
 
 export const analysisSections = (principalId, documentId) =>
   db.prepare(`SELECT * FROM document_analysis_sections WHERE principal_id = ? AND document_id = ? ORDER BY section_no`)

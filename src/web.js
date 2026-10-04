@@ -21,6 +21,7 @@ import { runResearchTeam } from './research-team.js';
 import { collectSite } from './site-library.js';
 import { consultSources } from './source-consult.js';
 import { pendingUploadsFor } from './upload-state.js';
+import { refreshLibraryIndex, renderSourceIndex } from './book-library.js';
 import * as cancel from './cancel.js';
 
 const publicDir = path.join(config.root, 'web', 'public');
@@ -144,6 +145,46 @@ async function uploaded(id, pid) {
       (meta.dossierId && !store.getDossier(pid, meta.dossierId)))
     throw new Error('فایل برای این کاربر پیدا نشد.');
   return { ...meta, file: files.data };
+}
+async function removeDossierFiles(pid, dossierId, documentIds) {
+  const names = await fsp.readdir(uploadDir).catch(() => []);
+  let failed = 0;
+  for (const name of names.filter((item) => /^[a-f0-9-]{36}\.json$/.test(item))) {
+    let meta;
+    try { meta = JSON.parse(await fsp.readFile(path.join(uploadDir, name), 'utf8')); }
+    catch { continue; }
+    if (meta.id !== name.slice(0, -5) || String(meta.principalId) !== String(pid) ||
+        Number(meta.dossierId) !== dossierId) continue;
+    const paths = uploadPaths(meta.id);
+    let uploadFailed = false;
+    for (const file of [paths.data, path.join(uploadDir, `${meta.id}.ocr.txt`)])
+      try { await fsp.rm(file, { force: true }); } catch { failed++; uploadFailed = true; }
+    if (!uploadFailed) try { await fsp.rm(paths.meta, { force: true }); }
+    catch { failed++; }
+  }
+  const stem = path.basename(config.dbPath, path.extname(config.dbPath));
+  const dir = path.join(path.dirname(config.dbPath), `${stem}-ledgers`,
+    String(pid).replace(/[^a-zA-Z0-9_-]/g, '_'));
+  try { await fsp.rm(path.join(dir, `dossier-${dossierId}.md`), { force: true }); }
+  catch { failed++; }
+  for (const id of documentIds)
+    try { await fsp.rm(path.join(dir, `document-${id}-analysis.md`), { force: true }); }
+    catch { failed++; }
+  return failed;
+}
+async function originalUploads(pid) {
+  const originals = new Map();
+  const names = await fsp.readdir(uploadDir).catch(() => []);
+  for (const name of names.filter((item) => /^[a-f0-9-]{36}\.json$/.test(item))) {
+    try {
+      const meta = JSON.parse(await fsp.readFile(path.join(uploadDir, name), 'utf8'));
+      if (meta.id !== name.slice(0, -5) || String(meta.principalId) !== String(pid) || !meta.documentId ||
+          !store.getDocument(pid, Number(meta.documentId)) ||
+          !fs.existsSync(uploadPaths(meta.id).data)) continue;
+      originals.set(Number(meta.documentId), meta.id);
+    } catch { /* one broken metadata file cannot hide other originals */ }
+  }
+  return originals;
 }
 async function bindUpload(meta, dossierId, documentId = null) {
   const updated = { ...meta, dossierId, newDossier: false,
@@ -354,6 +395,55 @@ async function route(req, res, runTeam) {
   }
   if (url.pathname === '/api/state' && req.method === 'GET')
     return response(res, 200, state(pid, url.searchParams.get('dossierId'), url.searchParams.get('fresh') === '1'));
+  if (url.pathname === '/api/library' && req.method === 'GET') {
+    const originals = await originalUploads(pid);
+    return response(res, 200, { documents: store.sourceInventory(pid).map((doc) => {
+      let analysis = null;
+      try { analysis = JSON.parse(doc.analysis_json || 'null'); } catch { /* unfinished */ }
+      return { id: doc.id, dossierId: doc.dossier_id, dossierTopic: doc.dossier_topic,
+        title: doc.filename, kind: doc.kind, pages: doc.pages, readPages: doc.read_pages,
+        charCount: doc.char_count, overview: String(analysis?.overview || '').slice(0, 600),
+        hasOriginal: originals.has(doc.id) };
+    }) });
+  }
+  if (url.pathname === '/api/library-index' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="asc-sources.md"', 'Cache-Control': 'no-store' });
+    return res.end(renderSourceIndex(pid));
+  }
+  if (url.pathname === '/api/source-passages' && req.method === 'GET') {
+    const id = Number(url.searchParams.get('documentId'));
+    const doc = store.getDocument(pid, id);
+    if (!doc) return error(res, 404, 'سند پیدا نشد.');
+    const query = String(url.searchParams.get('query') || '').trim();
+    const passages = store.documentPassages(pid, id, query, 8, { fallback: !query });
+    return response(res, 200, { documentId: id, passages });
+  }
+  if (url.pathname === '/api/source-file' && req.method === 'GET') {
+    const id = Number(url.searchParams.get('documentId'));
+    const doc = store.getDocument(pid, id);
+    if (!doc) return error(res, 404, 'سند پیدا نشد.');
+    const uploadId = (await originalUploads(pid)).get(id);
+    if (!uploadId) return error(res, 404, 'فایل اصلی روی این سرور موجود نیست؛ متن خوانده‌شده در پرونده باقی است.');
+    const imageMime = /^image\/(?:png|jpeg|webp)$/.test(doc.mime || '') ? doc.mime : 'image/png';
+    const filename = `asc-source-${id}.${doc.kind === 'pdf' ? 'pdf' : doc.kind === 'image'
+      ? ({ 'image/jpeg': 'jpg', 'image/webp': 'webp' }[imageMime] || 'png') : 'txt'}`;
+    const stream = fs.createReadStream(uploadPaths(uploadId).data);
+    stream.on('error', (err) => {
+      console.warn('[web] source file stream:', err.message);
+      if (!res.headersSent) error(res, 404, 'فایل اصلی دیگر روی سرور پیدا نشد.');
+      else res.destroy(err);
+    });
+    stream.on('open', () => {
+      res.writeHead(200, { 'Content-Type': doc.kind === 'pdf' ? 'application/pdf'
+        : doc.kind === 'image' ? imageMime : 'text/plain; charset=utf-8',
+        'Content-Disposition': `${url.searchParams.get('download') === '1' ? 'attachment' : 'inline'}; filename="${filename}"`,
+        'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'SAMEORIGIN', 'Content-Security-Policy': "frame-ancestors 'self'" });
+      stream.pipe(res);
+    });
+    return;
+  }
   if (url.pathname === '/api/research-progress' && req.method === 'GET') {
     const dossier = url.searchParams.get('dossierId')
       ? requireDossier(pid, url.searchParams.get('dossierId'))
@@ -431,6 +521,22 @@ async function route(req, res, runTeam) {
     settings.setActiveDossier(pid, dossier.id);
     return response(res, 200, { dossierId: dossier.id });
   }
+  if (url.pathname === '/api/delete-dossier' && req.method === 'POST') {
+    const { dossierId, expectedTopic } = await readJson(req);
+    const dossier = requireDossier(pid, dossierId);
+    if (running) return error(res, 409, 'یک کار در حال اجراست؛ پس از پایان یا توقف آن پرونده را حذف کن.');
+    if (String(expectedTopic) !== dossier.topic)
+      return error(res, 409, 'نام پرونده عوض شده است؛ صفحه را تازه کن و دوباره بررسی کن.');
+    const removed = store.deleteDossier(pid, dossier.id);
+    if (settings.activeDossier(pid) === dossier.id) settings.setActiveDossier(pid, null);
+    let cleanupWarning = false;
+    try { cleanupWarning = (await removeDossierFiles(pid, dossier.id, removed.documentIds)) > 0; }
+    catch (err) { cleanupWarning = true; console.warn('[web] deleted dossier, file cleanup pending:', err); }
+    try { refreshLibraryIndex(pid); }
+    catch (err) { cleanupWarning = true; console.warn('[web] deleted dossier, index refresh failed:', err); }
+    return response(res, 200, { deletedId: dossier.id, documents: removed.documentIds.length,
+      cleanupWarning });
+  }
   if (url.pathname === '/api/upload' && req.method === 'POST')
     return upload(req, res, url.searchParams.get('name'), pid,
       url.searchParams.get('dossierId'), url.searchParams.get('newDossier') === '1');
@@ -461,9 +567,13 @@ async function route(req, res, runTeam) {
       throw err;
     }
     if (!message) throw new Error('پیام خالی است.');
-    const dossier = input.dossierId ? requireDossier(pid, input.dossierId) : null;
+    const focusedDoc = input.documentId ? store.getDocument(pid, Number(input.documentId)) : null;
+    if (input.documentId && !focusedDoc) throw new Error('سند انتخاب‌شده پیدا نشد.');
+    const dossier = focusedDoc ? requireDossier(pid, focusedDoc.dossier_id)
+      : input.dossierId ? requireDossier(pid, input.dossierId) : null;
     return response(res, 202, startJob('chat', (progress) => motherTurn({
       principalId: pid, dossierId: dossier?.id ?? null, userText: message,
+      focusDocumentId: focusedDoc?.id ?? null,
       onProgress: progress })));
   }
   if (url.pathname === '/api/research' && req.method === 'POST') {
@@ -565,6 +675,8 @@ export function createWebServer({ runTeam = runResearchTeam } = {}) {
 
 export function runWeb() {
   const pid = principal();
+  try { refreshLibraryIndex(pid); }
+  catch (err) { console.warn('[asc-web] source index refresh failed:', err); }
   store.pauseInterruptedResearchNodes();
   store.pauseInterruptedSiteCrawls();
   const activeKey = `web.deep.active_run.${pid}`;

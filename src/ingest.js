@@ -458,7 +458,7 @@ export async function ingestToDossier({
     for (const c of chunkText(extracted.text)) rows.push({ seq: seq++, page: null, text: c });
   }
   store.insertChunks(principalId, dossierId, documentId, rows);
-  if (kind === 'pdf') updateBookIndex(principalId);
+  updateBookIndex(principalId);
 
   let embedded = 0;
   if (rows.length && !localOnly) {

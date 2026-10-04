@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false, googleOcrReady = false;
 let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', leadSnapshot = '', monitorTimer = null, monitorNodes = [];
+let currentView = 'chat', latestState = null, libraryDocs = [], activeLibraryDoc = null, focusedSource = null;
 const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
@@ -47,9 +48,11 @@ function startAgentMonitor() {
 async function refresh() {
   const q = freshCase ? '?fresh=1' : selected ? `?dossierId=${selected}` : '';
   const data = await api(`/api/state${q}`);
+  latestState = data;
   selected = freshCase ? null : data.selected?.id ?? null;
   render(data);
   await loadUploads();
+  if (currentView === 'library') await loadLibrary();
   if (!activeJob) {
     const { job } = await api('/api/active-job');
     if (job) watch(job.id, ({ import:'خواندن سند', analysis:'تحلیل عمیق سند', deep:'کاوش عمیق',
@@ -66,12 +69,25 @@ function render(data) {
   $('stat-cases').textContent = fa(stats.dossiers);
   $('stat-verified').textContent = fa(stats.verified);
   $('stat-claims').textContent = fa(stats.claims);
-  $('case-list').innerHTML = dossiers.length ? dossiers.map((d) => `<button class="case-item ${selected === d.id ? 'active' : ''}" data-case="${Number(d.id)}" ${selected === d.id ? 'aria-current="true"' : ''}><span class="case-name">${esc(d.topic)}</span><small>#${fa(d.id)} · ${esc(d.state)}</small></button>`).join('') : '<p class="rail-empty">هنوز پرونده‌ای نیست. گفت‌وگو را آغاز کن.</p>';
+  $('case-list').innerHTML = dossiers.length ? dossiers.map((d) => `<div class="case-row"><button class="case-item ${selected === d.id ? 'active' : ''}" data-case="${Number(d.id)}" ${selected === d.id ? 'aria-current="true"' : ''}><span class="case-name">${esc(d.topic)}</span><small>#${fa(d.id)} · ${esc(d.state)}</small></button><button type="button" class="case-delete" data-delete-case="${Number(d.id)}" aria-label="حذف پرونده ${esc(d.topic)}" title="حذف پرونده">×</button></div>`).join('') : '<p class="rail-empty">هنوز پرونده‌ای نیست. گفت‌وگو را آغاز کن.</p>';
   for (const button of document.querySelectorAll('[data-case]')) button.onclick = async () => {
     try {
       const id = Number(button.dataset.case);
       await api('/api/select-dossier', { method:'POST', json:{ dossierId:id } });
-      selected = id; freshCase = false; closePanels(); await refresh(); $('prompt').focus();
+      selected = id; freshCase = false; focusedSource = null; $('source-focus').hidden = true;
+      switchView('chat'); await refresh(); $('prompt').focus();
+    } catch(e) { fail(e); }
+  };
+  for (const button of document.querySelectorAll('[data-delete-case]')) button.onclick = async () => {
+    const id = Number(button.dataset.deleteCase);
+    const dossier = dossiers.find((item) => item.id === id);
+    if (!dossier) return;
+    if (!confirm(`پروندهٔ «${dossier.topic}» (#${fa(id)}) و گفت‌وگوها، منابع و پیگیری‌های مخصوص آن برای همیشه حذف شوند؟\n\nاگر همین فایل در پروندهٔ دیگری هم ثبت شده، نسخهٔ آن پرونده می‌ماند.`)) return;
+    try {
+      const result = await api('/api/delete-dossier', { method:'POST', json:{ dossierId:id, expectedTopic:dossier.topic } });
+      if (selected === id) { selected = null; freshCase = false; }
+      await refresh();
+      toast(result.cleanupWarning ? 'پرونده از پایگاه داده حذف شد؛ پاک‌سازی بعضی فایل‌ها کامل نشد. گزارش سرور را بررسی کن.' : 'پرونده حذف شد.');
     } catch(e) { fail(e); }
   };
   $('breadcrumb').textContent = selected ? data.selected?.topic || 'پرونده' : 'گفت‌وگوی تازه';
@@ -95,6 +111,91 @@ function render(data) {
   renderResearch(data.researchNodes);
   renderSources(data.sources, data.pendingUploads, data.otherDossierDocuments);
   renderInvestigation();
+  renderStorm(data.researchNodes);
+  renderEvidenceBoard(data.claims);
+}
+
+function switchView(view) {
+  if (!['chat', 'library', 'agents', 'evidence'].includes(view)) return;
+  currentView = view;
+  document.querySelector('.workspace').hidden = view !== 'chat';
+  for (const name of ['library', 'agents', 'evidence']) $(`${name}-page`).hidden = view !== name;
+  for (const button of document.querySelectorAll('[data-view]')) {
+    const active = button.dataset.view === view;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+  }
+  $('mobile-dossier').hidden = view !== 'chat';
+  closePanels();
+  if (view === 'library') loadLibrary().catch(fail);
+  if (view === 'agents') renderStorm(latestState?.researchNodes);
+  if (view === 'evidence') renderEvidenceBoard(latestState?.claims);
+}
+function renderStorm(raw) {
+  const nodes = Array.isArray(raw) ? raw : [];
+  const roots = nodes.filter((item) => !item.parent_id);
+  const running = nodes.filter((item) => item.status === 'running').length;
+  const pending = nodes.filter((item) => item.status === 'pending').length;
+  $('storm-summary').textContent = selected
+    ? `${fa(roots.length)} نیت اصلی · ${fa(nodes.length - roots.length)} زیرنیت · ${fa(running)} در حال اجرا · ${fa(pending)} در صف`
+    : 'برای دیدن شاخه‌ها، از فهرست پرونده‌ها یکی را انتخاب کن.';
+  const statuses = { running:'در حال کار', pending:'در صف', paused:'مکث', done:'این گام تکمیل', failed:'نیاز به بررسی' };
+  const branch = (item, depth = 0) => `<article class="storm-node" data-status="${esc(item.status)}" style="--depth:${Math.min(depth, 6)}"><div class="storm-node-top"><span class="storm-bolt" aria-hidden="true">ϟ</span><strong>#${fa(item.id)} · ${esc(item.title)}</strong><span class="storm-status">${esc(statuses[item.status] || item.status)}</span></div><p>${esc(item.progress_stage || (item.status === 'pending' ? 'منتظر شروع عامل' : 'گام فعلی ثبت نشده است'))}</p>${item.open_question ? `<small>پرسش باز: ${esc(item.open_question)}</small>` : ''}</article>${nodes.filter((child) => child.parent_id === item.id).map((child) => branch(child, depth + 1)).join('')}`;
+  $('storm-tree').dataset.weather = running ? 'active' : 'still';
+  $('storm-tree').innerHTML = roots.length ? `<div class="storm-sky" aria-hidden="true"><div class="storm-cloud"><span>ϟ</span><strong>عامل مادر</strong><small>${running ? `${fa(running)} عامل در حال اجرا` : 'ناظر شاخه‌های پژوهش'}</small></div></div><div class="storm-forest">${roots.map((root) => `<div class="storm-root">${branch(root)}</div>`).join('')}</div>`
+    : '<div class="storm-empty">هنوز شاخه‌ای برای این پرونده ساخته نشده است. از عامل مادر بخواه موضوع را بررسی کند.</div>';
+}
+function renderEvidenceBoard(raw) {
+  const claims = Array.isArray(raw) ? [...raw].reverse() : [];
+  $('evidence-board').innerHTML = claims.length ? claims.map((item) => `<article class="evidence-card" data-status="${esc(item.status)}"><div class="evidence-card-head"><span>${item.status === 'verified' ? 'عبارت و پشتیبانی بررسی شد' : item.status === 'disputed' ? 'مورد اختلاف' : 'نیازمند بررسی'}</span><small>#${fa(item.id)}</small></div><h3>${esc(item.text)}</h3>${item.quote ? `<blockquote dir="auto">${esc(item.quote)}</blockquote>` : '<p class="muted">عبارت شاهد ثبت نشده است.</p>'}<div class="evidence-card-foot">${esc(item.source_title || item.source_url || 'منبع ثبت نشده')} · ${esc(item.verify_reason || item.verify_method || '')}</div></article>`).join('')
+    : '<div class="storm-empty">برای این پرونده هنوز ادعایی ثبت نشده است.</div>';
+}
+async function loadLibrary() {
+  const data = await api('/api/library');
+  libraryDocs = Array.isArray(data.documents) ? data.documents : [];
+  renderLibraryList();
+  if (activeLibraryDoc) {
+    const stillHere = libraryDocs.find((doc) => doc.id === activeLibraryDoc);
+    if (stillHere) await showLibraryDocument(stillHere.id);
+    else { activeLibraryDoc = null; $('library-detail').innerHTML = '<p class="muted">برای دیدن جزئیات، یک منبع را انتخاب کن.</p>'; }
+  }
+}
+function renderLibraryList() {
+  const query = $('library-search').value.trim().toLocaleLowerCase('fa');
+  const matches = libraryDocs.filter((doc) =>
+    `${doc.title} ${doc.dossierTopic} ${doc.overview}`.toLocaleLowerCase('fa').includes(query));
+  $('library-count').textContent = `${fa(matches.length)} از ${fa(libraryDocs.length)} سند`;
+  $('library-list').innerHTML = matches.length ? matches.map((doc) => `<button type="button" class="library-item ${activeLibraryDoc === doc.id ? 'active' : ''}" data-library-doc="${Number(doc.id)}"><span class="library-kind">${doc.kind === 'pdf' ? 'PDF' : doc.kind === 'image' ? 'تصویر' : 'متن'}</span><strong>${esc(doc.title)}</strong><small>سند #${fa(doc.id)} · پرونده #${fa(doc.dossierId)} · ${esc(doc.dossierTopic)}</small><span class="library-coverage">${doc.pages ? `${fa(doc.readPages ?? 0)} از ${fa(doc.pages)} صفحه` : `${fa(doc.charCount)} نویسه`} · ${doc.hasOriginal ? 'فایل اصلی موجود' : 'متن ذخیره‌شده'}</span></button>`).join('') : '<p class="muted">منبعی با این عبارت پیدا نشد.</p>';
+  for (const button of $('library-list').querySelectorAll('[data-library-doc]'))
+    button.onclick = () => showLibraryDocument(Number(button.dataset.libraryDoc)).catch(fail);
+}
+async function showLibraryDocument(id, query = '') {
+  const doc = libraryDocs.find((item) => item.id === id);
+  if (!doc) return;
+  activeLibraryDoc = id;
+  renderLibraryList();
+  const fileUrl = `/api/source-file?documentId=${id}`;
+  const preview = doc.hasOriginal && doc.kind === 'pdf'
+    ? `<iframe class="pdf-preview" title="نمایش PDF ${esc(doc.title)}" src="${fileUrl}"></iframe>`
+    : doc.hasOriginal && doc.kind === 'image'
+      ? `<img class="image-preview" alt="تصویر ${esc(doc.title)}" src="${fileUrl}">`
+      : '<p class="source-file-note">فایل اصلی در این سرور موجود نیست؛ متن خوانده‌شده و گذرگاه‌ها در پایگاه داده حفظ شده‌اند.</p>';
+  $('library-detail').innerHTML = `<div class="source-detail-head"><div><span class="eyebrow">SOURCE #${id}</span><h3>${esc(doc.title)}</h3><p>پرونده #${fa(doc.dossierId)} · ${esc(doc.dossierTopic)}${doc.pages ? ` · ${fa(doc.readPages ?? 0)}/${fa(doc.pages)} صفحه` : ''}</p></div><div class="source-detail-actions">${doc.hasOriginal ? `<a class="small-action" href="${fileUrl}&download=1">دانلود اصل فایل</a>` : ''}<button type="button" id="discuss-source" class="small-action">گفت‌وگو دربارهٔ سند ↗</button></div></div><div class="source-overview"><strong>دربارهٔ سند</strong><p>${esc(doc.overview || 'شرح تحلیلی هنوز ساخته نشده است. گذرگاه‌های خوانده‌شده را پایین ببین.')}</p></div>${preview}<form id="passage-search-form" class="passage-search"><label for="passage-query">جست‌وجو در متن همین سند</label><div><input id="passage-query" type="search" value="${esc(query)}" placeholder="عبارت یا موضوع…"><button class="small-action" type="submit">یافتن</button></div></form><div id="resource-passages" class="resource-passages"></div>`;
+  $('discuss-source').onclick = async () => { try {
+    await api('/api/select-dossier', { method:'POST', json:{ dossierId:doc.dossierId } });
+    selected = doc.dossierId; freshCase = false; focusedSource = doc;
+    $('source-focus-title').textContent = `گفت‌وگو دربارهٔ سند #${fa(doc.id)} · ${doc.title}`;
+    $('source-focus').hidden = false;
+    switchView('chat'); await refresh(); $('prompt').focus();
+  } catch(err) { fail(err); } };
+  $('passage-search-form').onsubmit = (event) => { event.preventDefault(); loadPassages(id, $('passage-query').value).catch(fail); };
+  await loadPassages(id, query);
+}
+async function loadPassages(id, query) {
+  const data = await api(`/api/source-passages?documentId=${id}&query=${encodeURIComponent(query.trim())}`);
+  if (activeLibraryDoc !== id) return;
+  const passages = Array.isArray(data.passages) ? data.passages : [];
+  $('resource-passages').innerHTML = passages.length ? passages.map((part) => `<article class="passage-card"><small>${part.page ? `صفحه ${fa(part.page)}` : `گذرگاه ${fa(part.seq + 1)}`}</small><p>${esc(part.text)}</p></article>`).join('') : `<p class="muted">${query.trim() ? 'برای این عبارت، گذرگاه منطبق در متن ذخیره‌شده پیدا نشد.' : 'متن قابل خواندن برای این سند ذخیره نشده است.'}</p>`;
 }
 function renderAgentMonitor(rawNodes) {
   const box = $('agent-monitor');
@@ -445,7 +546,10 @@ $('login-form').onsubmit = async (e) => { e.preventDefault(); $('login-error').t
   catch(err){ $('login-error').textContent = err.message; } };
 $('logout').onclick = async () => { await api('/api/logout', { method:'POST' }).catch(() => {}); csrf=''; displayAuth(false); };
 $('refresh').onclick = () => refresh().catch(fail);
-$('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; document.querySelector('.conversation').classList.remove('has-messages'); $('breadcrumb').textContent='گفت‌وگوی تازه'; closePanels(); activateInspectorTab('live'); refresh().then(() => $('prompt').focus()).catch(fail); };
+$('new-case').onclick = () => { selected=null; freshCase=true; focusedSource=null; $('source-focus').hidden=true; $('messages').innerHTML=''; document.querySelector('.conversation').classList.remove('has-messages'); $('breadcrumb').textContent='گفت‌وگوی تازه'; switchView('chat'); activateInspectorTab('live'); refresh().then(() => $('prompt').focus()).catch(fail); };
+for (const button of document.querySelectorAll('[data-view]')) button.onclick = () => switchView(button.dataset.view);
+$('library-search').oninput = renderLibraryList;
+$('clear-source-focus').onclick = () => { focusedSource = null; $('source-focus').hidden = true; $('prompt').focus(); };
 function activateInspectorTab(name, focus = false) {
   for (const tab of document.querySelectorAll('[data-inspector-tab]')) {
     const active = tab.dataset.inspectorTab === name;
@@ -512,7 +616,8 @@ $('compose-form').onsubmit = async (e) => { e.preventDefault(); if (busy) return
   const message=$('prompt').value.trim(); if (!message) return;
   const requestMode = mode;
   if (requestMode === 'deep') return startDeep();
-  try { setBusy(true); const r=await api(`/api/${requestMode}`, { method:'POST', json:{ message, question:message, dossierId:selected } });
+  try { setBusy(true); const r=await api(`/api/${requestMode}`, { method:'POST', json:{ message, question:message, dossierId:selected,
+    documentId:focusedSource?.id ?? null } });
     $('prompt').value=''; $('messages').querySelectorAll('.question-box').forEach((box) => box.remove()); addMessage('user',message);
     if (r.id) watch(r.id,requestMode==='chat'?'عامل مادر در حال بررسی':'در حال تحقیق وب');
     else {

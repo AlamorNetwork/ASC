@@ -11,9 +11,10 @@ ASC is a Persian research workspace. Its main action is talking to the mother ag
 
 ## Product layout
 
-- Desktop: cases on the right, conversation in the center, dossier on the left. The conversation owns the main reading width.
-- The dossier has three views: live follow-up, sources/documents, and evidence. Switching views does not destroy or reload research state.
-- Mobile: conversation fills the viewport. Cases and dossier open as drawers over a backdrop; they never stack underneath the chat and create an empty page tail.
+- Four workspace pages: mother-agent conversation, an owner-wide source library, a research-agent tree, and evidence review. The conversation retains its dossier inspector for in-context work.
+- The source library lists documents across all of the owner's dossiers, labels each origin, provides stored passages and original PDF preview/download only when the original is actually on disk. Its Markdown export is generated from the database.
+- The agent tree uses a restrained storm/cloud treatment. Every status label comes from a saved research node; pending agents must never appear active.
+- Mobile: each page fills the viewport. Cases and the chat dossier open as drawers over a backdrop; they never stack underneath the page and create an empty tail.
 - Preserve every existing form, route, element ID, server action, and cost confirmation. The proposed full-access/cost-control UI remains deferred until its own design is agreed.
 
 ## Interaction contract

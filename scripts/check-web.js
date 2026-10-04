@@ -11,6 +11,7 @@ process.env.WEB_PRINCIPAL_ID = 'test-web-owner';
 const { createWebServer, visionPlan, deepCeiling } = await import('../src/web.js');
 const { motherSourceContext, motherTurn } = await import('../src/mother.js');
 const { ingestToDossier } = await import('../src/ingest.js');
+const library = await import('../src/book-library.js');
 const store = await import('../src/db.js');
 const settings = await import('../src/settings.js');
 const { db } = store;
@@ -50,12 +51,15 @@ try {
   if (!markup.includes('id="tab-chat"') || markup.includes('id="tab-research"') ||
       markup.includes('id="research-node-form"'))
     throw new Error('web chat still requires manual research routing');
+  for (const id of ['library-page', 'agents-page', 'evidence-page', 'library-search', 'storm-tree'])
+    if (!markup.includes(`id="${id}"`)) throw new Error(`workspace page ${id} is missing`);
   const script = fs.readFileSync(path.join(import.meta.dirname, '..', 'web', 'public', 'app.js'), 'utf8');
   if (!script.includes('data-resume-root') || !script.includes('/api/research-nodes/run'))
     throw new Error('approved queued agents have no direct resume control');
   const htmlIds = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
   const referencedIds = new Set([...script.matchAll(/\$\('([^']+)'\)/g)].map((match) => match[1]));
-  const absent = [...referencedIds].filter((id) => !htmlIds.has(id));
+  const dynamicIds = new Set([...script.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
+  const absent = [...referencedIds].filter((id) => !htmlIds.has(id) && !dynamicIds.has(id));
   if (absent.length) throw new Error(`web script refers to missing DOM ids: ${absent.join(', ')}`);
   const denied = await fetch(`${url}/api/state`);
   if (denied.status !== 401) throw new Error('unauthenticated state was exposed');
@@ -242,7 +246,118 @@ try {
   } finally { globalThis.fetch = savedFetch; }
   if (!localResult.documentId || !store.documentChunks('test-web-owner', localResult.documentId).length || networkCalls)
     throw new Error('local import did not create searchable text without a model call');
-  console.log('web check passed — pending uploads, mother inventory, local import, dossier recovery; 0 model calls');
+  const indexFile = path.join(temp, 'check-ledgers', 'test-web-owner', 'sources.md');
+  if (!fs.readFileSync(indexFile, 'utf8').includes('local.txt'))
+    throw new Error('new text import did not refresh the global source Markdown');
+  for (let i = 0; i < 20; i++) {
+    const doc = Number(store.insertDocument({ principalId: 'test-web-owner', dossierId: emptyCase,
+      filename: `new-source-${i}.txt`, kind: 'text', extraction: 'local' }));
+    store.insertChunks('test-web-owner', emptyCase, doc, [{ seq: 0, page: null,
+      text: i === 19 ? 'نشانگرمنحصربهفرد سند آخر برای جست‌وجوی سراسری مادر' : `متن منبع شماره ${i}` }]);
+  }
+  library.refreshLibraryIndex('test-web-owner');
+  const sourceMarkdown = fs.readFileSync(indexFile, 'utf8');
+  if (!sourceMarkdown.includes('new-source-0.txt') || !sourceMarkdown.includes('new-source-19.txt'))
+    throw new Error('global source Markdown omitted newly imported documents');
+  const allInventory = await motherTurn({ principalId: 'test-web-owner', dossierId,
+    userText: 'لیست همه فایل‌ها و منابعی که داریم را بده', ask: async () => {
+      throw new Error('source inventory must not call a model');
+    } });
+  if (!allInventory.text.includes('new-source-0.txt') || !allInventory.text.includes('new-source-19.txt') ||
+      !allInventory.text.includes(`پرونده #${emptyCase}`))
+    throw new Error('mother cannot see 20 new documents across dossiers');
+  const crossEvidence = motherSourceContext('test-web-owner', dossierId, 'نشانگرمنحصربهفرد');
+  if (!crossEvidence.excerpts.some((item) => item.dossierId === emptyCase &&
+      item.text.includes('نشانگرمنحصربهفرد')) ||
+      motherSourceContext('another-owner', otherDossierId, 'نشانگرمنحصربهفرد')?.excerpts.some((item) =>
+        item.text.includes('نشانگرمنحصربهفرد')))
+    throw new Error('mother cross-dossier retrieval is missing or crossed owner boundary');
+  const twinHash = 'f'.repeat(64);
+  const targetPdf = Number(store.insertDocument({ principalId: 'test-web-owner', dossierId,
+    filename: 'shared.pdf', kind: 'pdf', extraction: 'local', sha256: twinHash, pages: 1 }));
+  const survivorPdf = Number(store.insertDocument({ principalId: 'test-web-owner', dossierId: emptyCase,
+    filename: 'shared.pdf', kind: 'pdf', extraction: 'local', sha256: twinHash, pages: 1 }));
+  store.insertChunks('test-web-owner', dossierId, targetPdf,
+    [{ seq: 0, page: 1, text: 'ردپاک‌کردنویژه متن اختصاصی پرونده قابل حذف' }]);
+  store.insertChunks('test-web-owner', emptyCase, survivorPdf,
+    [{ seq: 0, page: 1, text: 'متن نسخه مشترک در پرونده دیگر' }]);
+  const libraryResponse = await fetch(`${url}/api/library`, { headers: { Cookie: cookie } });
+  const libraryData = await libraryResponse.json();
+  if (libraryResponse.status !== 200 || !libraryData.documents.some((doc) =>
+    doc.id === survivorPdf && doc.dossierId === emptyCase) ||
+    libraryData.documents.some((doc) => doc.dossierTopic === 'private'))
+    throw new Error('global library omitted owner documents or exposed another principal');
+  const passagesResponse = await fetch(`${url}/api/source-passages?documentId=${survivorPdf}`, {
+    headers: { Cookie: cookie } });
+  if (passagesResponse.status !== 200 || !(await passagesResponse.json()).passages[0]?.text.includes('نسخه مشترک'))
+    throw new Error('library cannot read the selected document');
+  const privatePassages = await fetch(`${url}/api/source-passages?documentId=${otherDossierId + 100000}`, {
+    headers: { Cookie: cookie } });
+  if (privatePassages.status !== 404) throw new Error('unknown source passages were exposed');
+  const originalId = '00000000-0000-4000-8000-000000000001';
+  const originalsDir = path.join(temp, 'web-uploads');
+  fs.writeFileSync(path.join(originalsDir, `${originalId}.json`), JSON.stringify({ id: originalId,
+    principalId: 'test-web-owner', dossierId: emptyCase, documentId: survivorPdf }));
+  fs.writeFileSync(path.join(originalsDir, `${originalId}.bin`), '%PDF-1.4 test original');
+  const original = await fetch(`${url}/api/source-file?documentId=${survivorPdf}`, { headers: { Cookie: cookie } });
+  if (original.status !== 200 || !original.headers.get('content-type')?.includes('application/pdf') ||
+      !(await original.text()).startsWith('%PDF-1.4'))
+    throw new Error('private PDF preview did not return the original bytes');
+  const downloaded = await fetch(`${url}/api/source-file?documentId=${survivorPdf}&download=1`, {
+    headers: { Cookie: cookie } });
+  if (!downloaded.headers.get('content-disposition')?.startsWith('attachment'))
+    throw new Error('PDF download was not marked as an attachment');
+  await downloaded.arrayBuffer();
+  const unauthedOriginal = await fetch(`${url}/api/source-file?documentId=${survivorPdf}`);
+  if (unauthedOriginal.status !== 401) throw new Error('original PDF was public');
+  const focus = motherSourceContext('test-web-owner', dossierId, 'متن', survivorPdf);
+  if (focus.focusedDocument?.id !== survivorPdf ||
+      focus.excerpts.some((item) => item.documentId !== survivorPdf))
+    throw new Error('dedicated source chat mixed another document into its focus');
+  const focusedAnswer = await motherTurn({ principalId: 'test-web-owner', dossierId: emptyCase,
+    focusDocumentId: survivorPdf, userText: 'این سند چه می‌گوید؟', ask: async ({ content }) =>
+      content.includes('passages')
+        ? { data: { answer: 'دربارهٔ نسخهٔ مشترک است', passage_id: 1,
+          quote: 'متن نسخه مشترک در پرونده دیگر' }, usage: {} }
+        : { data: { action: 'search_library', reply: '' }, usage: {} } });
+  if (!focusedAnswer.text.includes(`سند #${survivorPdf}`) ||
+      !focusedAnswer.text.includes('شاهد منطبق'))
+    throw new Error('focused chat ignored the selected copy of a book');
+  store.linkDossiers('test-web-owner', dossierId, emptyCase);
+  settings.setActiveDossier('test-web-owner', dossierId);
+  const wrongTopic = await fetch(`${url}/api/delete-dossier`, { method: 'POST', headers: chatHeaders,
+    body: JSON.stringify({ dossierId, expectedTopic: 'نام اشتباه' }) });
+  const foreignDelete = await fetch(`${url}/api/delete-dossier`, { method: 'POST', headers: chatHeaders,
+    body: JSON.stringify({ dossierId: otherDossierId, expectedTopic: 'پرونده جدا' }) });
+  const unauthDelete = await fetch(`${url}/api/delete-dossier`, { method: 'POST',
+    headers: { Origin: origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dossierId, expectedTopic: 'یک پرونده برای چند کتاب' }) });
+  if (wrongTopic.status !== 409 || foreignDelete.status === 200 || unauthDelete.status !== 401)
+    throw new Error('deletion accepted a stale name, another owner, or no session');
+  const deleted = await fetch(`${url}/api/delete-dossier`, { method: 'POST', headers: chatHeaders,
+    body: JSON.stringify({ dossierId, expectedTopic: 'یک پرونده برای چند کتاب' }) });
+  if (deleted.status !== 200) throw new Error(`dossier deletion failed: ${deleted.status} ${await deleted.text()}`);
+  if (store.getDossier('test-web-owner', dossierId) || store.getInvestigation('test-web-owner', runId) ||
+      store.getDocument('test-web-owner', targetPdf) ||
+      store.searchOwnerChunks('test-web-owner', 'ردپاک‌کردنویژه').length ||
+      !store.getDocument('test-web-owner', survivorPdf) ||
+      !library.searchBooks('test-web-owner', 'shared', 5).some((book) => book.copies.includes(survivorPdf)) ||
+      settings.activeDossier('test-web-owner') === dossierId ||
+      fs.readFileSync(indexFile, 'utf8').includes(`پرونده: #${dossierId} · یک پرونده برای چند کتاب`))
+    throw new Error('dossier deletion left stale data or erased a shared source');
+  const survivingOriginal = await fetch(`${url}/api/source-file?documentId=${survivorPdf}`, {
+    headers: { Cookie: cookie } });
+  if (survivingOriginal.status !== 200) throw new Error('deleting one dossier removed another dossier original');
+  await survivingOriginal.arrayBuffer();
+  const exportedIndex = await fetch(`${url}/api/library-index`, { headers: { Cookie: cookie } });
+  const exportedText = await exportedIndex.text();
+  if (exportedIndex.status !== 200 || !exportedText.includes('new-source-19.txt') ||
+      exportedText.includes(`پرونده: #${dossierId} · یک پرونده برای چند کتاب`))
+    throw new Error('downloadable source Markdown does not match the live database');
+  const afterDelete = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
+  if ((await afterDelete.json()).dossiers.some((item) => item.id === dossierId))
+    throw new Error('deleted dossier remains in web case list');
+  console.log('web check passed — four pages, global sources, private PDF, focused reading, safe deletion; 0 model calls');
 } finally {
   await new Promise((resolve) => server.close(resolve));
   db.close();
