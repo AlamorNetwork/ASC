@@ -2425,13 +2425,16 @@ await check('server search fallback returns readable leads without trusting snip
     if (name.includes('crossref.org')) return Response.json({ message: { items: [
       { URL: 'https://doi.org/10.1234/example', title: ['Mithraism and Rome'] },
     ] } });
+    if (name.includes('api.openalex.org')) return Response.json({ results: [] });
     throw new Error('unexpected search endpoint');
   };
   const { results, errors } = await searchWeb('Mithraism Rome', { fetcher: fakeFetch });
-  if (errors.length || results.length !== 2 || results[0].engine !== 'wikipedia' ||
-      results[1].engine !== 'crossref' || results.some((r) => r.engine === 'bing-rss'))
+  if (errors.length || results.length !== 2 ||
+      !results.some((r) => r.engine === 'wikipedia' && !r.metadataOnly) ||
+      !results.some((r) => r.engine === 'crossref' && r.metadataOnly) ||
+      results.some((r) => r.engine === 'bing-rss'))
     throw new Error(`unexpected fallback: ${JSON.stringify({ results, errors })}`);
-  return 'irrelevant RSS filtered; MediaWiki and Crossref leads retained';
+  return 'irrelevant RSS filtered; MediaWiki readable, Crossref metadata kept as a lead';
 });
 
 await check('no readable web page means no model-generated claims', async () => {

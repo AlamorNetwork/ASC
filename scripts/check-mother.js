@@ -294,7 +294,11 @@ try {
   if (freshRuns !== 2) throw new Error('named research root did not run');
   const quoted = await motherTurn({ principalId: pid, dossierId: freshDossier,
     userText: `بررسی نیت #${freshRoot}`,
-    team: async () => ({ summary: 'این سند اثبات می‌کند که همهٔ مهرابه‌ها روزمینی بودند.',
+    team: async () => ({ summary: 'مهرابهٔ خانهٔ دیانا در طبقهٔ همکف بود.',
+      rootAssessment: { status: 'supported_by_source',
+        claim: 'بیشتر مهرابه‌های اوستیا زیرزمینی نبودند.',
+        quote: 'Most Mithraea in Ostia were not underground sanctuaries.',
+        documentId: newDoc, page: 7 },
       reports: [{ question: 'سند اوستیا', report: { findings: [{
         documentId: newDoc, page: 7,
         quote: 'Most Mithraea in Ostia were not underground sanctuaries.' }] } }],
@@ -303,6 +307,7 @@ try {
   if (!quoted.text.includes('The Cult of Mithras in Ostia.pdf') ||
       !quoted.text.includes('صفحه 7') ||
       !quoted.text.includes('Most Mithraea in Ostia were not underground sanctuaries.') ||
+      !quoted.text.includes('پرسش اصلی: پاسخ با نقل‌قول منطبق') ||
       quoted.text.includes('هنوز شاهد یا مسیر تازه') ||
       !quoted.text.includes('جمع‌بندی مقدماتی'))
     throw new Error('mother hid the checked quote behind an overconfident summary and stale pause message');

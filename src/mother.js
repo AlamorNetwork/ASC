@@ -128,8 +128,13 @@ function recentContext(principalId, dossierId) {
     .map((m) => `${m.role === 'user' ? 'کاربر' : 'ASC'}: ${clean(m.text, 350)}`).join('\n');
   const dossier = dossierId ? store.getDossier(principalId, dossierId) : null;
   const roots = dossier ? store.dossierResearchNodes(principalId, dossierId)
-    .filter((n) => !n.parent_id).slice(-10).map((n) =>
-      `#${n.id} ${n.status}: ${clean(n.title, 120)}${n.open_question ? ` · باز: ${clean(n.open_question, 150)}` : ''}`) : [];
+    .filter((n) => !n.parent_id).slice(-10).map((n) => {
+      let answer = null;
+      try { answer = JSON.parse(n.result_json || '{}').rootAssessment; } catch { /* old run */ }
+      return `#${n.id} ${n.status}: ${clean(n.title, 120)}${answer?.claim
+        ? ` · پاسخ اصلی (${answer.status}): ${clean(answer.claim, 180)}` : ''}${n.open_question
+          ? ` · باز: ${clean(n.open_question, 150)}` : ''}`;
+    }) : [];
   return { dossier, history, roots };
 }
 
@@ -143,6 +148,8 @@ export function motherSourceContext(principalId, dossierId, question) {
   const sources = catalogue.slice(-10).map((s) => ({
     id: s.id, documentId: s.documentId, title: clean(s.title, 140), type: s.type, url: s.url,
     readPages: s.readPages, pages: s.pages, analysisStatus: s.analysisStatus,
+    provenance: s.provenance ? { authors: s.provenance.authors?.slice(0, 3),
+      year: s.provenance.year, doi: s.provenance.doi, venue: s.provenance.venue } : undefined,
     blankPageCount: s.blankPageCount, blankPages: s.blankPages,
     noOutputPageCount: s.noOutputPageCount, noOutputPages: s.noOutputPages,
     overview: clean(s.summary, 350),
@@ -440,7 +447,19 @@ export async function motherTurn({ principalId, dossierId = null, userText, onPr
       const key = `${source}|${finding.quote}`;
       return [key, `«${finding.quote}» — ${source}`];
     }))).values()].slice(-4);
+  const assessment = result.rootAssessment;
+  const assessmentSource = assessment?.documentId
+    ? store.getDocument(principalId, assessment.documentId)?.filename || `سند #${assessment.documentId}`
+    : assessment?.sourceUrl;
+  const answerToMain = assessment?.claim ? [
+    `پرسش اصلی: ${assessment.status === 'supported_by_source'
+      ? 'پاسخ با نقل‌قول منطبق و داوری معنایی مدل ثبت شد'
+      : 'پاسخ پیشنهادی؛ پشتیبانی معنایی هنوز تأیید نشده'}.`,
+    clean(assessment.claim, 500),
+    assessmentSource ? `شاهد: «${clean(assessment.quote, 600)}» — ${assessmentSource}${assessment.page ? `، صفحه ${assessment.page}` : ''}` : null,
+  ].filter(Boolean).join('\n') : null;
   const answer = [`نیت اصلی #${root.id}`,
+    answerToMain,
     result.summary ? `جمع‌بندی مقدماتی مدل: ${clean(result.summary, 1800)}` : 'گزارش عامل‌ها ذخیره شد.',
     checkedQuotes.length ? `عبارت‌های منطبق با متن منبع (تطبیق لفظی، نه تأیید مستقل تاریخی):\n${checkedQuotes.join('\n')}` : null,
     result.openQuestions?.length ? `پرسش باز: ${clean(result.openQuestions[0], 350)}` : null,

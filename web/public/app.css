@@ -189,6 +189,10 @@ a{color:var(--copper-strong)}
 .research-status[data-status=done],.research-status[data-status=completed]{border-color:#9fbbaa;background:#e4f1e9;color:#226848}
 .research-status[data-status=failed]{border-color:#deb0a8;background:#f9e8e4;color:#a1433f}
 .research-summary{color:var(--ink-soft)}
+.root-answer{margin:9px 0;padding:9px 11px;border-right:2px solid var(--copper);background:var(--paper-2);border-radius:4px}
+.root-answer[data-status=supported_by_source]{border-right-color:var(--green)}
+.root-answer strong{font-size:11px;color:var(--ink)}
+.root-answer small{line-height:1.8;overflow-wrap:anywhere}
 .research-node details,.source-list details{margin-top:8px}
 .research-node summary,.source-list summary{cursor:pointer;color:var(--copper-strong);font-weight:700;min-height:30px}
 .research-node a,.source-heading a{overflow-wrap:anywhere;text-decoration-thickness:1px;text-underline-offset:3px}

@@ -11,6 +11,21 @@ const { recordSpend } = await import('../src/llm.js');
 try {
   const pid = 'a';
   const dossierId = Number(store.insertDossier({ principalId: pid, topic: 'آزمون' }));
+  const scholarlyUrl = 'https://example.org/open-copy';
+  store.addScholarlyLead({ principalId: pid, dossierId, lead: {
+    engine: 'openalex', title: 'Open study', url: scholarlyUrl,
+    provenance: { doi: 'https://doi.org/10.1234/example', authors: ['Scholar A'], year: 2020 },
+  } });
+  const beforeRead = store.sourceCatalogue(pid, dossierId).find((s) => s.url === scholarlyUrl);
+  if (beforeRead?.analysisStatus !== 'candidate' || beforeRead.provenance?.authors[0] !== 'Scholar A')
+    throw new Error('scholarly discovery did not preserve bibliographic provenance as an unread lead');
+  store.saveCrawledPage({ principalId: pid, dossierId, url: scholarlyUrl,
+    title: 'Open study', text: 'A readable study. '.repeat(20), chunks: ['A readable study. '.repeat(20)] });
+  const afterRead = store.sourceCatalogue(pid, dossierId).find((s) => s.url === scholarlyUrl);
+  if (afterRead?.type !== 'site' || !afterRead.documentId ||
+      afterRead.sourceStatus !== 'collected' ||
+      afterRead.provenance?.doi !== 'https://doi.org/10.1234/example')
+    throw new Error('reading an open copy lost its metadata or did not attach source text');
   const root = store.createResearchNode({ principalId: pid, dossierId, title: 'چه رخ داد؟' });
   store.addSourceCandidate({ principalId: pid, dossierId,
     url: 'https://example.org/page', title: 'Suggested', why: 'Possible source' });
@@ -415,6 +430,53 @@ try {
   if (store.getResearchNode(pid, interrupted).status !== 'paused' ||
       !store.getResearchNode(pid, interrupted).progress_stage.includes('آمادهٔ ادامه'))
     throw new Error('restart lost the agent checkpoint');
+  const answerDossier = Number(store.insertDossier({ principalId: pid, topic: 'مهرابه‌ها' }));
+  const answerRoot = store.createResearchNode({ principalId: pid, dossierId: answerDossier,
+    title: 'آیا همهٔ مهرابه‌ها زیرزمینی بودند؟' });
+  store.createResearchNode({ principalId: pid, dossierId: answerDossier, parentId: answerRoot,
+    title: 'نمونهٔ خانهٔ دیانا', assignedRole: 'source-analyst' });
+  store.createResearchNode({ principalId: pid, dossierId: answerDossier, parentId: answerRoot,
+    title: 'علت معماری دورا', assignedRole: 'web-researcher' });
+  const quote = 'Two rooms in the ground floor were adapted for cult purposes.';
+  const answerDoc = Number(store.insertDocument({ principalId: pid, dossierId: answerDossier,
+    filename: 'ostia.pdf', kind: 'pdf', extraction: 'local', pages: 8 }));
+  const answerResult = await runResearchTeam({ principalId: pid, dossierId: answerDossier,
+    nodeId: answerRoot, search: async () => [{ id: 1, document_id: answerDoc, page: 7,
+      text: `${quote} The passage names the House of Diana.` }],
+    discover: async () => ({ evidence: [], leads: [] }),
+    ask: async ({ system }) => {
+      if (system.includes('You assess whether')) return { data: { verdicts: [{ id: 0,
+        verdict: 'supports', basis: 'ground floor', reason: 'نمونهٔ طبقهٔ همکف' }] } };
+      if (system.includes('هماهنگ‌کننده')) return { data: { summary: 'نمونه پیدا شد',
+        main_answer: { claim: 'مهرابهٔ خانهٔ دیانا در طبقهٔ همکف بود.', quote },
+        open_questions: ['علت معماری دورا چیست؟'], approved_leads: [], next_action: 'pause' } };
+      return { data: { summary: 'متن خوانده شد', findings: [{ passage_id: 1,
+        text: 'خانهٔ دیانا در طبقهٔ همکف بود.', quote }], open_questions: [] } };
+    } });
+  if (store.getResearchNode(pid, answerRoot).status !== 'paused' ||
+      answerResult.incomplete.length !== 1 ||
+      answerResult.rootAssessment?.status !== 'supported_by_source' ||
+      answerResult.rootAssessment.documentId !== answerDoc)
+    throw new Error('an open child obscured the sourced answer to the main question');
+  const pdfDossier = Number(store.insertDossier({ principalId: pid, topic: 'PDF وب' }));
+  const pdfRoot = store.createResearchNode({ principalId: pid, dossierId: pdfDossier,
+    title: 'شاهد در کدام صفحه است؟' });
+  store.createResearchNode({ principalId: pid, dossierId: pdfDossier, parentId: pdfRoot,
+    title: 'متن PDF', assignedRole: 'web-researcher' });
+  const pdfQuote = 'The second page names the House of Diana.';
+  const pdfText = `[PDF page 1]\n${'First page text. '.repeat(18)}\n[PDF page 2]\n${pdfQuote} ${'Second page text. '.repeat(18)}`;
+  const pdfUrl = 'https://example.org/study.pdf';
+  const pdfResult = await runResearchTeam({ principalId: pid, dossierId: pdfDossier,
+    nodeId: pdfRoot, discover: async () => ({ evidence: [{ id: 0, url: pdfUrl,
+      title: 'Study', via: 'pdf_text', text: pdfText, fullText: pdfText }] }),
+    ask: async ({ system }) => system.includes('هماهنگ‌کننده')
+      ? { data: { summary: 'صفحه پیدا شد', approved_leads: [] } }
+      : { data: { summary: 'شاهد', findings: [{ passage_id: 1, text: 'خانهٔ دیانا',
+        quote: pdfQuote }], open_questions: [] } } });
+  const pdfSource = store.sourceCatalogue(pid, pdfDossier).find((s) => s.url === pdfUrl);
+  if (pdfResult.reports[0]?.report.findings[0]?.page !== 2 || !pdfSource?.documentId ||
+      !store.documentChunks(pid, pdfSource.documentId).some((chunk) => chunk.page === 2))
+    throw new Error('downloaded PDF lost the page number of its quotation');
   console.log('research team check passed — parallel agents, mother-approved lead chain, bounded resume, isolation; 0 paid calls');
 } finally {
   store.db.close();

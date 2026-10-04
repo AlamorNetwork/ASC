@@ -62,11 +62,15 @@ plausible interpretation. A user-approved deep investigation seeds its next sear
 with these hypotheses and can look for independent web evidence within its budget;
 the frontier is saved before the first round for stop and resume.
 
-Web research searches from the server (Bing RSS best effort, MediaWiki search and
-Crossref metadata), opens candidate pages, and gives only fetched page excerpts to
+Web research searches from the server (Bing RSS best effort, OpenAlex open copies,
+MediaWiki search and Crossref metadata), opens candidate pages or text-layer PDFs,
+and gives only fetched excerpts to
 `MODEL_STRUCTURE`. Search snippets and DOI metadata are leads, not evidence. Claims
 are tied to a fetched source ID, rechecked against the page, then assessed for
-semantic support. Some sites block fetching or expose only an abstract; these stay
+semantic support. Scholarly metadata (DOI, author, year, venue) is saved as a lead,
+not evidence; it stays attached when ASC reads an open copy. Set `OPENALEX_API_KEY`
+in `.env` for a larger free daily request budget, then restart `asc` and `asc-web`.
+Some sites block fetching or expose only an abstract; these stay
 unresolved rather than becoming verified. `MODEL_RESEARCH` is retained for the
 legacy model comparison script; ordinary bot research does not need an `:online`
 model. Check outbound access without model charges with:

@@ -9,6 +9,7 @@ import { modelFor, budget } from './settings.js';
 import * as store from './db.js';
 import { config } from './config.js';
 import { openResearchPage } from './research-browser.js';
+import { chunkText } from './chunks.js';
 
 const GATHER_SYSTEM = `You research a topic and report claims with their sources.
 
@@ -118,16 +119,23 @@ export async function discoverEvidence(question, {
     const r = lane[i];
     if (r?.url && !seenUrls.has(r.url)) { seenUrls.add(r.url); leads.push(r); }
   }
-  progress('fetch', `${leads.length} سرنخ؛ در حال بازکردن حداکثر ۸ صفحه از مسیرهای مختلف…`);
-  const fetched = await Promise.allSettled(leads.slice(0, 8).map(async (lead) => ({
-    lead, page: await open(lead.url),
-  })));
+  const readable = leads.filter((lead) => !lead.metadataOnly);
+  progress('fetch', `${leads.length} سرنخ؛ در حال بازکردن حداکثر ۸ متن قابل‌دسترسی…`);
+  const fetched = await Promise.allSettled(readable.slice(0, 8).map(async (lead) => {
+    let page = await open(lead.url);
+    if ((!page.ok || !page.text || page.text.length < 250) && lead.alternateUrl) {
+      const alternate = await open(lead.alternateUrl);
+      if (alternate.ok && alternate.text?.length >= 250)
+        return { lead: { ...lead, url: lead.alternateUrl }, page: alternate };
+    }
+    return { lead, page };
+  }));
   const evidence = [];
   const unread = [];
   for (let i = 0; i < fetched.length; i++) {
     const result = fetched[i];
     if (result.status === 'rejected') {
-      unread.push(leads[i]);
+      unread.push(readable[i]);
       errors.push(result.reason?.message ?? 'fetch failed');
       continue;
     }
@@ -139,6 +147,7 @@ export async function discoverEvidence(question, {
     }
     evidence.push({ id: evidence.length, url: page.url ?? lead.url,
       title: lead.title, engine: lead.engine,
+      provenance: lead.provenance ?? null,
       text: excerpt(page.text, queries.join(' ')), fullText: page.text, via: page.via || 'direct' });
     if (evidence.length >= 5) break;
   }
@@ -153,12 +162,13 @@ export async function discoverEvidence(question, {
       }
       evidence.push({ id: evidence.length, url: page.url ?? lead.url,
         title: lead.title, engine: lead.engine,
+        provenance: lead.provenance ?? null,
         text: excerpt(page.text, queries.join(' ')), fullText: page.text,
         via: page.via || 'browser' });
     } catch (error) { errors.push(`${lead.url}: ${error.message}`); }
   }
   progress('fetch', `${evidence.length} صفحه خوانده شد${errors.length ? ` · ${errors.length} خطا/محدودیت` : ''}`);
-  return { evidence, errors, queries, usage };
+  return { evidence, leads: leads.slice(0, 16), errors, queries, usage };
 }
 
 /**
@@ -214,6 +224,20 @@ export async function runResearch({
     } else {
       const discovery = await discoverEvidence(question || topic,
         { ask: planner, search, open, onProgress, ledger: priorLedger });
+      for (const lead of (discovery.leads ?? []).filter((x) =>
+        ['openalex', 'crossref'].includes(x.engine)).slice(0, 8))
+        store.addScholarlyLead({ principalId, dossierId, lead });
+      for (const source of discovery.evidence.filter((x) => x.engine === 'openalex' && x.provenance))
+        store.addScholarlyLead({ principalId, dossierId, lead: source });
+      for (const source of discovery.evidence.filter((x) => x.fullText && x.url)) {
+        const chunks = source.via === 'pdf_text'
+          ? source.fullText.split(/\[PDF page (\d+)\]\n/g).flatMap((part, i, all) =>
+            i % 2 ? chunkText(all[i + 1] || '').map((text) => ({ page: Number(part), text })) : [])
+          : chunkText(source.fullText);
+        store.saveCrawledPage({ principalId, dossierId, url: source.url,
+          title: source.title, text: source.fullText, chunks,
+          ...(source.via === 'pdf_text' ? { mime: 'text/plain', extraction: 'web_pdf_text' } : {}) });
+      }
       spend(discovery.usage);
       sources = discovery.evidence;
       if (!sources.length || (budget() !== null && costUsd >= budget())) {

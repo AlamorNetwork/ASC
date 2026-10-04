@@ -9,7 +9,14 @@ for (const error of errors) console.log(`  search limitation: ${error}`);
 console.log(`${results.length} leads`);
 let readable = 0;
 for (const lead of results.slice(0, 4)) {
-  const page = await fetchSourceText(lead.url);
+  if (lead.metadataOnly) {
+    console.log(`  catalogue only ${lead.engine}: ${lead.title}`);
+    console.log(`    ${lead.url}`);
+    continue;
+  }
+  let page = await fetchSourceText(lead.url);
+  if ((!page.ok || page.text.length < 250) && lead.alternateUrl)
+    page = await fetchSourceText(lead.alternateUrl);
   if (page.ok && page.text.length >= 250) readable++;
   console.log(`  ${page.ok && page.text.length >= 250 ? 'read' : 'skip'} ${lead.engine}: ${lead.title}`);
   console.log(`    ${lead.url}`);

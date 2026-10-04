@@ -2,6 +2,7 @@
  * their pages before showing anything to a model. No extra API key is required.
  * Bing RSS is best-effort; MediaWiki's documented API is a fallback.
  */
+import { config } from './config.js';
 const HEADERS = { 'User-Agent': 'ASC-Research/1.0 (source discovery)',
   Accept: 'application/rss+xml,application/json;q=0.9,*/*;q=0.5' };
 
@@ -71,7 +72,37 @@ async function crossref(query, limit, fetcher) {
   return (data.message?.items ?? []).filter((r) => r.URL && r.title?.[0])
     .map((r) => ({ title: r.title[0], url: r.URL,
       snippet: String(r.abstract ?? '').replace(/<[^>]+>/g, ' ').slice(0, 350),
-      engine: 'crossref' }));
+      engine: 'crossref', metadataOnly: true,
+      provenance: { doi: r.DOI ?? null, kind: 'bibliographic_record' } }));
+}
+
+/** OpenAlex points us to the host's open copy; its catalogue is not article text. */
+async function openalex(query, limit, fetcher) {
+  const url = new URL('https://api.openalex.org/works');
+  url.search = new URLSearchParams({ search: query, per_page: String(Math.min(limit, 10)),
+    select: 'id,title,doi,publication_year,authorships,primary_location,best_oa_location,open_access,cited_by_count,type' }).toString();
+  const key = config.openalexApiKey.trim();
+  const headers = key ? { ...HEADERS, Authorization: `Bearer ${key}` } : HEADERS;
+  const res = await fetcher(url, { headers, signal: AbortSignal.timeout(12000) });
+  if (!res.ok) throw new Error(`OpenAlex HTTP ${res.status}`);
+  const data = await res.json();
+  return (data.results ?? []).filter((r) => r.title && r.id).map((r) => {
+    const copy = r.best_oa_location;
+    const fullText = copy?.pdf_url || copy?.landing_page_url || null;
+    const alternateUrl = copy?.pdf_url && copy?.landing_page_url &&
+      copy.pdf_url !== copy.landing_page_url ? copy.landing_page_url : null;
+    const record = r.doi || r.id;
+    const catalogueLanding = !copy?.pdf_url && /^https?:\/\/(?:dx\.)?doi\.org\//i.test(fullText || '');
+    return { title: r.title, url: fullText || record,
+      alternateUrl,
+      snippet: `${r.primary_location?.source?.display_name || ''} ${r.publication_year || ''}`.trim(),
+      engine: 'openalex', metadataOnly: !fullText || catalogueLanding,
+      provenance: { workId: r.id, doi: r.doi ?? null, year: r.publication_year ?? null,
+        authors: (r.authorships ?? []).slice(0, 8).map((a) => a.author?.display_name).filter(Boolean),
+        venue: r.primary_location?.source?.display_name ?? null,
+        citations: r.cited_by_count ?? null, openAccess: !!r.open_access?.is_oa,
+        recordUrl: record, kind: 'scholarly_record' } };
+  }).filter((r) => /^https?:\/\//i.test(r.url));
 }
 
 export async function searchWeb(query, { limit = 8, fetcher = fetch } = {}) {
@@ -80,7 +111,7 @@ export async function searchWeb(query, { limit = 8, fetcher = fetch } = {}) {
   const results = [], errors = [];
   // Crossref DOI landing pages are often paywalled or unreachable; keep a couple
   // of directly readable encyclopedia leads ahead of them.
-  for (const [engine, quota] of [[bing, 3], [wikipedia, 2], [crossref, 3]]) {
+  for (const [engine, quota] of [[bing, 3], [openalex, 3], [wikipedia, 2], [crossref, 2]]) {
     try {
       const found = await engine(clean, Math.min(quota, limit - results.length), fetcher);
       for (const r of found) if (!results.some((x) => x.url === r.url)) results.push(r);

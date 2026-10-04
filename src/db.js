@@ -730,7 +730,9 @@ export const documentsInOtherDossiers = (principalId, dossierId, limit = 8) => d
 
 export function sourceCatalogue(principalId, dossierId) {
   const docs = db.prepare(`SELECT d.*, a.result_json AS analysis_json,
-    s.url AS source_url, s.summary AS source_summary FROM documents d
+    s.url AS source_url, s.summary AS source_summary,
+    s.status AS source_status,
+    s.metadata_json AS source_metadata_json FROM documents d
     LEFT JOIN document_analysis_synthesis a ON a.principal_id=d.principal_id AND a.document_id=d.id
     LEFT JOIN source_library s ON s.principal_id=d.principal_id AND s.dossier_id=d.dossier_id AND s.document_id=d.id
     WHERE d.principal_id=? AND d.dossier_id=? ORDER BY d.id`).all(principalId, dossierId);
@@ -744,6 +746,9 @@ export function sourceCatalogue(principalId, dossierId) {
     const noOutput = pageReads.filter((r) => r.outcome === 'model_no_text');
     return { id: `document-${d.id}`, type: d.source_url ? 'site' : 'document', documentId: d.id, title: d.filename,
       summary: analysis?.overview ?? d.source_summary ?? '', url: d.source_url ?? null,
+      sourceStatus: d.source_status ?? null,
+      extraction: d.extraction,
+      provenance: d.source_metadata_json ? JSON.parse(d.source_metadata_json) : null,
       readPages: d.read_pages ?? d.pages,
       pages: d.pages, analysisStatus: analysis ? 'done' : 'pending',
       blankPageCount: blank.length, blankPages: blank.slice(0, 20).map((r) => r.page),
@@ -751,7 +756,24 @@ export function sourceCatalogue(principalId, dossierId) {
       relations: Array.isArray(analysis?.structure) ? analysis.structure.slice(0, 8) : [],
       openQuestions: Array.isArray(analysis?.openQuestions) ? analysis.openQuestions.slice(0, 8) : [] };
   }), ...sites.map((s) => ({ id: `site-${s.id}`, type: s.source_kind, title: s.title,
-    summary: s.summary ?? '', url: s.url, analysisStatus: s.status }))];
+    summary: s.summary ?? '', url: s.url, analysisStatus: s.status,
+    sourceStatus: s.status,
+    provenance: s.metadata_json ? JSON.parse(s.metadata_json) : null }))];
+}
+
+/** Bibliographic records are leads until their actual full text is read. */
+export function addScholarlyLead({ principalId, dossierId, lead }) {
+  if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
+  if (!['openalex', 'crossref'].includes(lead.engine) || !/^https?:\/\//i.test(lead.url)) return;
+  const metadata = JSON.stringify({ catalogue: lead.engine, metadataOnly: !!lead.metadataOnly,
+    ...(lead.provenance ?? {}) }).slice(0, 4000);
+  db.prepare(`INSERT INTO source_library
+    (principal_id,dossier_id,url,title,summary,source_kind,status,metadata_json,created_at)
+    VALUES(?,?,?,?,?,'scholarly_lead','candidate',?,?)
+    ON CONFLICT(principal_id,dossier_id,url) DO UPDATE SET
+      metadata_json=excluded.metadata_json`)
+    .run(principalId, dossierId, lead.url, String(lead.title).slice(0, 200),
+      'نمایهٔ کتاب‌شناختی؛ متن منبع هنوز بررسی نشده است.', metadata, new Date().toISOString());
 }
 
 export function addSourcePage({ principalId, dossierId, url, title, summary }) {
@@ -779,7 +801,8 @@ export function deferSourceCandidate(principalId, dossierId, url, reason) {
     .run(String(reason || 'خواندن منبع نتیجه نداد.').slice(0, 500), principalId, dossierId, url).changes;
 }
 
-export function saveCrawledPage({ principalId, dossierId, url, title, text, chunks }) {
+export function saveCrawledPage({ principalId, dossierId, url, title, text, chunks,
+  mime = 'text/html', extraction = 'site_crawl' }) {
   if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
   title = String(title || url).slice(0, 200);
   const existing = db.prepare(`SELECT * FROM source_library WHERE principal_id=? AND dossier_id=? AND url=?`)
@@ -789,12 +812,17 @@ export function saveCrawledPage({ principalId, dossierId, url, title, text, chun
   db.exec('BEGIN');
   try {
     const documentId = Number(insertDocument({ principalId, dossierId, filename: title,
-      mime: 'text/html', kind: 'text', charCount: text.length, extraction: 'site_crawl' }));
-    for (let i = 0; i < chunks.length; i++) insertChunkStmt.run(principalId, dossierId,
-      documentId, i, null, chunks[i], null, now);
+      mime, kind: 'text', charCount: text.length, extraction }));
+    for (let i = 0; i < chunks.length; i++) {
+      const part = chunks[i];
+      insertChunkStmt.run(principalId, dossierId, documentId, i,
+        typeof part === 'object' ? part.page ?? null : null,
+        typeof part === 'object' ? part.text : part, null, now);
+    }
     db.prepare(`INSERT INTO source_library(principal_id,dossier_id,document_id,url,title,summary,source_kind,status,created_at)
       VALUES(?,?,?,?,?,?,'site','collected',?) ON CONFLICT(principal_id,dossier_id,url)
-      DO UPDATE SET document_id=excluded.document_id,title=excluded.title,summary=excluded.summary`)
+      DO UPDATE SET document_id=excluded.document_id,title=excluded.title,
+        summary=excluded.summary,source_kind='site',status='collected'`)
       .run(principalId, dossierId, documentId, url, title, text.slice(0, 500), now);
     db.exec('COMMIT');
     return { documentId, created: true };
@@ -1105,6 +1133,7 @@ addColumn('messages', 'prompt_json', 'TEXT');
 addColumn('documents', 'read_pages', 'INTEGER');
 addColumn('research_nodes', 'progress_stage', 'TEXT');
 addColumn('research_nodes', 'target_document_id', 'INTEGER');
+addColumn('source_library', 'metadata_json', 'TEXT');
 // A watch can carry its own question, so "keep looking into this" is not limited to
 // the dossier's headline topic.
 addColumn('intentions', 'question', 'TEXT');

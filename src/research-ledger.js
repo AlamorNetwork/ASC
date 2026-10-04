@@ -27,6 +27,12 @@ export function renderResearchLedger({ dossier, documents = [], claims = [], epi
   if (researchNodes.length) for (const node of researchNodes.slice(-25)) {
     const parent = node.parent_id ? `زیرنیتِ #${node.parent_id}` : 'نیت اصلی';
     lines.push(`- #${node.id} ${parent} · ${clean(node.assigned_role, 40)} · ${clean(node.status, 30)} · ${clean(node.title, 220)}`);
+    if (!node.parent_id) {
+      let answer = null;
+      try { answer = JSON.parse(node.result_json || '{}').rootAssessment; } catch { /* old run */ }
+      if (answer?.claim) lines.push(`  - پاسخ پرسش اصلی (${clean(answer.status, 40)}): ${clean(answer.claim, 260)}`,
+        `  - شاهد: «${clean(answer.quote, 180)}» · ${clean(answer.sourceUrl || `سند #${answer.documentId}`, 200)}${answer.page ? ` · ص ${answer.page}` : ''}`);
+    }
     if (node.progress_stage) lines.push(`  - گام جاری/آخر: ${clean(node.progress_stage, 220)}`);
     if (node.open_question) lines.push(`  - پرسش باز: ${clean(node.open_question, 240)}`);
   } else lines.push('- هنوز نیتی ثبت نشده است.');

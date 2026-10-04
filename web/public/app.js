@@ -180,6 +180,13 @@ function renderResearch(rawNodes) {
     const question = node.open_question ? `<p>${esc(node.open_question)}</p>` : '';
     let result = null;
     try { result = JSON.parse(node.result_json || 'null'); } catch { /* unfinished output */ }
+    const assessment = !node.parent_id && result?.rootAssessment?.claim ? result.rootAssessment : null;
+    const answerSource = assessment ? safeWebUrl(assessment.sourceUrl) : null;
+    const answerEvidence = assessment ? `<small>شاهد منطبق: «${esc(assessment.quote)}»${answerSource
+      ? ` · <a href="${esc(answerSource)}" target="_blank" rel="noopener noreferrer">منبع</a>`
+      : assessment.documentId ? ` · سند #${fa(assessment.documentId)}` : ''}${assessment.page ? ` · ص ${fa(assessment.page)}` : ''}</small>` : '';
+    const mainAnswer = assessment ? `<div class="root-answer" data-status="${esc(assessment.status)}"><strong>${assessment.status === 'supported_by_source'
+      ? 'پرسش اصلی · پاسخ با شاهد و داوری مدل' : 'پرسش اصلی · پاسخ پیشنهادی'}</strong><p>${esc(assessment.claim)}</p>${answerEvidence}</div>` : '';
     const summary = result?.summary ? `<p class="research-summary">${esc(result.summary)}</p>` : '';
     const findings = Array.isArray(result?.findings) ? result.findings.slice(0, 5).map((f) => {
       const url = safeWebUrl(f?.sourceUrl);
@@ -191,7 +198,7 @@ function renderResearch(rawNodes) {
     const resultView = summary || findings ? `<details><summary>گزارش عامل</summary>${summary}${findings ? `<ul>${findings}</ul>` : ''}</details>` : '';
     const role = node.assigned_role ? `<small>نقش: ${esc(node.assigned_role)}</small>` : '';
     const descendants = (children.get(id) || []).map((child) => branch(child, depth + 1)).join('');
-    return `<li><div class="research-node"><div class="research-node-head"><strong>${esc(node.title || 'بی‌عنوان')}</strong>${status}</div>${question}${role}${resultView}</div>${descendants ? `<ul>${descendants}</ul>` : ''}</li>`;
+    return `<li><div class="research-node"><div class="research-node-head"><strong>${esc(node.title || 'بی‌عنوان')}</strong>${status}</div>${mainAnswer}${question}${role}${resultView}</div>${descendants ? `<ul>${descendants}</ul>` : ''}</li>`;
   }
   const roots = children.get(0) || [];
   const tree = [...roots, ...nodes.filter((n) => !roots.includes(n))].map((node) => branch(node, 0)).join('');
@@ -218,8 +225,12 @@ function renderSources(rawSources, rawPending, rawElsewhere) {
     const pages = source.pages ? ` · ${fa(source.readPages ?? 0)}/${fa(source.pages)} صفحه` : '';
     const noOutput = source.noOutputPageCount ? ` · ${fa(source.noOutputPageCount)} صفحه بدون خروجی ویژن` : '';
     const status = source.analysisStatus ? ` · ${esc(source.analysisStatus)}` : '';
+    const scholarly = source.provenance ? [source.provenance.authors?.slice(0, 2).join('، '),
+      source.provenance.year, source.provenance.venue,
+      source.provenance.doi ? `DOI: ${source.provenance.doi.replace(/^https?:\/\/doi\.org\//, '')}` : null]
+      .filter(Boolean).map((part) => esc(part)).join(' · ') : '';
     const relations = Array.isArray(source.relations) ? source.relations.slice(0, 5) : [];
-    return `<li><div class="source-heading">${heading}</div><small>${esc(source.type || 'منبع')}${pages}${noOutput}${status}</small>${source.summary ? `<p>${esc(source.summary)}</p>` : ''}${relations.length ? `<details><summary>ارتباط بخش‌ها</summary><ul>${relations.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></details>` : ''}</li>`;
+    return `<li><div class="source-heading">${heading}</div><small>${esc(source.type || 'منبع')}${pages}${noOutput}${status}</small>${scholarly ? `<small>${scholarly}</small>` : ''}${source.summary ? `<p>${esc(source.summary)}</p>` : ''}${relations.length ? `<details><summary>ارتباط بخش‌ها</summary><ul>${relations.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></details>` : ''}</li>`;
   }).join('')}</ul>` : pending.length || elsewhere.length ? '' : '<p class="muted">هنوز منبعی در این پرونده ثبت نشده است.</p>';
   const elsewhereHtml = !sources.length && elsewhere.length
     ? `<p class="muted">سندهای ذخیره‌شده در پرونده‌های دیگر:</p><ul>${elsewhere.map((doc) =>

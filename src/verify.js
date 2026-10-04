@@ -110,7 +110,12 @@ async function get(url, timeoutMs, allowPrivate = false) {
         return { ok: false, error: `HTTP ${res.status}`, missing: fabricated(res.status) };
       }
       const ct = res.headers.get('content-type') ?? '';
-      if (!/(html|text|json|xml)/i.test(ct)) return { ok: false, error: `unsupported content type: ${ct}` };
+      const pdf = /application\/pdf/i.test(ct) || /\.pdf(?:[?#]|$)/i.test(current);
+      if (!pdf && !/(html|text|json|xml)/i.test(ct))
+        return { ok: false, error: `unsupported content type: ${ct}` };
+      const byteLimit = pdf ? 15 * 1024 * 1024 : 2 * 1024 * 1024;
+      if (Number(res.headers.get('content-length')) > byteLimit)
+        return { ok: false, error: `source exceeds ${Math.round(byteLimit / 1024 / 1024)} MB limit` };
       const reader = res.body?.getReader();
       if (!reader) return { ok: false, error: 'empty response' };
       const chunks = [];
@@ -119,11 +124,25 @@ async function get(url, timeoutMs, allowPrivate = false) {
         const { done, value } = await reader.read();
         if (done) break;
         bytes += value.byteLength;
-        if (bytes > 2 * 1024 * 1024) {
+        if (bytes > byteLimit) {
           await reader.cancel();
-          return { ok: false, error: 'page exceeds 2 MB limit' };
+          return { ok: false, error: `source exceeds ${Math.round(byteLimit / 1024 / 1024)} MB limit` };
         }
         chunks.push(value);
+      }
+      if (pdf) {
+        const buffer = Buffer.concat(chunks);
+        if (!buffer.subarray(0, 5).equals(Buffer.from('%PDF-')))
+          return { ok: false, error: 'response is not a PDF' };
+        try {
+          const { extractPdf } = await import('./pdf.js');
+          const parsed = await extractPdf(buffer);
+          const text = parsed.perPage.map((page, i) => `[PDF page ${i + 1}]\n${page}`).join('\n');
+          return text.trim().length > 250
+            ? { ok: true, text, url: current, via: 'pdf_text', pages: parsed.pages,
+              unreadPages: parsed.visionPages }
+            : { ok: false, error: 'PDF has no readable text layer' };
+        } catch (err) { return { ok: false, error: `PDF extraction failed: ${err.message}` }; }
       }
       const body = Buffer.concat(chunks).toString('utf8');
       return { ok: true, text: ct.includes('html') ? htmlToText(body) : body,
@@ -250,5 +269,7 @@ export async function verifyClaim({ sourceUrl, quote, allowPrivate = false }) {
 export async function fetchSourceText(url) {
   const page = await fetchText(url);
   return page.ok ? { ok: true, url: page.url ?? url, text: page.text,
-    archived: page.archived ?? null } : { ok: false, error: page.error, missing: page.missing };
+    archived: page.archived ?? null, via: page.via ?? 'direct',
+    pages: page.pages ?? null, unreadPages: page.unreadPages ?? [] }
+    : { ok: false, error: page.error, missing: page.missing };
 }
