@@ -16,6 +16,7 @@ import { googleOcrSettings, submitGoogleOcr, waitForGoogleOcr,
   fetchGoogleOcrPages } from './google-document-ai.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
 import { researchLedger } from './research-ledger.js';
+import { ideaReportPath } from './idea-report.js';
 import { analyzeDocument, documentAnalysisPath } from './document-analysis.js';
 import { runResearchTeam } from './research-team.js';
 import { collectSite } from './site-library.js';
@@ -351,7 +352,7 @@ function state(pid, dossierId, fresh = false) {
 }
 async function servePublic(res, pathname) {
   const name = pathname === '/' ? 'index.html' : pathname.slice(1);
-  if (!['index.html', 'app.css', 'app.js', 'atlas.png', 'vazirmatn.woff2'].includes(name)) return error(res, 404, 'یافت نشد.');
+  if (!['index.html', 'app.css', 'app.js', 'markdown.js', 'atlas.png', 'vazirmatn.woff2'].includes(name)) return error(res, 404, 'یافت نشد.');
   const type = name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css'
     : name.endsWith('.png') ? 'image/png' : name.endsWith('.woff2') ? 'font/woff2' : 'text/javascript';
   const body = await fsp.readFile(path.join(publicDir, name));
@@ -410,6 +411,20 @@ async function route(req, res, runTeam) {
     res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8',
       'Content-Disposition': 'attachment; filename="asc-sources.md"', 'Cache-Control': 'no-store' });
     return res.end(renderSourceIndex(pid));
+  }
+  if (url.pathname === '/api/idea-report' && req.method === 'GET') {
+    const dossierId = Number(url.searchParams.get('dossierId'));
+    const rootId = Number(url.searchParams.get('rootId'));
+    const dossier = Number.isSafeInteger(dossierId) && dossierId > 0 ? store.getDossier(pid, dossierId) : null;
+    const root = Number.isSafeInteger(rootId) && rootId > 0 ? store.getResearchNode(pid, rootId) : null;
+    if (!dossier || !root || root.parent_id || root.dossier_id !== dossierId ||
+        !root.title.startsWith('ارزیابی ایده: ')) return error(res, 404, 'گزارش پیدا نشد.');
+    const file = ideaReportPath(pid, dossierId, rootId);
+    if (!fs.existsSync(file)) return error(res, 404, 'گزارش هنوز آماده نیست.');
+    res.writeHead(200, { 'Content-Type': 'text/markdown; charset=utf-8',
+      'Content-Disposition': `attachment; filename="asc-idea-${rootId}.md"`,
+      'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+    return fs.createReadStream(file).pipe(res);
   }
   if (url.pathname === '/api/source-passages' && req.method === 'GET') {
     const id = Number(url.searchParams.get('documentId'));

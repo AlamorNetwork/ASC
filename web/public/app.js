@@ -1,7 +1,9 @@
+import { renderMarkdown } from './markdown.js';
 const $ = (id) => document.getElementById(id);
 let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false, googleOcrReady = false;
 let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', leadSnapshot = '', monitorTimer = null, monitorNodes = [];
 let currentView = 'chat', latestState = null, libraryDocs = [], activeLibraryDoc = null, focusedSource = null;
+let lastRenderedMessage = null;
 const esc = (s) => String(s ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const fa = (n) => Number(n || 0).toLocaleString('fa-IR');
 const formatTime = (ms) => `${fa(Math.round(ms / 1000))} ثانیه`;
@@ -97,7 +99,8 @@ function render(data) {
     ? 'مقصد فایل بعدی: پروندهٔ تازه'
     : `مقصد فایل بعدی: ${data.selected?.topic || 'پرونده'} (#${fa(selected)})`;
   const messages = Array.isArray(data.messages) ? data.messages : [];
-  $('messages').innerHTML = messages.map((m, i) => `<div class="message ${m.role === 'user' ? 'user' : 'assistant'}"><div class="who">${m.role === 'user' ? 'شما' : 'عامل مادر'}</div><p>${esc(m.text)}</p>${i === messages.length - 1 && m.role === 'assistant' ? questionBox(m) : ''}</div>`).join('');
+  lastRenderedMessage = messages.at(-1)?.role === 'assistant' ? messages.at(-1).text : null;
+  $('messages').innerHTML = messages.map((m, i) => `<div class="message ${m.role === 'user' ? 'user' : 'assistant'}"><div class="who">${m.role === 'user' ? 'شما' : 'عامل مادر'}</div><div class="message-content">${m.role === 'user' ? `<p>${esc(m.text)}</p>` : renderMarkdown(m.text)}</div>${i === messages.length - 1 && m.role === 'assistant' ? questionBox(m) : ''}</div>`).join('');
   bindQuestionBox();
   document.querySelector('.conversation').classList.toggle('has-messages', $('messages').childElementCount > 0);
   $('messages').scrollTop = $('messages').scrollHeight;
@@ -423,7 +426,7 @@ function selectResultDossier(result) {
 function showChatResult(result) {
   if (typeof result?.text !== 'string' || !result.text.trim()) return;
   const last = $('messages').lastElementChild;
-  if (last?.classList.contains('assistant') && last.querySelector('p')?.textContent === result.text) return;
+  if (last?.classList.contains('assistant') && lastRenderedMessage === result.text) return;
   addMessage('assistant', result.text);
 }
 function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value; $('resume-deep').disabled = value; $('site-form').querySelector('button[type="submit"]').disabled = value; $('consult-form').querySelector('button[type="submit"]').disabled = value; }
@@ -516,8 +519,11 @@ async function watch(id, title) {
 function addMessage(role, text) {
   const box = document.createElement('div'); box.className = `message ${role}`;
   const who = document.createElement('div'); who.className = 'who'; who.textContent = role === 'user' ? 'شما' : 'عامل مادر';
-  const p = document.createElement('p'); p.textContent = text;
-  box.append(who, p); $('messages').append(box); document.querySelector('.conversation').classList.add('has-messages'); $('messages').scrollTop = $('messages').scrollHeight;
+  const p = document.createElement('div'); p.className = 'message-content';
+  if (role === 'user') { const line = document.createElement('p'); line.textContent = text; p.append(line); }
+  else p.innerHTML = renderMarkdown(text);
+  box.append(who, p); $('messages').append(box); lastRenderedMessage = role === 'assistant' ? text : null;
+  document.querySelector('.conversation').classList.add('has-messages'); $('messages').scrollTop = $('messages').scrollHeight;
 }
 function sendFile(file) {
   if (!file) return;

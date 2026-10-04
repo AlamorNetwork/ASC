@@ -132,6 +132,25 @@ button:active:not(:disabled){transform:translateY(1px)}
 .message.user .who{color:var(--green)}
 .message.user .who:before{content:'';width:7px;height:7px;border-radius:50%;background:var(--green)}
 .message p{margin:0;font-size:14px;unicode-bidi:plaintext}
+.message-content{white-space:normal;overflow-wrap:anywhere;font-size:14px;line-height:1.9}
+.message-content p{margin:0 0 10px}
+.message-content h1,.message-content h2,.message-content h3,.message-content h4{margin:22px 0 9px;line-height:1.5;color:var(--ink)}
+.message-content h1{font-size:22px}.message-content h2{font-size:18px}.message-content h3{font-size:15px}
+.message-content ul{margin:8px 0 16px;padding-inline-start:23px}
+.message-content li{margin:4px 0}
+.message-content blockquote{margin:12px 0;padding:8px 14px;border-inline-start:3px solid var(--copper);background:var(--surface-raised)}
+.message-content a{color:var(--copper-strong);text-decoration:underline;text-underline-offset:3px}
+.message-content code,.message-content pre{font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;direction:ltr}
+.message-content code{background:var(--surface-raised);padding:2px 5px;border-radius:4px}
+.message-content pre{max-width:100%;overflow:auto;padding:13px;border:1px solid var(--line);border-radius:8px;background:#08110d;white-space:pre}
+.message-content pre code{padding:0;background:none}
+.message-content .md-table-wrap{max-width:100%;overflow-x:auto;margin:12px 0}
+.message-content table{width:100%;border-collapse:collapse;min-width:430px;white-space:normal}
+.message-content th,.message-content td{padding:7px 10px;border:1px solid var(--line);text-align:start;vertical-align:top}
+.message-content th{color:var(--copper-strong);background:var(--surface-raised)}
+.message-content .md-flow{display:flex;flex-direction:column;align-items:center;gap:4px;margin:18px auto;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--surface-raised);max-width:520px}
+.message-content .md-flow-node{width:min(100%,390px);padding:11px 16px;border:1px solid var(--copper);border-radius:9px;text-align:center;background:var(--surface);color:var(--ink);font-weight:700}
+.message-content .md-flow-arrow{color:var(--copper-strong);font-size:22px;line-height:1}
 .question-box{margin-top:17px;padding:15px 17px;border:1px solid var(--line-strong);border-radius:9px;background:var(--surface-raised);white-space:normal}
 .question-label{margin-bottom:6px;color:var(--copper-strong);font-size:11px;font-weight:700}
 .question-box strong{display:block;color:var(--ink);font-size:14px;line-height:1.8}

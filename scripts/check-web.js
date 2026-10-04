@@ -15,6 +15,7 @@ const library = await import('../src/book-library.js');
 const store = await import('../src/db.js');
 const settings = await import('../src/settings.js');
 const { db } = store;
+const { saveIdeaReport } = await import('../src/idea-report.js');
 let resumedTeam = null;
 const server = createWebServer({ runTeam: async (input) => {
   resumedTeam = input;
@@ -42,6 +43,9 @@ try {
   if (page.status !== 200 || !markup.includes('اطلس پژوهش') ||
       !markup.includes('id="tab-deep"') || !markup.includes('id="investigation-status"'))
     throw new Error('web research controls are missing');
+  const markdownAsset = await fetch(`${url}/markdown.js`);
+  if (markdownAsset.status !== 200 || !(await markdownAsset.text()).includes('renderMarkdown'))
+    throw new Error('Markdown viewer asset was not served');
   for (const [asset, contentType] of [['atlas.png', 'image/png'], ['vazirmatn.woff2', 'font/woff2']]) {
     const response = await fetch(`${url}/${asset}`);
     if (response.status !== 200 || !response.headers.get('content-type')?.includes(contentType) ||
@@ -67,6 +71,8 @@ try {
   if (deniedProgress.status !== 401) throw new Error('unauthenticated agent progress was exposed');
   const privateReport = await fetch(`${url}/api/document-analysis?documentId=1`);
   if (privateReport.status !== 401) throw new Error('unauthenticated analysis was exposed');
+  const privateIdea = await fetch(`${url}/api/idea-report?dossierId=1&rootId=1`);
+  if (privateIdea.status !== 401) throw new Error('unauthenticated idea report was exposed');
   const login = await fetch(`${url}/api/login`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
     body: JSON.stringify({ password: process.env.WEB_PASSWORD }) });
   if (login.status !== 200) throw new Error(`login ${login.status}: ${await login.text()}`);
@@ -91,6 +97,21 @@ try {
   const state = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
   if (state.status !== 200 || !(await state.json()).messages.some((m) => m.text === 'سلام'))
     throw new Error('ordinary chat history disappeared after refresh');
+  const ideaDossier = Number(store.insertDossier({ principalId: 'test-web-owner', topic: 'ایدهٔ آزمایشی' }));
+  const ideaRoot = store.createResearchNode({ principalId: 'test-web-owner', dossierId: ideaDossier,
+    title: 'ارزیابی ایده: ایدهٔ آزمایشی', assignedRole: 'coordinator' });
+  saveIdeaReport('test-web-owner', ideaDossier, ideaRoot, '# گزارش خصوصی\n');
+  const ideaUrl = `${url}/api/idea-report?dossierId=${ideaDossier}&rootId=${ideaRoot}`;
+  const ideaDownload = await fetch(ideaUrl, { headers: { Cookie: cookie } });
+  if (ideaDownload.status !== 200 || !(await ideaDownload.text()).includes('گزارش خصوصی') ||
+      !ideaDownload.headers.get('content-disposition')?.includes('.md'))
+    throw new Error('authenticated Markdown report could not be downloaded');
+  const wrongOwnerRoot = store.createResearchNode({ principalId: 'someone-else',
+    dossierId: Number(store.insertDossier({ principalId: 'someone-else', topic: 'محرمانه' })),
+    title: 'ارزیابی ایده: محرمانه' });
+  const deniedIdea = await fetch(`${url}/api/idea-report?dossierId=${ideaDossier}&rootId=${wrongOwnerRoot}`,
+    { headers: { Cookie: cookie } });
+  if (deniedIdea.status !== 404) throw new Error('foreign idea report was exposed');
   const planCase = Number(store.insertDossier({ principalId: 'test-web-owner', topic: 'پرسش پژوهشی' }));
   const newNode = await fetch(`${url}/api/research-nodes`, { method: 'POST',
     headers: { Cookie: cookie, Origin: origin, 'X-CSRF-Token': csrf, 'Content-Type': 'application/json' },
