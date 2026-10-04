@@ -485,6 +485,66 @@ try {
   if (pdfResult.reports[0]?.report.findings[0]?.page !== 2 || !pdfSource?.documentId ||
       !store.documentChunks(pid, pdfSource.documentId).some((chunk) => chunk.page === 2))
     throw new Error('downloaded PDF lost the page number of its quotation');
+  const wideDossier = Number(store.insertDossier({ principalId: pid, topic: 'همهٔ نتایج وب' }));
+  const wideRoot = store.createResearchNode({ principalId: pid, dossierId: wideDossier,
+    title: 'همهٔ شاهدها را بخوان' });
+  store.createResearchNode({ principalId: pid, dossierId: wideDossier, parentId: wideRoot,
+    title: 'شاهدهای وب', assignedRole: 'web-researcher' });
+  const wideEvidence = Array.from({ length: 12 }, (_, i) => ({ id: i,
+    url: `https://example.org/wide-${i}`, title: `Source ${i}`,
+    text: `Mithraeum evidence from page ${i}. `.repeat(15),
+    fullText: `Mithraeum evidence from page ${i}. `.repeat(15), via: 'direct' }));
+  const workerPackets = [];
+  let motherFindings = 0;
+  const wideResult = await runResearchTeam({ principalId: pid, dossierId: wideDossier,
+    nodeId: wideRoot, discover: async () => ({ evidence: wideEvidence, leads: [] }),
+    ask: async ({ system, content }) => {
+      if (system.includes('هماهنگ‌کننده')) {
+        motherFindings = JSON.parse(content).reports[0].report.findings.length;
+        return { data: { summary: 'همهٔ صفحه‌ها بررسی شدند', approved_leads: [] } };
+      }
+      workerPackets.push(content);
+      return { data: { summary: 'چهار صفحه خوانده شد', findings: [{
+        text: 'مهرابه در صفحه آمده است', passage_id: 1,
+        quote: 'Mithraeum evidence from page' }], open_questions: [] } };
+    } });
+  if (workerPackets.length !== 3 || motherFindings !== 3 ||
+      wideResult.reports[0]?.report.reviewedUrls.length !== 12 ||
+      store.sourceCatalogue(pid, wideDossier).filter((s) => s.type === 'site' && s.documentId).length !== 12)
+    throw new Error('the web worker or mother silently dropped results after page five');
+  const { request, clear } = await import('../src/cancel.js');
+  const resumeRoot = store.createResearchNode({ principalId: pid, dossierId: wideDossier,
+    title: 'توقف و ادامهٔ صفحه‌ها' });
+  const resumeChild = store.createResearchNode({ principalId: pid, dossierId: wideDossier,
+    parentId: resumeRoot, title: 'منابع بیشتر', assignedRole: 'web-researcher' });
+  let resumedReviewCalls = 0, reopened = 0;
+  const resumeWork = {
+    principalId: pid, dossierId: wideDossier, nodeId: resumeRoot,
+    discover: async (_query, options) => ({ evidence: wideEvidence
+      .filter((e) => !options.skipUrls.includes(e.url)), leads: [] }),
+    ask: async ({ system }) => {
+      if (system.includes('هماهنگ‌کننده')) return { data: { summary: 'کامل شد', approved_leads: [] } };
+      resumedReviewCalls++;
+      if (resumedReviewCalls === 1) request(pid);
+      return { data: { summary: 'خوانده شد', findings: [{
+        text: 'شاهد', passage_id: 1, quote: 'Mithraeum evidence from page' }],
+        open_questions: [] } };
+    },
+  };
+  try { await runResearchTeam(resumeWork); }
+  catch (error) { if (error.name !== 'Stopped') throw error; }
+  const paused = JSON.parse(store.getResearchNode(pid, resumeChild).result_json);
+  if (paused.reviewedUrls.length !== 4 || paused.pendingUrls.length !== 8)
+    throw new Error('a stop lost the remaining saved pages');
+  clear(pid);
+  const resumedWide = await runResearchTeam({ ...resumeWork,
+    discover: async (_query, options) => {
+      reopened += wideEvidence.filter((e) => !options.skipUrls.includes(e.url)).length;
+      return { evidence: [], leads: [] };
+    } });
+  if (reopened || resumedReviewCalls !== 3 ||
+      resumedWide.reports[0]?.report.reviewedUrls.length !== 12)
+    throw new Error('resume reopened saved pages or omitted the pending batches');
   console.log('research team check passed — parallel agents, mother-approved lead chain, bounded resume, isolation; 0 paid calls');
 } finally {
   store.db.close();

@@ -144,21 +144,21 @@ async function gutendex(query, limit, fetcher) {
   }).filter((r) => r.title && /^https:\/\//i.test(r.url));
 }
 
-export async function searchWeb(query, { limit = 8, fetcher = fetch } = {}) {
+export async function searchWeb(query, { limit = Infinity, fetcher = fetch } = {}) {
   const clean = String(query ?? '').trim().slice(0, 250);
   if (!clean) return { results: [], errors: ['empty query'] };
   const results = [], errors = [];
-  // Crossref DOI landing pages are often paywalled or unreachable; keep a couple
-  // of directly readable encyclopedia leads ahead of them.
+  // Ask every source for its available results. The caller may set a limit for a
+  // deliberately shallow search, but a research run must not silently discard
+  // later providers or pages before the mother has seen them.
   const engines = bookIntent(clean)
-    ? [[bing, 2], [openalex, 2], [gutendex, 1], [openLibrary, 1], [wikipedia, 1], [crossref, 1]]
-    : [[bing, 3], [openalex, 3], [wikipedia, 2], [crossref, 2]];
-  for (const [engine, quota] of engines) {
+    ? [bing, openalex, gutendex, openLibrary, wikipedia, crossref]
+    : [bing, openalex, wikipedia, crossref];
+  for (const engine of engines) {
     try {
-      const found = await engine(clean, Math.min(quota, limit - results.length), fetcher);
+      const found = await engine(clean, limit, fetcher);
       for (const r of found) if (!results.some((x) => x.url === r.url)) results.push(r);
     } catch (err) { errors.push(`${engine.name}: ${err.message}`); }
-    if (results.length >= limit) break;
   }
   const ranked = results.map((lead) => ({ lead, score: leadRelevance(clean, lead) }))
     .filter(({ score }) => score >= 2)

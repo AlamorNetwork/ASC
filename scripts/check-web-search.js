@@ -57,6 +57,13 @@ assert.equal(books.results.find((r) => r.engine === 'openlibrary')?.provenance?.
 const persian = await searchWeb('آیا همهٔ مهرابه‌های رومی زیرزمینی بودند؟ یک نمونهٔ مستند خلاف آن پیدا کن', { fetcher });
 assert.equal(persian.results.length, 0);
 assert(persian.errors.some((e) => e.includes('did not mention')));
+const rss = `<rss><channel>${Array.from({ length: 14 }, (_, i) =>
+  `<item><title>Mithraeum finding ${i}</title><link>https://example.org/rss-${i}</link><description>Mithraeum excavation</description></item>`
+).join('')}</channel></rss>`;
+const broad = await searchWeb('Mithraeum', { fetcher: async (url) =>
+  String(url).includes('bing.com') ? new Response(rss) : reply({ query: { search: [] },
+    message: { items: [] }, results: [] }) });
+assert.equal(broad.results.length, 14);
 let chosenModel = '', firstQuery = '';
 await discoverEvidence('پرسش بلند فارسی دربارهٔ مهرابه', {
   plannerModel: 'test-coordinator',
@@ -106,4 +113,37 @@ const fallback = await discoverEvidence('Mithraeum', {
 });
 assert.equal(fallback.evidence[0]?.url, 'https://example.org/article');
 assert.equal(fallback.evidence[0]?.provenance.workId, 'https://openalex.org/W123');
+const manyLeads = Array.from({ length: 14 }, (_, i) => ({
+  url: `https://example.org/source-${i}`, title: `Mithraeum source ${i}`, engine: 'test' }));
+const opened = [], saved = [];
+const many = await discoverEvidence('Mithraeum', {
+  ask: async () => ({ data: { queries: ['Mithraeum'] } }),
+  search: async () => ({ results: manyLeads }),
+  open: async (url) => { opened.push(url); return { ok: true, url,
+    text: `A distinct account at ${url}. `.repeat(15) }; },
+  onEvidence: (source) => saved.push(source.url), enhancedLimit: 0,
+});
+assert.equal(opened.length, 14);
+assert.equal(saved.length, 14);
+assert.equal(many.evidence.length, 14);
+assert.equal(many.leads.length, 14);
+assert.equal(many.remaining.length, 0);
+let allowMore = true;
+let checkpointed = 0;
+const stopped = await discoverEvidence('Mithraeum', {
+  ask: async () => ({ data: { queries: ['Mithraeum'] } }),
+  search: async () => ({ results: manyLeads }),
+  open: async (url) => ({ ok: true, url, text: `A distinct account at ${url}. `.repeat(15) }),
+  onEvidence: () => { checkpointed++; if (checkpointed === 4) allowMore = false; },
+  shouldContinue: () => allowMore, enhancedLimit: 0,
+});
+assert.equal(stopped.evidence.length, 4);
+assert.equal(stopped.remaining.length, 10);
+const resumed = await discoverEvidence('Mithraeum', {
+  ask: async () => ({ data: { queries: ['Mithraeum'] } }),
+  search: async () => ({ results: manyLeads }),
+  open: async (url) => ({ ok: true, url, text: `A distinct account at ${url}. `.repeat(15) }),
+  skipUrls: stopped.evidence.map((e) => e.url), enhancedLimit: 0,
+});
+assert.equal(resumed.evidence.length, 10);
 console.log('web search check passed — query planner used, relevant shrine ranked first, unrelated DOI rejected; 0 model calls');

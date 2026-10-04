@@ -4,7 +4,7 @@ import { retrieve } from './chunks.js';
 import { chunkText } from './chunks.js';
 import { chatJson } from './llm.js';
 import { modelFor } from './settings.js';
-import { checkpoint, Stopped } from './cancel.js';
+import { checkpoint, isWanted, Stopped } from './cancel.js';
 import { verifyAgainstText } from './verify.js';
 import { collectSite } from './site-library.js';
 import { discoverEvidence } from './research.js';
@@ -147,7 +147,15 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
       store.updateResearchNode(principalId, node.id, { status: 'running', openQuestion: node.open_question });
       const web = node.assigned_role === 'web-researcher';
       stage(node.id, web ? 'جست‌وجوی وب و خواندن نتیجه‌ها' : 'جست‌وجوی متن اسناد پرونده');
+      let partial;
       try {
+        const previous = JSON.parse(node.result_json || '{}');
+        partial = { summary: clean(previous.summary),
+          findings: Array.isArray(previous.findings) ? previous.findings : [],
+          openQuestions: Array.isArray(previous.openQuestions) ? previous.openQuestions : [],
+          reviewedUrls: Array.isArray(previous.reviewedUrls) ? previous.reviewedUrls : [],
+          pendingUrls: Array.isArray(previous.pendingUrls) ? previous.pendingUrls : [],
+          remainingCount: Number(previous.remainingCount) || 0 };
         const review = async (passages) => {
           const packet = passages.map((p, i) => `[${i + 1}] ${web ? `صفحهٔ وب ${p.source_url}` : `سند #${p.document_id}، صفحه ${p.page ?? '?'}`}\n${clean(p.text, 18000)}`).join('\n\n');
           stage(node.id, `تحلیل ${passages.length} گذرگاه و بررسی نقل‌قول‌ها`);
@@ -173,44 +181,96 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
         const targeted = !web && node.target_document_id
           ? targetedDocumentPassages(principalId, dossierId, node.target_document_id,
             `${root.title} ${node.title} ${node.open_question || ''}`) : null;
-        let passages = targeted ?? (web ? savedSitePassages(principalId, dossierId) : []);
+        let passages = targeted ?? (web ? savedSitePassages(principalId, dossierId)
+          .filter((p) => !partial.reviewedUrls.includes(p.source_url)) : []);
         let assessed = null;
+        let discovered = false;
         if (web && passages.length) {
           stage(node.id, `بررسی منبع ذخیره‌شده پیش از جست‌وجوی تازه: ${passages[0].source_url}`);
           try { assessed = await review(passages); }
           catch (err) { stage(node.id, `بررسی منبع ذخیره‌شده پاسخ نداد؛ جست‌وجوی تازه: ${clean(err.message, 100)}`); }
         }
-        if (!assessed?.findings.length && !targeted) passages = web
+        if ((!assessed?.findings.length || partial.remainingCount || partial.pendingUrls.length) && !targeted) passages = web
           ? await (async () => {
+            discovered = true;
+            const stored = store.sourceCatalogue(principalId, dossierId);
+            const storedUrls = new Set(stored.filter((s) => s.documentId).map((s) => s.url));
+            const queued = partial.pendingUrls.filter((url) => !partial.reviewedUrls.includes(url))
+              .map((url) => stored.find((s) => s.url === url && s.documentId))
+              .filter(Boolean).map((s) => ({ source_url: s.url,
+                source_title: s.title, text: store.documentText(principalId, s.documentId).slice(0, 5500),
+                fromStored: true }));
+            const persistEvidence = (e) => {
+              if (['openalex', 'gutendex'].includes(e.engine) && e.provenance)
+                store.addScholarlyLead({ principalId, dossierId, lead: e });
+              if (e.fullText && e.url) {
+                if (!storedUrls.has(e.url)) {
+                  store.saveCrawledPage({ principalId, dossierId, url: e.url,
+                    title: e.title || e.url, text: e.fullText, chunks: chunksForEvidence(e),
+                    ...(e.via === 'pdf_text' ? { mime: 'text/plain', extraction: 'web_pdf_text' } : {}) });
+                  storedUrls.add(e.url);
+                }
+                if (!partial.pendingUrls.includes(e.url)) partial.pendingUrls.push(e.url);
+                store.updateResearchNode(principalId, node.id, { status: 'running', result: partial });
+                stage(node.id, `منبع ${e.via === 'scrapling' ? 'با مرورگر محلی' : e.via === 'firecrawl' ? 'با Firecrawl' : 'مستقیم'} خوانده و ذخیره شد`);
+              }
+            };
             const found = await discover(node.open_question || node.title, {
               // A subquestion is a goal, not a search query. Plan short terms first.
               plannerModel: modelFor('coordinator'),
               onProgress: (event) => stage(node.id, clean(event.detail ?? event.stage ?? 'پیگیری سرنخ وب', 190)),
+              skipUrls: [...partial.reviewedUrls, ...partial.pendingUrls],
+              shouldContinue: () => !isWanted(principalId) && Date.now() < deadlineAt &&
+                (budget() === null || spendSince(mark).usd < budget()),
+              onEvidence: persistEvidence,
             });
             for (const lead of (found.leads ?? []).filter((x) =>
-              ['openalex', 'crossref', 'openlibrary', 'gutendex'].includes(x.engine)).slice(0, 8))
+              ['openalex', 'crossref', 'openlibrary', 'gutendex'].includes(x.engine)))
               store.addScholarlyLead({ principalId, dossierId, lead });
-            return found.evidence.slice(0, 5).map((e) => {
-            if (['openalex', 'gutendex'].includes(e.engine) && e.provenance)
-              store.addScholarlyLead({ principalId, dossierId, lead: e });
-            if (e.fullText && e.url) {
-              store.saveCrawledPage({ principalId, dossierId, url: e.url,
-                title: e.title || e.url, text: e.fullText, chunks: chunksForEvidence(e),
-                ...(e.via === 'pdf_text' ? { mime: 'text/plain', extraction: 'web_pdf_text' } : {}) });
-              stage(node.id, `منبع ${e.via === 'scrapling' ? 'با مرورگر محلی' : e.via === 'firecrawl' ? 'با Firecrawl' : 'مستقیم'} خوانده و ذخیره شد`);
-            }
-            return { text: e.text, source_url: e.url,
-              source_title: e.title, via: e.via, id: `web-${e.id}` };
-            });
+            for (const e of found.evidence) if (!partial.pendingUrls.includes(e.url)) persistEvidence(e);
+            partial.remainingCount = found.remaining?.length ?? 0;
+            store.updateResearchNode(principalId, node.id, { status: 'running', result: partial });
+            return [...queued, ...found.evidence.map((e) => ({ text: e.text, source_url: e.url,
+              source_title: e.title, via: e.via, id: `web-${e.id}` }))];
           })()
           : await search({ principalId, dossierId, query: node.open_question || node.title,
             limit: 5, includeLinked: true });
         checkpoint(principalId, `زیرنیت ${node.id}`);
-        if (!passages.length && !assessed?.findings.length) {
+        if (!passages.length && !assessed?.findings.length && !partial.findings.length) {
           store.updateResearchNode(principalId, node.id, { status: 'paused',
             openQuestion: web ? 'صفحهٔ وب قابل خواندن پیدا نشد.' : 'در اسناد فعلی شاهد مرتبطی پیدا نشد.',
-            result: { summary: '', findings: [], openQuestions: ['منبع تازه لازم است.'] } });
+            result: { ...partial, openQuestions: ['منبع تازه لازم است.'] } });
           stage(node.id, 'شاهد مرتبط پیدا نشد؛ منتظر منبع یا ادامه');
+          return;
+        }
+        if (web) {
+          if (assessed) {
+            partial.summary = clean(assessed.data?.summary, 2000);
+            partial.findings.push(...assessed.findings);
+            for (const p of savedSitePassages(principalId, dossierId))
+              if (!partial.reviewedUrls.includes(p.source_url)) partial.reviewedUrls.push(p.source_url);
+          }
+          if (discovered || !assessed?.findings.length) for (let start = 0; start < passages.length; start += 4) {
+            if (isWanted(principalId) || Date.now() >= deadlineAt ||
+                (budget() !== null && spendSince(mark).usd >= budget())) break;
+            const batch = passages.slice(start, start + 4);
+            const inspected = await review(batch);
+            partial.findings.push(...inspected.findings);
+            partial.summary = clean([partial.summary, inspected.data?.summary].filter(Boolean).join(' '), 2000);
+            partial.openQuestions = [...new Set([...partial.openQuestions,
+              ...(Array.isArray(inspected.data?.open_questions) ? inspected.data.open_questions : [])])].slice(0, 12);
+            for (const p of batch) if (p.source_url && !partial.reviewedUrls.includes(p.source_url))
+              partial.reviewedUrls.push(p.source_url);
+            partial.pendingUrls = partial.pendingUrls.filter((url) => !partial.reviewedUrls.includes(url));
+            store.updateResearchNode(principalId, node.id, { status: 'running', result: partial });
+            stage(node.id, `${Math.min(start + batch.length, passages.length)} از ${passages.length} صفحه برای مادر بررسی شد`);
+          }
+          const unfinished = partial.pendingUrls.length || partial.remainingCount;
+          store.updateResearchNode(principalId, node.id, { status: unfinished ? 'paused' : 'done',
+            openQuestion: partial.openQuestions[0] || null, result: partial });
+          stage(node.id, unfinished
+            ? `${partial.findings.length} یافته ثبت شد؛ ${unfinished} صفحه برای ادامه محفوظ است`
+            : `${partial.findings.length} یافته با نقل‌قول مطابق ثبت شد؛ داوری تاریخی باقی است`);
           return;
         }
         if (!assessed?.findings.length) assessed = await review(passages);
@@ -223,8 +283,9 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
         stage(node.id, `${findings.length} یافته با نقل‌قول مطابق ثبت شد؛ داوری تاریخی باقی است`);
       } catch (err) {
         const stopped = err instanceof Stopped;
-        store.updateResearchNode(principalId, node.id, { status: stopped ? 'paused' : 'failed',
-          openQuestion: node.open_question || node.title, result: { error: clean(err.message, 200) } });
+        store.updateResearchNode(principalId, node.id, { status: stopped || partial?.pendingUrls.length ? 'paused' : 'failed',
+          openQuestion: node.open_question || node.title,
+          result: { ...(partial ?? {}), error: clean(err.message, 200) } });
         stage(node.id, `${stopped ? 'مکث' : 'خطا'}: ${clean(err.message, 160)}`);
       }
     }));
@@ -291,9 +352,10 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
         error: n.status === 'failed' ? JSON.parse(n.result_json || '{}').error : null }));
       synthesis = (await ask({ model: modelFor('coordinator'), system: MOTHER,
         content: JSON.stringify({ question: root.title, workerStates, leadCandidates,
-          reports: reports.slice(-8).map((r) => ({ question: clean(r.question, 220), report: {
+          reports: reports.map((r) => ({ question: clean(r.question, 220), report: {
             summary: clean(r.report.summary, 450),
-            findings: (r.report.findings ?? []).slice(0, 3).map((f) => ({
+            sourcesExamined: r.report.reviewedUrls?.length ?? 0,
+            findings: (r.report.findings ?? []).map((f) => ({
               text: clean(f.text, 210), quote: clean(f.quote, 170),
               documentId: f.documentId, sourceUrl: f.sourceUrl, page: f.page })),
             openQuestions: (r.report.openQuestions ?? []).slice(0, 3) } })),

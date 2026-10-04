@@ -2274,13 +2274,39 @@ await check('parallel search perspectives reach the source reader fairly', async
     onProgress: (event) => phases.push(event.stage),
     ledger: '# دفترچه\n- سرنخ بعدی: منشأ راوی',
   });
-  if (out.queries.length !== 4 || opened.length !== 8 || out.evidence.length !== 5 ||
+  if (out.queries.length !== 4 || opened.length !== 32 || out.evidence.length !== 32 ||
       !plannerInput.includes('سرنخ بعدی: منشأ راوی') ||
       !opened.some((u) => u.includes(encodeURIComponent('نقد مخالف'))) ||
       !opened.some((u) => u.includes(encodeURIComponent('منشأ راوی'))) ||
       !['plan', 'search', 'fetch'].every((p) => phases.includes(p)))
     throw new Error('a search lane was starved or the live phase was lost');
-  return 'four bounded searches in parallel; contrary and provenance lanes read';
+  return 'four searches in parallel; all 32 direct, contrary and provenance results read';
+});
+
+await check('research reads and cites a source beyond the old five-page cutoff', async () => {
+  const { runResearch } = await import('../src/research.js');
+  const principalId = `wide-research-${Date.now()}`;
+  const dossierId = store.insertDossier({ principalId, topic: 'نه صفحه' });
+  const urls = Array.from({ length: 9 }, (_, i) => `https://example.org/page-${i}`);
+  const quote = 'The ninth page contains the decisive dated record.';
+  let batches = 0;
+  const result = await runResearch({ principalId, dossierId, question: 'کدام سند تاریخ را می‌گوید؟',
+    planner: async () => ({ data: { queries: ['dated record'] }, usage: {} }),
+    search: async () => ({ results: urls.map((url) => ({ url, title: url })), errors: [] }),
+    open: async (url) => ({ ok: true, url, text: `${url === urls[8] ? quote : 'An older unrelated report.'} `.repeat(20) }),
+    compose: async ({ content }) => {
+      batches++;
+      const packet = JSON.parse(content);
+      return { data: { summary: 'خوانده شد', claims: packet.sources.some((s) => s.id === 8)
+        ? [{ text: 'سند نهم تاریخ را ثبت می‌کند', source_id: 8, quote }] : [] }, usage: {} };
+    },
+    verify: async ({ sourceUrl }) => ({ status: sourceUrl === urls[8] ? 'verified' : 'found',
+      method: 'source_fetched_quote_matched', reason: 'matched', note: 'matched' }),
+    judge: async (rows) => ({ rows, usage: {} }),
+  });
+  if (batches !== 3 || result.output.verified[0]?.sourceUrl !== urls[8])
+    throw new Error('a later analysis batch was omitted or cited the wrong source');
+  return 'nine fetched pages analysed in three batches; the ninth kept its real URL';
 });
 
 await check('live progress names real phases, keeps stop visible, and closes', async () => {

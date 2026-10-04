@@ -87,7 +87,13 @@ node scripts/probe-web-search.js "Mithraism Roman Iranian origins"
 
 Each web round now plans bounded parallel searches for direct evidence, contrary
 accounts and source attribution. Results from the lanes are interleaved before
-opening pages so one lane cannot consume the entire reading budget. This uses one
+opening pages so one lane cannot consume the entire reading budget. Every readable
+result returned by the search providers is tried in small network batches, and
+each saved page is passed to the research worker in a small analysis batch. There
+is no fixed eight-page fetch or five-source worker cutoff. A stop, the configured
+cost ceiling, or the research run's time limit can still pause the remaining
+results; saved pages and worker progress are kept for resume. Search providers
+can themselves return only a finite result set or block access to a page. This uses one
 planning model call; it does not pretend that three independent agents verified the
 answer. The Telegram status card shows the current phase, elapsed time and stop
 control. Its bar counts phases, not the percentage of unknown work remaining.

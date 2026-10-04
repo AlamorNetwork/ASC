@@ -84,8 +84,8 @@ function excerpt(text, query, limit = 5500) {
 export async function discoverEvidence(question, {
   ask = chatJson, search = searchWeb, open = fetchSourceText,
   openEnhanced = openResearchPage,
-  enhancedLimit = config.webExtraction.fallback.length ? 1 : 0,
-  onProgress, ledger = '',
+  enhancedLimit = config.webExtraction.fallback.length ? Infinity : 0,
+  onProgress, onEvidence, shouldContinue = () => true, skipUrls = [], ledger = '',
   plannerModel = modelFor('structure'),
 } = {}) {
   const progress = (stage, detail) => onProgress?.({ stage, detail });
@@ -104,7 +104,7 @@ export async function discoverEvidence(question, {
     progress('plan', `برنامه‌ریزی پاسخ نداد؛ با خود سؤال می‌گردم: ${err.message}`);
   }
   progress('search', `${queries.length} مسیر جست‌وجو: ${queries.join(' · ')}`);
-  const searches = await Promise.allSettled(queries.map((q) => search(q, { limit: 8 })));
+  const searches = await Promise.allSettled(queries.map((q) => search(q)));
   const lanes = [];
   const errors = [];
   for (const result of searches) {
@@ -112,47 +112,59 @@ export async function discoverEvidence(question, {
     errors.push(...(result.value.errors ?? []));
     lanes.push(result.value.results ?? []);
   }
-  // Interleave search perspectives so a large first-result page cannot crowd out
-  // the contrary or provenance lane before the eight-page fetch limit.
+  // Interleave perspectives so direct, contrary and provenance searches all get read.
   const leads = [], seenUrls = new Set();
-  for (let i = 0; i < 8; i++) for (const lane of lanes) {
+  for (let i = 0; i < Math.max(0, ...lanes.map((lane) => lane.length)); i++) for (const lane of lanes) {
     const r = lane[i];
     if (r?.url && !seenUrls.has(r.url)) { seenUrls.add(r.url); leads.push(r); }
   }
-  const readable = leads.filter((lead) => !lead.metadataOnly);
-  progress('fetch', `${leads.length} سرنخ؛ در حال بازکردن حداکثر ۸ متن قابل‌دسترسی…`);
-  const fetched = await Promise.allSettled(readable.slice(0, 8).map(async (lead) => {
-    let page = await open(lead.url);
-    if ((!page.ok || !page.text || page.text.length < 250) && lead.alternateUrl) {
-      const alternate = await open(lead.alternateUrl);
-      if (alternate.ok && alternate.text?.length >= 250)
-        return { lead: { ...lead, url: lead.alternateUrl }, page: alternate };
-    }
-    return { lead, page };
-  }));
+  const skipped = new Set(skipUrls);
+  const readable = leads.filter((lead) => !lead.metadataOnly && !skipped.has(lead.url));
+  progress('fetch', `${readable.length} صفحهٔ تازه برای خواندن پیدا شد`);
   const evidence = [];
   const unread = [];
-  for (let i = 0; i < fetched.length; i++) {
-    const result = fetched[i];
-    if (result.status === 'rejected') {
-      unread.push(readable[i]);
-      errors.push(result.reason?.message ?? 'fetch failed');
-      continue;
+  let next = 0;
+  const save = async (lead, page) => {
+    const found = { id: evidence.length, url: page.url ?? lead.url,
+      title: lead.title, engine: lead.engine, provenance: lead.provenance ?? null,
+      text: excerpt(page.text, queries.join(' ')), fullText: page.text, via: page.via || 'direct' };
+    evidence.push(found);
+    await onEvidence?.(found);
+  };
+  while (next < readable.length && shouldContinue()) {
+    // Four network calls at a time keep memory and the shared server responsive.
+    const batch = readable.slice(next, next + 4);
+    const fetched = await Promise.allSettled(batch.map(async (lead) => {
+      let page = await open(lead.url);
+      if ((!page.ok || !page.text || page.text.length < 250) && lead.alternateUrl) {
+        const alternate = await open(lead.alternateUrl);
+        if (alternate.ok && alternate.text?.length >= 250)
+          return { lead: { ...lead, url: lead.alternateUrl }, page: alternate };
+      }
+      return { lead, page };
+    }));
+    for (let i = 0; i < batch.length; i++) {
+      const result = fetched[i];
+      if (result.status === 'rejected') {
+        unread.push(batch[i]);
+        errors.push(result.reason?.message ?? 'fetch failed');
+        continue;
+      }
+      const { lead, page } = result.value;
+      if (!page.ok || !page.text || page.text.length < 250) {
+        unread.push(lead);
+        errors.push(`${lead.url}: ${page.error ?? 'no readable page text'}`);
+        continue;
+      }
+      await save(lead, page);
     }
-    const { lead, page } = result.value;
-    if (!page.ok || !page.text || page.text.length < 250) {
-      unread.push(lead);
-      errors.push(`${lead.url}: ${page.error ?? 'no readable page text'}`);
-      continue;
-    }
-    evidence.push({ id: evidence.length, url: page.url ?? lead.url,
-      title: lead.title, engine: lead.engine,
-      provenance: lead.provenance ?? null,
-      text: excerpt(page.text, queries.join(' ')), fullText: page.text, via: page.via || 'direct' });
-    if (evidence.length >= 5) break;
+    next += batch.length;
+    progress('fetch', `${next} از ${readable.length} نتیجه بررسی شد؛ ${evidence.length} صفحه خوانده شد`);
   }
-  for (const lead of unread.slice(0, Math.max(0, Math.min(1, enhancedLimit)))) {
-    if (evidence.length >= 5) break;
+  let browserAttempts = 0;
+  for (const lead of unread) {
+    if (!shouldContinue() || browserAttempts >= enhancedLimit) break;
+    browserAttempts++;
     progress('fetch', `عامل وب: تلاش مرورگری برای ${lead.url}`);
     try {
       const page = await openEnhanced(lead.url);
@@ -160,15 +172,12 @@ export async function discoverEvidence(question, {
         errors.push(`${lead.url}: ${page.error || 'browser returned no readable text'}`);
         continue;
       }
-      evidence.push({ id: evidence.length, url: page.url ?? lead.url,
-        title: lead.title, engine: lead.engine,
-        provenance: lead.provenance ?? null,
-        text: excerpt(page.text, queries.join(' ')), fullText: page.text,
-        via: page.via || 'browser' });
+      await save(lead, page);
     } catch (error) { errors.push(`${lead.url}: ${error.message}`); }
   }
-  progress('fetch', `${evidence.length} صفحه خوانده شد${errors.length ? ` · ${errors.length} خطا/محدودیت` : ''}`);
-  return { evidence, leads: leads.slice(0, 16), errors, queries, usage };
+  const remaining = readable.slice(next);
+  progress('fetch', `${evidence.length} صفحه خوانده شد${remaining.length ? ` · ${remaining.length} صفحه باقی ماند` : ''}${errors.length ? ` · ${errors.length} خطا/محدودیت` : ''}`);
+  return { evidence, leads, remaining, unread, errors, queries, usage };
 }
 
 /**
@@ -223,9 +232,11 @@ export async function runResearch({
       } catch (err) { spend(err.usage ?? {}); throw err; }
     } else {
       const discovery = await discoverEvidence(question || topic,
-        { ask: planner, search, open, onProgress, ledger: priorLedger });
+        { ask: planner, search, open, onProgress, ledger: priorLedger,
+          shouldContinue: () => !isWanted(principalId) &&
+            (budget() === null || costUsd < budget()) });
       for (const lead of (discovery.leads ?? []).filter((x) =>
-        ['openalex', 'crossref', 'openlibrary', 'gutendex'].includes(x.engine)).slice(0, 8))
+        ['openalex', 'crossref', 'openlibrary', 'gutendex'].includes(x.engine)))
         store.addScholarlyLead({ principalId, dossierId, lead });
       for (const source of discovery.evidence.filter((x) =>
         ['openalex', 'gutendex'].includes(x.engine) && x.provenance))
@@ -249,14 +260,33 @@ export async function runResearch({
             : 'سقف هزینه پس از جست‌وجو رسید؛ تحلیل منابع انجام نشد.'],
           source_quality_note: discovery.errors.slice(0, 3).join(' | ') }, usage: {} };
       } else {
-        try {
-          onProgress?.({ stage: 'analyse', detail: `در حال خواندن و مقایسهٔ ${sources.length} منبع…` });
-          gathered = await compose({ model: model ?? modelFor('structure'),
-            system: EVIDENCE_SYSTEM,
-            content: JSON.stringify({ question, topic,
-              sources: sources.map(({ id, title, url, engine, text }) => ({ id, title, url, engine, text })) }),
-            maxTokens: 2800, noThinking: false });
-        } catch (err) { spend(err.usage ?? {}); throw err; }
+        const combined = { summary: '', claims: [], hypotheses: [], people_to_check: [],
+          disputes: [], open_questions: [], source_quality_note: null };
+        let analysed = 0;
+        for (let start = 0; start < sources.length; start += 4) {
+          if (isWanted(principalId) || (budget() !== null && costUsd >= budget())) break;
+          const batch = sources.slice(start, start + 4);
+          onProgress?.({ stage: 'analyse',
+            detail: `در حال تحلیل منابع ${start + 1} تا ${start + batch.length} از ${sources.length}…` });
+          let answer;
+          try {
+            answer = await compose({ model: model ?? modelFor('structure'),
+              system: EVIDENCE_SYSTEM,
+              content: JSON.stringify({ question, topic,
+                sources: batch.map(({ id, title, url, engine, text }) => ({ id, title, url, engine, text })) }),
+              maxTokens: 2800, noThinking: false });
+          } catch (err) { spend(err.usage ?? {}); throw err; }
+          spend(answer.usage ?? {});
+          const part = answer.data ?? {};
+          combined.summary = [combined.summary, part.summary].filter(Boolean).join(' ').slice(0, 2500);
+          for (const field of ['claims', 'hypotheses', 'people_to_check', 'disputes', 'open_questions'])
+            if (Array.isArray(part[field])) combined[field].push(...part[field]);
+          if (part.source_quality_note) combined.source_quality_note = part.source_quality_note;
+          analysed += batch.length;
+        }
+        if (analysed < sources.length)
+          combined.open_questions.push(`${sources.length - analysed} منبع خوانده و ذخیره شد، اما به‌علت توقف یا سقف هزینه هنوز تحلیل نشده است.`);
+        gathered = { data: combined, usage: {} };
       }
     }
     spend(gathered.usage);
