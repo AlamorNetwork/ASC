@@ -9,6 +9,7 @@ import { modelFor } from './settings.js';
 import { checkpoint } from './cancel.js';
 import { verifyAgainstText } from './verify.js';
 import { refreshResearchLedger } from './research-ledger.js';
+import { refreshLibraryIndex } from './book-library.js';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 const plain = (value, max = 800) => String(value ?? '').replace(/[\u0000-\u001f]+/g, ' ')
@@ -218,6 +219,8 @@ export async function analyzeDocument({ principalId, documentId, onProgress, ask
   }
   const file = saveReport(principalId, doc, completed, synthesis, plan.length);
   refreshResearchLedger(principalId, doc.dossier_id);
+  if (doc.kind === 'pdf') try { refreshLibraryIndex(principalId); }
+  catch (err) { console.warn('[library] index update failed:', err.message); }
   return { dossierId: doc.dossier_id, documentId: doc.id, sections: completed.length,
     pagesRead: doc.read_pages ?? doc.pages, totalPages: doc.pages, file };
 }

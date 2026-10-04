@@ -17,12 +17,17 @@ import { gateClaims } from './support.js';
 import { extractPdf, pdftotextAvailable, estimateVisionTokens, renderPages, scannedPages, pageNeedsVision } from './pdf.js';
 import { chunkText, embedPending } from './chunks.js';
 import * as store from './db.js';
+import { refreshLibraryIndex } from './book-library.js';
 import { MAX_DOCUMENT_BYTES } from './file-limits.js';
 import { checkpoint } from './cancel.js';
 
 // The hosted Telegram API has its own 20 MB download ceiling. A local Bot API
 // server removes that limit; keep an application limit to bound memory use.
 export const MAX_BYTES = MAX_DOCUMENT_BYTES;
+const updateBookIndex = (principalId) => {
+  try { refreshLibraryIndex(principalId); }
+  catch (err) { console.warn('[library] index update failed:', err.message); }
+};
 
 const TEXT_EXT = /\.(txt|md|markdown|csv|tsv|json|log|ya?ml|html?|xml|srt|vtt)$/i;
 const IMAGE_MIME = /^image\/(jpeg|png|webp|gif|heic|heif)$/i;
@@ -336,8 +341,10 @@ export async function ingestScannedPages({
   } catch (err) {
     const saved = store.getDocument(principalId, documentId)?.read_pages ?? 0;
     err.savedScan = { documentId, readPages: saved, pages };
+    updateBookIndex(principalId);
     throw err;
   }
+  updateBookIndex(principalId);
   return {
     documentId, text: perPage.join('\n\n'), perPage, pages,
     readPages: store.getDocument(principalId, documentId).read_pages,
@@ -365,6 +372,7 @@ export function ingestGoogleOcrPages({ principalId, dossierId, buffer, filename,
     chunks += parts.length;
     onProgress?.(`متن Google: صفحه ${i + 1} از ${pages.length} ذخیره شد`);
   }
+  updateBookIndex(principalId);
   return { documentId, pages: pages.length, readPages: pages.length, chunks,
     extraction: prior?.extraction || 'google_document_ai_ocr', claimsDeferred: true,
     embedded: 0, costKnown: false };
@@ -406,6 +414,7 @@ export async function ingestToDossier({
           costToman += e.costToman;
         } catch (err) { console.warn('[ingest] embedding failed:', err.message); }
       }
+      updateBookIndex(principalId);
       // The long structure call used to stall a successful scan at "extracting claims".
       // Reading the book and producing claims are separate paid jobs; /claims runs later
       // from the stored chunks without sending any page through vision again.
@@ -449,6 +458,7 @@ export async function ingestToDossier({
     for (const c of chunkText(extracted.text)) rows.push({ seq: seq++, page: null, text: c });
   }
   store.insertChunks(principalId, dossierId, documentId, rows);
+  if (kind === 'pdf') updateBookIndex(principalId);
 
   let embedded = 0;
   if (rows.length && !localOnly) {

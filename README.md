@@ -226,6 +226,22 @@ An existing
 document's **Deep analysis** button analyzes all its stored text; this is separate
 from crawling and can incur model charges.
 
+### Book library
+
+Uploaded PDFs form an owner-scoped library across dossiers. Each book has a
+numeric ID; copies with the same SHA-256 share the ID of the first uploaded
+copy. The library searches filenames, analyzed section topics, summaries, and
+stored text. The mother can search the library, then request a page or up to
+four short passages by book ID. It sees a small catalogue in each turn, not the
+entire book. Text and page-specific quotes remain necessary for evidence;
+model-generated summaries are only navigation hints.
+
+The generated index is `data/asc-ledgers/<principal-id>/library.md` when the
+database is `data/asc.db`. It updates after PDF import and deep analysis, and
+is rebuilt on a library read. The SQLite database remains authoritative; keep
+it when migrating servers. Check this path for another database name with
+`node scripts/check-library.js` (free, no model calls).
+
 Optional source consultation uses one OpenRouter completion with the Perplexity web
 search tool. Add OpenRouter as a direct provider, then set
 `/model consult MODEL@openrouter` in Telegram. The web button asks before the call.
