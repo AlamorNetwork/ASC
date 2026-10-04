@@ -1,7 +1,7 @@
 /** A fetched scholarly PDF must yield actual text, never a DOI abstract. No model calls. */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { pdftotextAvailable } from '../src/pdf.js';
+import { pdftotextAvailable, extractPdf } from '../src/pdf.js';
 import { verifyClaim } from '../src/verify.js';
 
 if (!await pdftotextAvailable()) {
@@ -9,8 +9,9 @@ if (!await pdftotextAvailable()) {
   process.exit(0);
 }
 
-function makePdf(line) {
-  const content = `BT /F1 10 Tf 40 700 Td (${line.replace(/[()\\]/g, '\\$&')}) Tj ET`;
+function makePdf(lines) {
+  const content = lines.map((line, i) =>
+    `BT /F1 10 Tf 40 ${700 - i * 22} Td (${line.replace(/[()\\]/g, '\\$&')}) Tj ET`).join('\n');
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -32,7 +33,12 @@ function makePdf(line) {
 }
 
 const quote = 'The House of Diana occupied rooms on the ground floor.';
-const body = makePdf(`${quote} This is a deliberately long test passage about source verification. `.repeat(5));
+const body = makePdf([quote,
+  ...Array.from({ length: 8 }, (_, i) =>
+    `Line ${i + 1} gives a separate readable observation about the site.`)]);
+const extracted = await extractPdf(body);
+assert.ok(extracted.text.includes(quote), 'test PDF lost its quoted line during extraction');
+assert.ok(extracted.text.length > 250, 'test PDF has too little readable text');
 const server = createServer((_req, res) => {
   res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': body.length });
   res.end(body);
@@ -41,6 +47,6 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 try {
   const result = await verifyClaim({ sourceUrl: `http://127.0.0.1:${server.address().port}/study.pdf`,
     quote, allowPrivate: true });
-  assert.equal(result.status, 'verified');
+  assert.equal(result.status, 'verified', JSON.stringify(result));
   console.log('scholarly PDF check passed — downloaded text-layer PDF, exact quote matched; 0 model calls');
 } finally { server.close(); }

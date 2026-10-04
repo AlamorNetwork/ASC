@@ -21,8 +21,9 @@ export async function pdftotextAvailable() {
   try {
     await run('pdftotext', ['-v'], { timeout: 5000 });
     available = true;
-  } catch {
-    available = false;
+  } catch (err) {
+    // Xpdf prints a valid version and exits 1 for -v; Poppler exits 0.
+    available = /pdftotext version/i.test(`${err.stdout ?? ''} ${err.stderr ?? ''}`);
   }
   return available;
 }
