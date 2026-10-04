@@ -188,10 +188,10 @@ export async function runResearchTeam({ principalId, dossierId, nodeId, onProgre
               onProgress: (event) => stage(node.id, clean(event.detail ?? event.stage ?? 'پیگیری سرنخ وب', 190)),
             });
             for (const lead of (found.leads ?? []).filter((x) =>
-              ['openalex', 'crossref'].includes(x.engine)).slice(0, 8))
+              ['openalex', 'crossref', 'openlibrary', 'gutendex'].includes(x.engine)).slice(0, 8))
               store.addScholarlyLead({ principalId, dossierId, lead });
             return found.evidence.slice(0, 5).map((e) => {
-            if (e.engine === 'openalex' && e.provenance)
+            if (['openalex', 'gutendex'].includes(e.engine) && e.provenance)
               store.addScholarlyLead({ principalId, dossierId, lead: e });
             if (e.fullText && e.url) {
               store.saveCrawledPage({ principalId, dossierId, url: e.url,

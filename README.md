@@ -75,6 +75,12 @@ unresolved rather than becoming verified. `MODEL_RESEARCH` is retained for the
 legacy model comparison script; ordinary bot research does not need an `:online`
 model. Check outbound access without model charges with:
 
+Book-oriented queries also consult Open Library for work and edition metadata,
+and Gutendex for public-domain ebook text. Open Library records stay unread leads;
+Gutendex text is eligible as evidence only after ASC fetches it and matches a
+quote. These public APIs need no additional key, and are not called for ordinary
+non-book queries.
+
 ```
 node scripts/probe-web-search.js "Mithraism Roman Iranian origins"
 ```

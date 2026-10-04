@@ -105,13 +105,55 @@ async function openalex(query, limit, fetcher) {
   }).filter((r) => /^https?:\/\//i.test(r.url));
 }
 
+const bookIntent = (query) => /(?:\b(?:book|books|ebook|edition|manuscript|volume|gutenberg)\b|کتاب|نسخه|دست‌?نویس|مخطوط|چاپ)/iu.test(query);
+const bookQuery = (query) => query.replace(/\b(?:books?|ebooks?|editions?|manuscripts?|volumes?|gutenberg)\b|کتاب|نسخه|دست‌?نویس|مخطوط|چاپ/giu, ' ').trim() || query;
+
+/** Open Library identifies a book; its catalogue page is not the book text. */
+async function openLibrary(query, limit, fetcher) {
+  const url = new URL('https://openlibrary.org/search.json');
+  url.search = new URLSearchParams({ q: bookQuery(query), limit: String(Math.min(limit, 5)),
+    fields: 'key,title,author_name,first_publish_year,has_fulltext,ia' }).toString();
+  const res = await fetcher(url, { headers: HEADERS, signal: AbortSignal.timeout(12000) });
+  if (!res.ok) throw new Error(`Open Library HTTP ${res.status}`);
+  const data = await res.json();
+  return (data.docs ?? []).filter((r) => /^\/?works\/OL\d+W$/.test(r.key ?? '') && r.title)
+    .map((r) => ({ title: r.title, url: `https://openlibrary.org/${r.key.replace(/^\//, '')}`,
+      snippet: (r.author_name ?? []).slice(0, 2).join(', '), engine: 'openlibrary',
+      metadataOnly: true, provenance: { workId: r.key, authors: (r.author_name ?? []).slice(0, 8),
+        year: r.first_publish_year ?? null, archiveIds: (r.ia ?? []).slice(0, 3),
+        hasFullText: !!r.has_fulltext, kind: 'book_catalogue' } }));
+}
+
+/** Gutenberg's actual HTML/plain-text edition can be fetched and quote-checked. */
+async function gutendex(query, limit, fetcher) {
+  const url = new URL('https://gutendex.com/books');
+  url.search = new URLSearchParams({ search: bookQuery(query) }).toString();
+  const res = await fetcher(url, { headers: HEADERS, signal: AbortSignal.timeout(7000) });
+  if (!res.ok) throw new Error(`Gutendex HTTP ${res.status}`);
+  const data = await res.json();
+  return (data.results ?? []).slice(0, limit).map((r) => {
+    const formats = Object.entries(r.formats ?? {});
+    const fullText = formats.find(([mime, href]) => /^text\/html/i.test(mime) && /^https:\/\//i.test(href))?.[1]
+      || formats.find(([mime, href]) => /^text\/plain/i.test(mime) && /^https:\/\//i.test(href))?.[1];
+    return { title: r.title, url: fullText || `https://www.gutenberg.org/ebooks/${r.id}`,
+      snippet: (r.authors ?? []).map((a) => a.name).slice(0, 2).join(', '),
+      engine: 'gutendex', metadataOnly: !fullText,
+      provenance: { bookId: r.id, authors: (r.authors ?? []).map((a) => a.name).slice(0, 8),
+        language: (r.languages ?? []).slice(0, 3), copyright: r.copyright,
+        kind: 'gutenberg_ebook' } };
+  }).filter((r) => r.title && /^https:\/\//i.test(r.url));
+}
+
 export async function searchWeb(query, { limit = 8, fetcher = fetch } = {}) {
   const clean = String(query ?? '').trim().slice(0, 250);
   if (!clean) return { results: [], errors: ['empty query'] };
   const results = [], errors = [];
   // Crossref DOI landing pages are often paywalled or unreachable; keep a couple
   // of directly readable encyclopedia leads ahead of them.
-  for (const [engine, quota] of [[bing, 3], [openalex, 3], [wikipedia, 2], [crossref, 2]]) {
+  const engines = bookIntent(clean)
+    ? [[bing, 2], [openalex, 2], [gutendex, 1], [openLibrary, 1], [wikipedia, 1], [crossref, 1]]
+    : [[bing, 3], [openalex, 3], [wikipedia, 2], [crossref, 2]];
+  for (const [engine, quota] of engines) {
     try {
       const found = await engine(clean, Math.min(quota, limit - results.length), fetcher);
       for (const r of found) if (!results.some((x) => x.url === r.url)) results.push(r);

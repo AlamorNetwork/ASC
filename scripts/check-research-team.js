@@ -19,6 +19,14 @@ try {
   const beforeRead = store.sourceCatalogue(pid, dossierId).find((s) => s.url === scholarlyUrl);
   if (beforeRead?.analysisStatus !== 'candidate' || beforeRead.provenance?.authors[0] !== 'Scholar A')
     throw new Error('scholarly discovery did not preserve bibliographic provenance as an unread lead');
+  store.addScholarlyLead({ principalId: pid, dossierId, lead: {
+    engine: 'openlibrary', title: 'A book catalogue', url: 'https://openlibrary.org/works/OL123W',
+    metadataOnly: true, provenance: { authors: ['Book Author'], year: 1900 },
+  } });
+  if (!store.sourceCatalogue(pid, dossierId).some((s) =>
+    s.url === 'https://openlibrary.org/works/OL123W' &&
+    s.sourceStatus === 'candidate' && s.provenance?.authors[0] === 'Book Author'))
+    throw new Error('book catalogue entry was not kept as an unread, attributed lead');
   store.saveCrawledPage({ principalId: pid, dossierId, url: scholarlyUrl,
     title: 'Open study', text: 'A readable study. '.repeat(20), chunks: ['A readable study. '.repeat(20)] });
   const afterRead = store.sourceCatalogue(pid, dossierId).find((s) => s.url === scholarlyUrl);

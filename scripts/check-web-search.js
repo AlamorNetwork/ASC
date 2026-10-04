@@ -17,6 +17,15 @@ const fetcher = async (url, options) => {
   if (u.includes('crossref.org')) return reply({ message: { items: [
     { title: ['مدیریت تدارکات با الگوریتم ترکیبی'], URL: 'https://doi.org/10.1234/unrelated' },
   ] } });
+  if (u.includes('gutendex.com/books')) return reply({ results: [
+    { id: 713, title: 'The Cult of Mithras', authors: [{ name: 'Researcher, A.' }],
+      languages: ['en'], copyright: false,
+      formats: { 'text/html; charset=utf-8': 'https://www.gutenberg.org/cache/epub/713/pg713-images.html' } },
+  ] });
+  if (u.includes('openlibrary.org/search.json')) return reply({ docs: [
+    { key: '/works/OL123W', title: 'The Cult of Mithras', author_name: ['Scholar B'],
+      first_publish_year: 1900, has_fulltext: false },
+  ] });
   if (u.includes('api.openalex.org')) return reply({ results: u.includes('Mithraeum') ? [
     { id: 'https://openalex.org/W123', title: 'Mithraeum of Dura-Europos',
       doi: 'https://doi.org/10.1234/mithraeum', publication_year: 2020,
@@ -40,6 +49,11 @@ assert.equal(openCopy?.provenance?.authors[0], 'Scholar A');
 assert(named.results.some((r) => r.engine === 'openalex' && r.metadataOnly));
 assert(named.results.some((r) => r.title.includes('DOI landing') && r.metadataOnly));
 assert(!named.results.some((r) => r.engine === 'crossref'));
+const books = await searchWeb('The Cult of Mithras book', { fetcher });
+assert.equal(books.results.find((r) => r.engine === 'gutendex')?.metadataOnly, false);
+assert.match(books.results.find((r) => r.engine === 'gutendex')?.url || '', /pg713-images\.html/);
+assert.equal(books.results.find((r) => r.engine === 'openlibrary')?.metadataOnly, true);
+assert.equal(books.results.find((r) => r.engine === 'openlibrary')?.provenance?.authors[0], 'Scholar B');
 const persian = await searchWeb('آیا همهٔ مهرابه‌های رومی زیرزمینی بودند؟ یک نمونهٔ مستند خلاف آن پیدا کن', { fetcher });
 assert.equal(persian.results.length, 0);
 assert(persian.errors.some((e) => e.includes('did not mention')));

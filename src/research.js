@@ -225,9 +225,10 @@ export async function runResearch({
       const discovery = await discoverEvidence(question || topic,
         { ask: planner, search, open, onProgress, ledger: priorLedger });
       for (const lead of (discovery.leads ?? []).filter((x) =>
-        ['openalex', 'crossref'].includes(x.engine)).slice(0, 8))
+        ['openalex', 'crossref', 'openlibrary', 'gutendex'].includes(x.engine)).slice(0, 8))
         store.addScholarlyLead({ principalId, dossierId, lead });
-      for (const source of discovery.evidence.filter((x) => x.engine === 'openalex' && x.provenance))
+      for (const source of discovery.evidence.filter((x) =>
+        ['openalex', 'gutendex'].includes(x.engine) && x.provenance))
         store.addScholarlyLead({ principalId, dossierId, lead: source });
       for (const source of discovery.evidence.filter((x) => x.fullText && x.url)) {
         const chunks = source.via === 'pdf_text'

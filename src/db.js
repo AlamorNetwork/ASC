@@ -764,7 +764,8 @@ export function sourceCatalogue(principalId, dossierId) {
 /** Bibliographic records are leads until their actual full text is read. */
 export function addScholarlyLead({ principalId, dossierId, lead }) {
   if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
-  if (!['openalex', 'crossref'].includes(lead.engine) || !/^https?:\/\//i.test(lead.url)) return;
+  if (!['openalex', 'crossref', 'openlibrary', 'gutendex'].includes(lead.engine) ||
+      !/^https?:\/\//i.test(lead.url)) return;
   const metadata = JSON.stringify({ catalogue: lead.engine, metadataOnly: !!lead.metadataOnly,
     ...(lead.provenance ?? {}) }).slice(0, 4000);
   db.prepare(`INSERT INTO source_library
