@@ -71,7 +71,7 @@ function render(data) {
     try {
       const id = Number(button.dataset.case);
       await api('/api/select-dossier', { method:'POST', json:{ dossierId:id } });
-      selected = id; freshCase = false; $('rail').classList.remove('open'); $('mobile-menu').setAttribute('aria-expanded', 'false'); await refresh(); $('prompt').focus();
+      selected = id; freshCase = false; closePanels(); await refresh(); $('prompt').focus();
     } catch(e) { fail(e); }
   };
   $('breadcrumb').textContent = selected ? data.selected?.topic || 'پرونده' : 'گفت‌وگوی تازه';
@@ -445,24 +445,56 @@ $('login-form').onsubmit = async (e) => { e.preventDefault(); $('login-error').t
   catch(err){ $('login-error').textContent = err.message; } };
 $('logout').onclick = async () => { await api('/api/logout', { method:'POST' }).catch(() => {}); csrf=''; displayAuth(false); };
 $('refresh').onclick = () => refresh().catch(fail);
-$('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; document.querySelector('.conversation').classList.remove('has-messages'); $('breadcrumb').textContent='گفت‌وگوی تازه'; $('rail').classList.remove('open'); $('mobile-menu').setAttribute('aria-expanded', 'false'); refresh().then(() => $('prompt').focus()).catch(fail); };
+$('new-case').onclick = () => { selected=null; freshCase=true; $('messages').innerHTML=''; document.querySelector('.conversation').classList.remove('has-messages'); $('breadcrumb').textContent='گفت‌وگوی تازه'; closePanels(); activateInspectorTab('live'); refresh().then(() => $('prompt').focus()).catch(fail); };
+function activateInspectorTab(name, focus = false) {
+  for (const tab of document.querySelectorAll('[data-inspector-tab]')) {
+    const active = tab.dataset.inspectorTab === name;
+    tab.setAttribute('aria-selected', String(active));
+    tab.tabIndex = active ? 0 : -1;
+    $(`inspector-panel-${tab.dataset.inspectorTab}`).hidden = !active;
+    if (active && focus) tab.focus();
+  }
+  $('inspector').scrollTop = 0;
+}
+for (const tab of document.querySelectorAll('[data-inspector-tab]')) {
+  tab.onclick = () => activateInspectorTab(tab.dataset.inspectorTab);
+  tab.onkeydown = (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const names = ['live', 'sources', 'evidence'];
+    const current = names.indexOf(tab.dataset.inspectorTab);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? names.length - 1
+      : (current + (event.key === 'ArrowLeft' ? 1 : -1) + names.length) % names.length;
+    activateInspectorTab(names[next], true);
+  };
+}
+function closePanels() {
+  $('rail').classList.remove('open');
+  $('inspector').classList.remove('open');
+  document.querySelector('.main').inert = false;
+  document.querySelector('.topbar').inert = false;
+  document.querySelector('.conversation').inert = false;
+  $('rail').inert = false;
+  $('mobile-menu').setAttribute('aria-expanded', 'false');
+  $('mobile-dossier').setAttribute('aria-expanded', 'false');
+  $('panel-backdrop').hidden = true;
+}
+$('panel-backdrop').onclick = closePanels;
 $('mobile-dossier').onclick = () => {
-  const workspace = document.querySelector('.workspace');
-  const atDossier = workspace.scrollTop > workspace.clientHeight * .45;
-  const inspector = document.querySelector('.inspector');
-  const inspectorTop = workspace.scrollTop + inspector.getBoundingClientRect().top - workspace.getBoundingClientRect().top;
-  workspace.scrollTo({ top: atDossier ? 0 : inspectorTop, behavior: 'smooth' });
+  const open = !$('inspector').classList.contains('open');
+  closePanels();
+  if (open) { $('inspector').classList.add('open'); $('mobile-dossier').setAttribute('aria-expanded', 'true'); $('panel-backdrop').hidden = false; $('rail').inert = true; document.querySelector('.topbar').inert = true; document.querySelector('.conversation').inert = true; document.querySelector('[data-inspector-tab][aria-selected="true"]').focus(); }
 };
 $('mobile-menu').onclick = () => {
-  const open = $('rail').classList.toggle('open');
-  $('mobile-menu').setAttribute('aria-expanded', String(open));
-  if (open) $('new-case').focus();
+  const open = !$('rail').classList.contains('open');
+  closePanels();
+  if (open) { $('rail').classList.add('open'); $('mobile-menu').setAttribute('aria-expanded', 'true'); $('panel-backdrop').hidden = false; document.querySelector('.main').inert = true; $('new-case').focus(); }
 };
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && $('rail').classList.contains('open')) {
-    $('rail').classList.remove('open');
-    $('mobile-menu').setAttribute('aria-expanded', 'false');
-    $('mobile-menu').focus();
+  if (event.key === 'Escape' && ($('rail').classList.contains('open') || $('inspector').classList.contains('open'))) {
+    const wasRail = $('rail').classList.contains('open');
+    closePanels();
+    $(wasRail ? 'mobile-menu' : 'mobile-dossier').focus();
   }
 });
 for (const [id, value] of [['tab-chat','chat'],['tab-deep','deep']]) $(id).onclick = () => {

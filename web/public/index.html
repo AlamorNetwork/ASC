@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#101a29">
+  <meta name="theme-color" content="#060a08">
+  <meta name="description" content="فضای خصوصی پژوهش ASC برای گفت‌وگو، بررسی منابع و پیگیری شاهدها.">
   <title>ASC · اطلس پژوهش</title>
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+  <a class="skip-link" href="#workspace-main">رفتن به گفت‌وگو</a>
   <section id="login" class="login-shell">
     <div class="login-art" aria-hidden="true"><div class="art-index">ASC / RESEARCH ATLAS<br>FIELD NOTES · 01—∞</div><div class="art-caption">هر سرنخ، نقطه‌ای برای پرسش بعدی.</div></div>
     <div class="login-card">
@@ -36,11 +38,11 @@
       <div class="rail-bottom"><div class="rail-note">از یک پرسش آغاز کن. مسیر هر تحقیق اینجا می‌ماند.</div><div class="signal"><i></i> فضای پژوهش آماده است</div><button id="logout" class="text-button">خروج امن ↗</button></div>
     </aside>
 
-    <main class="main">
+    <main id="workspace-main" class="main">
       <header class="topbar">
         <button id="mobile-menu" class="icon-button" aria-label="فهرست پرونده‌ها" aria-controls="rail" aria-expanded="false">☰</button>
         <div class="topbar-title"><div class="eyebrow">WORKSPACE / پروندهٔ فعال</div><div id="breadcrumb" class="breadcrumb">گفت‌وگوی تازه</div></div>
-        <div class="top-actions"><span id="activity-signal" class="top-mark" role="status" aria-live="polite"><i></i><span id="activity-label">فضای پژوهش آماده است</span></span><button id="mobile-dossier" class="mobile-dossier" type="button">دفتر پرونده</button><button id="refresh" class="icon-button" title="تازه‌سازی" aria-label="تازه‌سازی">↻</button></div>
+        <div class="top-actions"><span id="activity-signal" class="top-mark" role="status" aria-live="polite"><i></i><span id="activity-label">فضای پژوهش آماده است</span></span><button id="mobile-dossier" class="mobile-dossier" type="button" aria-controls="inspector" aria-expanded="false">دفتر پرونده</button><button id="refresh" class="icon-button" title="تازه‌سازی" aria-label="تازه‌سازی">↻</button></div>
       </header>
 
       <div class="workspace">
@@ -73,15 +75,23 @@
           </div>
         </section>
 
-        <aside class="inspector">
+        <aside id="inspector" class="inspector" aria-label="دفتر پرونده">
           <div class="inspector-title"><span class="eyebrow">DOSSIER / LIVE NOTES</span><h3>دفتر پرونده<span aria-hidden="true">↗</span></h3><p id="inspector-subtitle">پرسش‌ها، منابع و شاهدها در یک نگاه.</p></div>
           <div class="inspector-stat"><div><strong id="stat-cases">۰</strong><span>پرونده</span></div><div><strong id="stat-verified">۰</strong><span>تأییدشده</span></div><div><strong id="stat-claims">۰</strong><span>ادعا</span></div></div>
+          <div class="inspector-tabs" role="tablist" aria-label="بخش‌های دفتر پرونده">
+            <button type="button" role="tab" id="inspector-tab-live" data-inspector-tab="live" aria-controls="inspector-panel-live" aria-selected="true">پیگیری</button>
+            <button type="button" role="tab" id="inspector-tab-sources" data-inspector-tab="sources" aria-controls="inspector-panel-sources" aria-selected="false" tabindex="-1">منابع</button>
+            <button type="button" role="tab" id="inspector-tab-evidence" data-inspector-tab="evidence" aria-controls="inspector-panel-evidence" aria-selected="false" tabindex="-1">شاهدها</button>
+          </div>
+          <div id="inspector-panel-live" class="inspector-panel" role="tabpanel" aria-labelledby="inspector-tab-live">
           <section class="inspector-section agent-control" aria-labelledby="agent-control-heading"><div class="section-heading"><span id="agent-control-heading">اتاق کنترل عامل‌ها</span><small>LIVE AGENTS</small></div><div id="agent-monitor" class="agent-monitor" aria-live="polite"><p class="muted">برای دیدن وضعیت عامل‌ها، پرونده‌ای انتخاب کن.</p></div><div class="section-heading lead-heading"><span>سرنخ و تصمیم مادر</span><small>LEAD REVIEW</small></div><div id="lead-monitor" aria-live="polite"><p class="muted">هنوز سرنخی بررسی نشده است.</p></div></section>
           <div class="inspector-section"><div class="section-heading"><span>کاوش عمیق</span><small>INVESTIGATION</small></div><div id="investigation-status" class="investigation-status" aria-live="polite"><p class="muted">برای دیدن وضعیت کاوش، پرونده‌ای انتخاب کن.</p></div><div id="resume-options" class="resume-options" hidden><label for="resume-ceiling">سقف توقف نوبت بعد (دلار آمریکا)</label><input id="resume-ceiling" type="number" min="0" max="20" step="any" value="0.16" inputmode="decimal"><button id="resume-deep" class="small-action" type="button">ادامهٔ کاوش</button></div></div>
           <section class="inspector-section" aria-labelledby="research-heading"><div class="section-heading"><span id="research-heading">درخت نیت پژوهش</span><small>RESEARCH INTENT</small></div>
             <p class="section-note">برای پیگیری یک مسیر تازه، به عامل مادر در گفت‌وگو بگو. وضعیت و گزارش‌ها اینجا نمایش داده می‌شوند.</p>
             <div id="research-tree" class="research-tree"><p class="muted">برای دیدن پرسش‌ها، پرونده‌ای انتخاب کن.</p></div>
           </section>
+          </div>
+          <div id="inspector-panel-sources" class="inspector-panel" role="tabpanel" aria-labelledby="inspector-tab-sources" hidden>
           <section class="inspector-section" aria-labelledby="sources-heading"><div class="section-heading"><span id="sources-heading">فهرست منابع</span><small>LOCAL SOURCES</small></div>
             <div id="source-list" class="source-list"><p class="muted">برای دیدن منابع، پرونده‌ای انتخاب کن.</p></div>
             <form id="site-form" class="inspector-form" hidden>
@@ -101,11 +111,15 @@
             <div class="upload-status">آپلود رایگان است. برای PDF اسکن‌شده، «۲۰ صفحه» یک بسته می‌خواند و «تا پایان» از صفحهٔ ذخیره‌شده تا آخر می‌رود. هر دو ممکن است هزینه داشته باشند.</div>
             <div id="upload-status" class="upload-status"></div><div id="upload-list" class="upload-list"></div><div id="document-list" class="document-list"></div>
           </div>
+          </div>
+          <div id="inspector-panel-evidence" class="inspector-panel" role="tabpanel" aria-labelledby="inspector-tab-evidence" hidden>
           <div class="inspector-section"><div class="section-heading"><span>یافته‌ها</span><small>EVIDENCE</small></div><div id="claims-list" class="claims-list"><p class="muted">هنوز شاهدی ثبت نشده است.</p></div></div>
           <button id="ledger" class="ledger-button" disabled><span>↧</span> دریافت دفترچهٔ پژوهش <small>MARKDOWN</small></button>
+          </div>
         </aside>
       </div>
     </main>
+    <button id="panel-backdrop" class="panel-backdrop" type="button" aria-label="بستن پنل" hidden></button>
   </div>
   <div id="toast" class="toast" role="status" hidden></div>
   <script type="module" src="/app.js"></script>
