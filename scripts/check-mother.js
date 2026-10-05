@@ -6,6 +6,7 @@ const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'asc-mother-check-'));
 process.env.ASC_DB = path.join(temp, 'check.db');
 const store = await import('../src/db.js');
 const { motherTurn, motherSourceContext, normalizePlan } = await import('../src/mother.js');
+const { renderIdeaReport } = await import('../src/idea-report.js');
 try {
   const pid = 'owner';
   let teamCalls = 0;
@@ -21,6 +22,20 @@ try {
     ask: async () => ({ data: { action: 'respond', reply: 'سلام! آماده‌ام.' }, usage: {} }) });
   if (plain.text !== 'سلام! آماده‌ام.' || teamCalls || store.listDossiers(pid, 5).length)
     throw new Error('ordinary chat created research');
+  let scholarCall = null;
+  const scholarly = await motherTurn({ principalId: pid,
+    userText: 'در OpenAlex مقاله‌های مرتبط با مهرابهٔ دورا را پیدا کن.', team,
+    scholar: { run: async (name, args) => {
+      scholarCall = { name, args };
+      return { tool: name, count: 1, records: [{ id: 'https://openalex.org/W1',
+        title: 'Dura-Europos Mithraeum', year: 2024, doi: 'https://doi.org/10.1/test',
+        status: 'bibliographic_lead' }] };
+    } },
+    ask: async () => ({ data: { action: 'scholar_tool', scholar_tool: 'search_works',
+      scholar_args: { query: 'Dura-Europos Mithraeum', mode: 'semantic' } }, usage: {} }) });
+  if (scholarCall?.name !== 'search_works' || scholarCall.args.mode !== 'semantic' ||
+      !scholarly.text.includes('سرنخ کتاب‌شناختی') || teamCalls)
+    throw new Error('mother did not execute the selected scholarly tool');
   const evidenceRequest = 'هرودوت در کتاب ۱ چه می‌گوید؟ منبع و عبارت شاهد را بیاور.';
   const evidencePlan = normalizePlan({ action: 'respond', reply: 'از حافظه پاسخ می‌دهم.' }, evidenceRequest);
   if (evidencePlan.action !== 'research_team' || evidencePlan.subtasks[0]?.role !== 'web-researcher')
@@ -33,6 +48,16 @@ try {
     'شواهد ارتباط و دلایل مخالفت با تداوم مستقیم را جدا کن و بگو پژوهشگران چه نتیجه‌ای گرفته‌اند.');
   if (disputePlan.action !== 'research_team')
     throw new Error('explicit comparison of evidence was treated as casual chat');
+  const medicalPlan = normalizePlan({ action: 'research_team' },
+    'ایدهٔ یک اپلیکیشن پزشکی برای تشخیص بیمار را مستند بررسی کن و گزارش معماری Markdown بده.');
+  if (medicalPlan.subtasks.length !== 3 || !medicalPlan.subtasks[0].title.includes('خطر آسیب') ||
+      !medicalPlan.subtasks[1].title.includes('نظارت انسانی') ||
+      !medicalPlan.subtasks[2].title.includes('شرایط توقف'))
+    throw new Error('medical idea was treated as an ordinary product recommendation');
+  const medicalReport = renderIdeaReport({ title: 'اپ پزشکی', rootId: 1,
+    regulatedScope: 'medical' });
+  if (!medicalReport.includes('برای تشخیص، درمان، تجویز، تریاژ یا تصمیم بالینی قابل اتکا نیست'))
+    throw new Error('medical idea report omitted its non-clinical-use boundary');
   const clarified = await motherTurn({ principalId: pid, userText: 'کدام نسخه را بخوانی؟', team,
     ask: async () => ({ data: { action: 'respond', reply: 'برای انتخاب متن، یک نکته لازم است.',
       clarification: { question: 'کدام نسخه را بررسی کنم؟', options: ['نسخهٔ فارسی', 'نسخهٔ اصلی'] } }, usage: {} }) });

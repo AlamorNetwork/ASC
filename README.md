@@ -386,6 +386,32 @@ model calls.
 
 After setting the variables in `/root/ASC/.env`, restart `asc` and `asc-web`.
 
+## OpenAlex tools for the mother agent
+
+The mother agent has a bounded, read-only OpenAlex adapter for scholarly discovery.
+It can search works by keyword or semantic similarity, read a work by OpenAlex ID or
+DOI, resolve up to 25 references, traverse citing/referenced/related works with pages,
+search or read authors/sources/institutions/topics/publishers/funders, group and profile
+works, validate OQL for free, and run a validated OQL calculation below the configured
+20-credit safety ceiling. The adapter mirrors the useful read-only surface of the
+official OpenAlex MCP without requiring its interactive OAuth login.
+
+Ask the mother agent explicitly, for example: `در OpenAlex با جست‌وجوی معنایی آثار
+مرتبط با Dura-Europos Mithraeum را پیدا کن` or `ارجاعات و استنادهای DOI ... را جدا
+فهرست کن`. Every returned item is saved as a **bibliographic lead**. It becomes evidence
+only after ASC opens the source text and the quote gate matches the claimed passage.
+`OPENALEX_API_KEY` is optional; a free account key raises the daily credit budget.
+`node scripts/check-openalex-tools.js` checks the full adapter without network or model calls.
+
+Crossref remains an independent no-key metadata fallback in normal web research. OpenAlex
+already supplies incoming citations, references and related works, so ASC does not call a
+second citation-graph service by default. CORE is not integrated yet; it is the next useful
+addition when an API key is available because its value is access to open full text.
+
+For medical or clinical product ideas, ASC narrows the report to evidence mapping, risks,
+human oversight and stop conditions. The report explicitly says it is not reliable for
+diagnosis, treatment, prescribing, triage or another clinical decision.
+
 ## Scholarly discovery benchmark
 
 `node scripts/benchmark-scholarly.js` previews three fixed questions about Dura-Europos,

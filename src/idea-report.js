@@ -31,7 +31,7 @@ export function ideaSources(reports = []) {
 }
 
 export function renderIdeaReport({ title, rootId, summary, result = {}, proposal = {}, sources = [],
-  referenceReview = { books: [], note: '' }, toolNotes = [] }) {
+  referenceReview = { books: [], note: '' }, toolNotes = [], regulatedScope = null }) {
   const refs = new Set(sources.map((source) => source.id));
   const evidence = (item) => {
     const ids = list(item?.evidence, 6).map(String).filter((id) => refs.has(id));
@@ -52,10 +52,17 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
       '  B --> C["نمونه اولیه"]', '  C --> D["آزمون و اصلاح"]', '```'];
   const coverage = sources.length ? `این گزارش از ${sources.length} گذرگاه یا نقل‌قول ثبت‌شده در پژوهش استفاده می‌کند. انطباق لفظی به‌تنهایی صحت یا مناسب‌بودن مهندسی را ثابت نمی‌کند.`
     : 'در این دور شاهد قابل استناد ثبت نشد؛ تصمیم‌ها مقدماتی‌اند و نیاز به بررسی منابع دارند.';
+  const medicalBoundary = regulatedScope === 'medical' ? [
+    '', '## مرز استفاده در حوزهٔ پزشکی',
+    '- این خروجی فقط نقشهٔ پژوهش، خطرها و پرسش‌های طراحی است؛ برای تشخیص، درمان، تجویز، تریاژ یا تصمیم بالینی قابل اتکا نیست.',
+    '- حتی با منابع معتبر، تصمیم محصول باید زیر نظر متخصص بالینی، مسئول حریم خصوصی و ارزیابی مستقل ایمنی انجام شود.',
+    '- تا وقتی شواهد مستقیم کافی و معیار توقف ثبت نشده، پیشنهادهای معماری و محصولی این گزارش مجوز ساخت یا عرضه نیستند.',
+  ] : [];
   const lines = [
     `# ارزیابی ایده: ${plain(title, 200)}`, '',
     `> نیت پژوهشی #${Number(rootId)} · ${new Date().toISOString().slice(0, 10)} · ${result.incomplete?.length || referenceReview.complete === false ? 'پیش‌نویس؛ پژوهش یا خواندن کتاب ناتمام' : 'گزارش این دور پژوهش'}`,
     '', '## دامنه و کیفیت شواهد', coverage,
+    ...medicalBoundary,
     result.incomplete?.length ? `- ${result.incomplete.length} زیرنیت ناتمام مانده است.` : null,
     result.siteError ? `- خطای دسترسی به منبع: ${plain(result.siteError, 300)}` : null,
     '', '## مسئله و هدف', plain(proposal.problem || title, 1200),
