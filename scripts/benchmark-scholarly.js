@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../src/config.js';
-import { CASES, benchmarkCase, renderBenchmark } from '../src/scholarly-benchmark.js';
+import { CASES, benchmarkCase, renderBenchmark, scholarlyQuota } from '../src/scholarly-benchmark.js';
 
 const args = process.argv.slice(2);
 const option = (prefix) => args.find((item) => item.startsWith(prefix))?.slice(prefix.length);
@@ -22,9 +22,10 @@ if (!args.includes('--run')) {
   console.log(`Each provider: top ${limit}; attempt to read ${fetchCount} open copies. Add --run to start.`);
 } else {
   const results = [];
+  const quota = scholarlyQuota();
   for (const testCase of cases) {
     console.log(`Checking ${testCase.id}: ${testCase.query}`);
-    const result = await benchmarkCase(testCase, { limit, fetchCount });
+    const result = await benchmarkCase(testCase, { limit, fetchCount, quota });
     results.push(result);
     for (const [provider, data] of Object.entries(result.providers))
       console.log(`  ${provider}: ${data.error || `${data.leads.length} leads, ${data.leads.filter((x) => x.readable).length} readable`}`);

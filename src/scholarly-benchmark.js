@@ -40,7 +40,19 @@ export function normaliseSemanticScholar(rows) {
   }));
 }
 
-async function search(provider, query, limit, fetcher, keys) {
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function retryAfterMs(value, now = Date.now()) {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - now) : null;
+}
+
+export function scholarlyQuota() { return { nextAt: 0, blocked: null }; }
+
+async function search(provider, query, limit, fetcher, keys, quota, sleep, now) {
   const url = provider === 'openalex' ? new URL('https://api.openalex.org/works')
     : new URL('https://api.semanticscholar.org/graph/v1/paper/search');
   if (provider === 'openalex') url.search = new URLSearchParams({ search: query,
@@ -50,28 +62,44 @@ async function search(provider, query, limit, fetcher, keys) {
   const headers = { Accept: 'application/json', 'User-Agent': 'ASC-Scholarly-Benchmark/1.0' };
   if (provider === 'openalex' && keys.openalex) headers.Authorization = `Bearer ${keys.openalex}`;
   if (provider === 'semantic-scholar' && keys.semanticScholar) headers['x-api-key'] = keys.semanticScholar;
-  const started = performance.now();
-  const res = await fetcher(url, { headers, signal: AbortSignal.timeout(15000) });
-  const latencyMs = Math.round(performance.now() - started);
-  if (!res.ok) {
+  const semantic = provider === 'semantic-scholar';
+  if (semantic && quota.blocked) throw new Error(`skipped: ${quota.blocked}`);
+  for (let attempt = 0; attempt < (semantic ? 2 : 1); attempt++) {
+    if (semantic) {
+      await sleep(Math.max(0, quota.nextAt - now()));
+      quota.nextAt = now() + 1200;
+    }
+    const started = performance.now();
+    const res = await fetcher(url, { headers, signal: AbortSignal.timeout(15000) });
+    const latencyMs = Math.round(performance.now() - started);
+    if (res.ok) {
+      const data = await res.json();
+      return { latencyMs, leads: provider === 'openalex' ? normaliseOpenAlex(data.results)
+        : normaliseSemanticScholar(data.data) };
+    }
     let detail = '';
     try { detail = String((await res.json()).message || '').replace(/[\r\n|]/g, ' ').slice(0, 100); }
     catch { /* status is enough when the provider returns HTML */ }
-    throw new Error(`HTTP ${res.status}${detail ? ` ${detail}` : ''}${res.headers.get('retry-after') ? `; retry-after ${res.headers.get('retry-after')}s` : ''}`);
+    const retry = retryAfterMs(res.headers.get('retry-after'), now());
+    const reason = `HTTP ${res.status}${detail ? ` ${detail}` : ''}`;
+    if (semantic && res.status === 429 && attempt === 0 && (retry === null || retry <= 15000)) {
+      quota.nextAt = now() + Math.max(2000, retry ?? 3000);
+      continue;
+    }
+    if (semantic && [401, 403, 429].includes(res.status))
+      quota.blocked = `${reason}${res.status === 429 && retry !== null ? `; Retry-After ${Math.ceil(retry / 1000)}s` : ''}`;
+    throw new Error(quota.blocked || reason);
   }
-  const data = await res.json();
-  return { latencyMs, leads: provider === 'openalex' ? normaliseOpenAlex(data.results)
-    : normaliseSemanticScholar(data.data) };
 }
 
 export async function benchmarkCase(testCase, { limit = 5, fetchCount = 2,
   fetcher = fetch, open = fetchSourceText,
+  quota = scholarlyQuota(), sleep = pause, now = Date.now,
   keys = { openalex: config.openalexApiKey, semanticScholar: config.semanticScholarApiKey } } = {}) {
   const results = {};
-  // Sequential calls stay below introductory Semantic Scholar rate limits.
   for (const provider of ['openalex', 'semantic-scholar']) {
     try {
-      const { latencyMs, leads } = await search(provider, testCase.query, limit, fetcher, keys);
+      const { latencyMs, leads } = await search(provider, testCase.query, limit, fetcher, keys, quota, sleep, now);
       const checked = leads.map((lead, rank) => ({ ...lead, rank: rank + 1,
         titleAnchorHits: anchorHits(lead.title, testCase.anchors),
         readable: null, fetchError: null, characters: 0, textSample: '', fetchedUrl: null }));
