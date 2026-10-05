@@ -386,6 +386,21 @@ model calls.
 
 After setting the variables in `/root/ASC/.env`, restart `asc` and `asc-web`.
 
+## Scholarly discovery benchmark
+
+`node scripts/benchmark-scholarly.js` previews three fixed questions about Dura-Europos,
+Ostia and Roman Mithraism. Add `--run` to compare the OpenAlex and Semantic Scholar
+**underlying search APIs** with the same query and top-K. This isolates the value of
+each catalogue before deciding whether to run a Semantic Scholar MCP server. No model
+is called. `--limit=5`, `--fetch=2` and `--case=dura,ostia,origins` control the run.
+An optional `SEMANTIC_SCHOLAR_API_KEY` in `.env` is sent as `x-api-key`.
+
+The script writes Markdown and raw JSON under `data/benchmarks/`. It records API
+errors separately from empty results, title-anchor matches separately from human
+relevance, and open-copy links separately from text actually fetched by ASC. A
+readable page is not a verified claim. If an endpoint returns 403 or 429 on one
+machine, rerun on the deployment server before comparing quality.
+
 ## Layout
 
 ```

@@ -56,6 +56,7 @@ const router = routerCreds();
 export const config = {
   root: ROOT,
   openalexApiKey: env.OPENALEX_API_KEY || '',
+  semanticScholarApiKey: env.SEMANTIC_SCHOLAR_API_KEY || '',
   ideaMcp: {
     githubToken: env.GITHUB_MCP_TOKEN || '',
     context7Enabled: env.CONTEXT7_MCP_ENABLED === '1',
