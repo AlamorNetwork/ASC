@@ -38,6 +38,22 @@ const rendered = await crawlSite({ url: root, maxPages: 1,
 assert.equal(rendered.pages[0].url, root);
 assert.deepEqual(rendered.nextUrls, ['https://example.org/next']);
 assert.equal(fallbackCalls, 1);
+let challengeFallbacks = 0;
+const challenged = await crawlSite({ url: root, maxPages: 1,
+  fetchPage: async () => ({ html: '<html><title>Client Challenge</title><body>A required part of this site couldn’t load.</body></html>' }),
+  fallbackPage: async (url) => {
+    challengeFallbacks++;
+    return { url, html: html([], 'Actual article content '.repeat(20)) };
+  } });
+assert.equal(challengeFallbacks, 1);
+assert.match(challenged.pages[0].text, /Actual article content/);
+assert.doesNotMatch(challenged.pages[0].text, /required part/);
+const blockedChallenge = await crawlSite({ url: root, maxPages: 1,
+  fetchPage: async () => ({ html: '<title>Client Challenge</title>A required part of this site couldn’t load.' }),
+  fallbackPage: async (url) => ({ url,
+    html: '<title>Just a moment...</title>Enable JavaScript and cookies to continue' }) });
+assert.equal(blockedChallenge.pages.length, 0);
+assert.match(blockedChallenge.errors[0].error, /challenge|interstitial/i);
 const badFallback = await crawlSite({ url: root, maxPages: 1,
   fetchPage: async () => { throw new Error('HTTP 503'); },
   fallbackPage: async () => ({ url: 'http://127.0.0.1/', html: '<h1>wrong host</h1>' }) });

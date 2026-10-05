@@ -78,6 +78,10 @@ model. Check outbound access without model charges with:
 DOI links are resolved to their public publisher page before crawling. After that
 single resolver step the crawler locks itself to the publisher origin; ordinary
 cross-site redirects remain blocked by the SSRF and same-origin guard.
+Anti-bot interstitials such as JSTOR's `Client Challenge` are transport failures,
+not article text: ASC tries the configured browser fallback, otherwise keeps the
+source unresolved. If an older run stored such a page, retrying the DOI removes that
+page and revokes claims that were incorrectly verified from its error message.
 
 Book-oriented queries also consult Open Library for work and edition metadata,
 and Gutendex for public-domain ebook text. Open Library records stay unread leads;

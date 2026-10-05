@@ -888,6 +888,35 @@ export function saveCrawledPage({ principalId, dossierId, url, title, text, chun
   } catch (err) { db.exec('ROLLBACK'); throw err; }
 }
 
+/** Remove a previously stored anti-bot page and revoke claims that quoted it. */
+export function invalidateCrawledPage(principalId, dossierId, url) {
+  const source = db.prepare(`SELECT s.document_id,d.extraction FROM source_library s
+    LEFT JOIN documents d ON d.id=s.document_id AND d.principal_id=s.principal_id
+    WHERE s.principal_id=? AND s.dossier_id=? AND s.url=?`)
+    .get(principalId, dossierId, url);
+  const documentId = Number(source?.document_id);
+  if (!Number.isSafeInteger(documentId) || source.extraction !== 'site_crawl') return null;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`UPDATE claims SET status='unresolved',verify_method=NULL,
+      verify_note='صفحهٔ ذخیره‌شده یک مانع ضدربات بود، نه متن منبع.',verify_reason='bot_challenge'
+      WHERE principal_id=? AND dossier_id=? AND source_url=?`)
+      .run(principalId, dossierId, url);
+    db.prepare(`UPDATE research_nodes SET target_document_id=NULL
+      WHERE principal_id=? AND dossier_id=? AND target_document_id=?`)
+      .run(principalId, dossierId, documentId);
+    db.prepare(`DELETE FROM source_library WHERE principal_id=? AND dossier_id=? AND url=?`)
+      .run(principalId, dossierId, url);
+    for (const table of ['document_page_reads', 'document_analysis_sections',
+      'document_analysis_synthesis', 'document_analysis_batches', 'chunks'])
+      db.prepare(`DELETE FROM ${table} WHERE principal_id=? AND document_id=?`)
+        .run(principalId, documentId);
+    db.prepare(`DELETE FROM documents WHERE principal_id=? AND id=?`).run(principalId, documentId);
+    db.exec('COMMIT');
+    return documentId;
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
+}
+
 export function getOrCreateSiteCrawl(principalId, dossierId, seedUrl) {
   if (!getDossier(principalId, dossierId)) throw new Error('پرونده پیدا نشد.');
   db.prepare(`INSERT OR IGNORE INTO site_crawls(principal_id,dossier_id,seed_url,updated_at)

@@ -1,6 +1,6 @@
 /** Persist each crawled page and cursor, so a failed fetch need not restart a site. */
 import * as store from './db.js';
-import { crawlSite } from './site-crawl.js';
+import { blockedInterstitial, crawlSite } from './site-crawl.js';
 import { chunkText } from './chunks.js';
 import { checkpoint as stopPoint } from './cancel.js';
 import { config } from './config.js';
@@ -14,14 +14,29 @@ export async function collectSite({ principalId, dossierId, url, maxPages = 10,
   try { old = JSON.parse(row.checkpoint_json); } catch { /* old bad cursor */ }
   let saved = row.pages_saved;
   let firstPage = null;
+  const visited = new Set(Array.isArray(old.visited) ? old.visited : []);
+  const staleChallenges = store.sourceCatalogue(principalId, dossierId).filter((source) =>
+    source.type === 'site' && source.documentId && visited.has(source.url) &&
+    blockedInterstitial({ title: source.title,
+      text: store.documentText(principalId, source.documentId) }));
+  for (const source of staleChallenges)
+    store.invalidateCrawledPage(principalId, dossierId, source.url);
+  if (staleChallenges.length) {
+    const rejected = new Set(staleChallenges.map((source) => source.url));
+    old = { visited: [...visited].filter((url) => !rejected.has(url)), nextUrls: [seed] };
+    saved = Math.max(0, saved - staleChallenges.length);
+    store.saveSiteCrawl(principalId, row.id, { checkpoint: old, state: 'paused', pagesSaved: saved });
+  }
   const initial = Array.isArray(old.nextUrls) && old.nextUrls.length ? old : undefined;
-  if (row.state === 'done') return { crawlId: row.id, pagesSaved: saved, done: true, errors: [] };
+  if (row.state === 'done' && !staleChallenges.length)
+    return { crawlId: row.id, pagesSaved: saved, done: true, errors: [] };
   store.saveSiteCrawl(principalId, row.id, { checkpoint: initial ?? {}, state: 'running', pagesSaved: saved });
   try {
     const result = await crawl({ url: seed, maxPages, checkpoint: initial,
       fallbackPage: config.webExtraction.fallback.length
         ? (target) => enhancedPage(target, config.webExtraction) : undefined,
       onPage: async (page, cursor) => {
+        if (blockedInterstitial(page)) throw new Error('bot challenge/interstitial page; source text unavailable');
         firstPage ??= { url: page.url, title: page.title || page.url,
           characters: page.text.length, via: page.via };
         if (page.text.length > 100) {

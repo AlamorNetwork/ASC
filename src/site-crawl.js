@@ -205,6 +205,14 @@ function parseHtml(html, url, origin) {
   return { title, text, links };
 }
 
+/** Anti-bot/login interstitials are transport failures, never source content. */
+export function blockedInterstitial({ title = '', text = '', html = '' } = {}) {
+  const heading = String(title).toLowerCase();
+  const body = `${text} ${html}`.replace(/[’‘]/g, "'").toLowerCase();
+  return /\b(?:client challenge|just a moment|attention required|robot check|security check)\b/.test(heading) ||
+    /a required part of this site (?:couldn't|could not) load|enable javascript and cookies to continue|verify (?:you are|you'?re) (?:human|not a robot)|checking (?:your )?browser|cf-chl-/.test(body);
+}
+
 /**
  * checkpoint may contain { nextUrls, visited }. Persist visited across calls to avoid
  * recrawling; returned nextUrls can be passed back as checkpoint.nextUrls.
@@ -257,8 +265,10 @@ export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchP
       catch (error) { nativeError = error; }
       if (nativeError && /private or unresolved|private or reserved|off-origin|credentialed URL/i.test(nativeError.message))
         throw nativeError;
-      const shortPage = result && parseHtml(result.html, result.url ?? target, origin).text.length < 120;
-      if ((nativeError || shortPage) && fallbackPage && fallbackCalls < 2) {
+      const nativeParsed = result && parseHtml(result.html, result.url ?? target, origin);
+      const shortPage = nativeParsed && nativeParsed.text.length < 120;
+      const challenged = nativeParsed && blockedInterstitial({ ...nativeParsed, html: result.html });
+      if ((nativeError || shortPage || challenged) && fallbackPage && fallbackCalls < 2) {
         fallbackCalls++;
         try { result = await fallbackPage(target); }
         catch (error) {
@@ -272,6 +282,8 @@ export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchP
       if (bytes > PAGE_BYTES) throw new Error('page exceeds byte limit');
       totalBytes += bytes;
       const parsed = parseHtml(result.html, finalUrl, origin);
+      if (blockedInterstitial({ ...parsed, html: result.html }))
+        throw new Error('bot challenge/interstitial page; source text unavailable');
       const page = { url: finalUrl, ...parsed, via: result.via || 'direct' };
       pages.push(page);
       visited.add(finalUrl);
