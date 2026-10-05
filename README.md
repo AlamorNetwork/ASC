@@ -75,6 +75,10 @@ unresolved rather than becoming verified. `MODEL_RESEARCH` is retained for the
 legacy model comparison script; ordinary bot research does not need an `:online`
 model. Check outbound access without model charges with:
 
+DOI links are resolved to their public publisher page before crawling. After that
+single resolver step the crawler locks itself to the publisher origin; ordinary
+cross-site redirects remain blocked by the SSRF and same-origin guard.
+
 Book-oriented queries also consult Open Library for work and edition metadata,
 and Gutendex for public-domain ebook text. Open Library records stay unread leads;
 Gutendex text is eligible as evidence only after ASC fetches it and matches a

@@ -66,6 +66,26 @@ const escape = await crawlSite({ url: root,
 assert.equal(escape.pages.length, 0);
 assert.match(escape.errors[0].error, /off-origin/);
 
+let resolvedSeed;
+const doi = await crawlSite({ url: 'https://doi.org/10.1234/example', maxPages: 1,
+  seedResolver: async (url) => {
+    assert.equal(url, 'https://doi.org/10.1234/example');
+    return 'https://publisher.example/article/1';
+  },
+  fetchPage: async (url) => {
+    resolvedSeed = url;
+    return { html: html(['/article/2'], 'Readable publisher article') };
+  } });
+assert.equal(resolvedSeed, 'https://publisher.example/article/1');
+assert.equal(doi.origin, 'https://publisher.example');
+assert.equal(doi.pages[0].url, 'https://publisher.example/article/1');
+assert.deepEqual(doi.pages[0].links, ['https://publisher.example/article/2']);
+const resumedDoi = await crawlSite({ url: 'https://doi.org/10.1234/example', maxPages: 1,
+  checkpoint: { visited: [], nextUrls: ['https://doi.org/10.1234/example'] },
+  seedResolver: async () => 'https://publisher.example/article/1',
+  fetchPage: async (url) => ({ html: html([], `Recovered old DOI checkpoint at ${url}`) }) });
+assert.equal(resumedDoi.pages[0].url, 'https://publisher.example/article/1');
+
 const many = await crawlSite({ url: root, maxPages: 100,
   fetchPage: async (url) => ({ html: url === root
     ? html(Array.from({ length: 30 }, (_, i) => `/p${i}`)) : html([]) }) });

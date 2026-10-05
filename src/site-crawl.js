@@ -9,6 +9,7 @@ const TOTAL_BYTES = 5 * PAGE_BYTES;
 const MAX_QUEUE = 200;
 const TIMEOUT_MS = 10000;
 const USER_AGENT = 'ASC-Site-Crawl/1.0';
+const DOI_RESOLVERS = new Set(['doi.org', 'dx.doi.org']);
 
 function publicIp(address) {
   const version = net.isIP(address);
@@ -55,11 +56,12 @@ async function addressesFor(url) {
   return addresses;
 }
 
-function requestOnce(url, address, limit, plain = false) {
+function requestOnce(url, address, limit, plain = false, probe = false, method = 'GET') {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const client = u.protocol === 'https:' ? https : http;
     const req = client.get(u, {
+      method,
       headers: { 'User-Agent': USER_AGENT, Accept: 'text/html,application/xhtml+xml' },
       lookup: (_host, opts, cb) => opts?.all
         ? cb(null, [{ address: address.address, family: address.family }])
@@ -77,6 +79,7 @@ function requestOnce(url, address, limit, plain = false) {
         reject(new Error(`HTTP ${res.statusCode}`));
         return;
       }
+      if (probe) { res.destroy(); resolve({}); return; }
       const contentType = res.headers['content-type'] ?? '';
       if (!(plain ? /^text\/plain(?:\s*;|$)/i :
         /^text\/html(?:\s*;|$)|^application\/xhtml\+xml(?:\s*;|$)/i).test(contentType)) {
@@ -97,6 +100,28 @@ function requestOnce(url, address, limit, plain = false) {
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.on('error', reject);
   });
+}
+
+function doiResolver(value) {
+  return DOI_RESOLVERS.has(new URL(value).hostname.toLowerCase());
+}
+
+async function resolveDoiSeed(value) {
+  let current = value;
+  for (let hop = 0; hop < 6; hop++) {
+    current = canonical(current);
+    const addresses = await addressesFor(current);
+    let result;
+    try { result = await requestOnce(current, addresses[0], 0, false, true, 'HEAD'); }
+    catch (error) {
+      if (!/HTTP (?:403|405)/.test(error.message)) throw error;
+      result = await requestOnce(current, addresses[0], 0, false, true, 'GET');
+    }
+    if (!('redirect' in result)) return current;
+    if (!result.redirect) throw new Error('redirect without location');
+    current = canonical(result.redirect, current);
+  }
+  throw new Error('too many DOI redirects');
 }
 
 async function defaultFetchPage(url, origin, limit, plain = false) {
@@ -185,8 +210,10 @@ function parseHtml(html, url, origin) {
  * recrawling; returned nextUrls can be passed back as checkpoint.nextUrls.
  * fetchPage(url) is an optional test adapter returning { html, url? }.
  */
-export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchPage, fallbackPage } = {}) {
-  const seed = canonical(url);
+export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchPage, fallbackPage,
+  seedResolver = resolveDoiSeed } = {}) {
+  let seed = canonical(url);
+  if (doiResolver(seed)) seed = canonical(await seedResolver(seed));
   const origin = new URL(seed).origin;
   if (!Number.isInteger(maxPages) || maxPages < 1) throw new Error('maxPages must be a positive integer');
   if (checkpoint && (!Array.isArray(checkpoint.visited ?? []) ||
@@ -209,6 +236,10 @@ export async function crawlSite({ url, maxPages = 20, onPage, checkpoint, fetchP
     discovered.push(target);
   }
   for (const value of checkpoint?.nextUrls ?? [seed]) enqueue(value);
+  // A DOI resolver changes the crawl origin. A checkpoint written before resolution
+  // may still contain doi.org and is intentionally rejected by enqueue; restart at
+  // the resolved publisher page instead of falsely marking the crawl complete.
+  if (!queue.length && !visited.has(seed)) enqueue(seed);
   const pages = [];
   const errors = [];
   const retryLater = [];
