@@ -576,7 +576,13 @@ export async function motherTurn({ principalId, dossierId = null, userText, focu
     onProgress?.('عامل مادر: ساخت گزارش Markdown از شواهد و تصمیم‌های مهندسی');
     const localFindings = referenceReview.passages.map((passage) => ({ documentId: passage.documentId,
       page: passage.page, quote: passage.quote, text: `شاهد از تحلیل بخش‌بخشِ ${passage.title}` }));
-    const sources = ideaSources([{ report: { findings: localFindings } }, ...(result.reports ?? [])]);
+    const webFindings = (result.reports ?? []).flatMap((entry) => entry.report?.findings ?? []);
+    const balancedFindings = [];
+    for (let i = 0; i < Math.max(localFindings.length, webFindings.length); i++) {
+      if (webFindings[i]) balancedFindings.push(webFindings[i]);
+      if (localFindings[i]) balancedFindings.push(localFindings[i]);
+    }
+    const sources = ideaSources([{ report: { findings: balancedFindings } }]);
     let proposal = {};
     try {
       const drafted = result.pauseReason === 'budget' || referenceReview.pauseReason === 'budget'
