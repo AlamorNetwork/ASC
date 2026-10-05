@@ -365,6 +365,26 @@ open port 8443 through a host firewall, so allow that port there if a firewall i
 
 ---
 
+## Optional MCP research for software ideas
+
+The software-idea handoff can consult two fixed, read-only MCP services before
+writing its Markdown report:
+
+- GitHub MCP searches public `DESIGN.md` examples and reads at most one matching file.
+  Set `GITHUB_MCP_TOKEN` to a token with the least public-repository access needed.
+  The client exposes only `search_code,get_file_contents` with `X-MCP-Readonly: true`.
+- Context7 MCP resolves one framework and reads its current documentation. Set
+  `CONTEXT7_MCP_ENABLED=1`; `CONTEXT7_API_KEY` is optional for higher limits.
+
+Both are used only for a software-idea report. One small model call chooses the
+technical search terms. MCP results appear as **technical leads**, never as verified
+citations; the quote gate still requires the original source text. Missing credentials
+or an unavailable server does not stop the report. Browser fetching remains in ASC's
+existing web research path. Test the connection without model spend with
+`node scripts/check-mcp.js`.
+
+After setting the variables in `/root/ASC/.env`, restart `asc` and `asc-web`.
+
 ## Layout
 
 ```

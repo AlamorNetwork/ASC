@@ -31,7 +31,7 @@ export function ideaSources(reports = []) {
 }
 
 export function renderIdeaReport({ title, rootId, summary, result = {}, proposal = {}, sources = [],
-  referenceReview = { books: [], note: '' } }) {
+  referenceReview = { books: [], note: '' }, toolNotes = [] }) {
   const refs = new Set(sources.map((source) => source.id));
   const evidence = (item) => {
     const ids = list(item?.evidence, 6).map(String).filter((id) => refs.has(id));
@@ -65,6 +65,9 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
       `- کتاب #${book.id} «${plain(book.title, 140)}»: ${book.readPages ?? '?'} از ${book.pages ?? '?'} صفحه متن ذخیره شده؛ ${book.sectionsDone ?? 0} از ${book.sectionsTotal ?? '?'} بخش تحلیل شد${book.complete ? '؛ تحلیل متن ذخیره‌شده کامل است' : '؛ بررسی هنوز ناتمام است'}.${book.analysisUrl ? ` [گزارش کامل بخش‌ها](${book.analysisUrl})` : ''}`)
       : ['- کتاب مرتبطی از بانک محلی در این دور به مدل داده نشد.']),
     plain(referenceReview.note, 500),
+    '', '## سرنخ‌های فنی از MCP',
+    ...(toolNotes.length ? toolNotes.map((note) => `- ${plain(note.service, 40)} — ${plain(note.topic, 100)}${safeUrl(note.url) ? `: [پیوند مرجع](${safeUrl(note.url)})` : ''}. ${note.status === 'unverified' ? 'متن خوانده شد؛ هنوز شاهد تأییدشده نیست.' : 'فقط نتیجهٔ جست‌وجو ثبت شد؛ متن کامل خوانده نشد.'}`)
+      : ['- در این دور سرنخ فنی MCP ثبت نشد.']),
     '', '## کاربران، سناریوها و فرض‌ها',
     '### کاربران و ذی‌نفعان', ...points(proposal.users),
     '### سناریوهای اصلی و خطا', ...points(proposal.scenarios),

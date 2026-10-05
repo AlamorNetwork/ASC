@@ -59,7 +59,9 @@ try {
     avoid: [{ name: 'ریزسرویس زودهنگام', reason: 'هزینهٔ عملیاتی', evidence: [] }],
     flow: ['انتخاب پزشک', 'بررسی ظرفیت', 'ثبت نوبت'],
   } : { action: 'respond', reply: 'از حافظه می‌گویم.' }, usage: {} });
-  const first = await motherTurn({ principalId: pid, userText: request, ask, team });
+  const inspectTools = async () => [{ service: 'Context7', topic: 'Node.js',
+    url: 'https://context7.com/nodejs/node', text: 'Input validation guidance', status: 'unverified' }];
+  const first = await motherTurn({ principalId: pid, userText: request, ask, team, inspectTools });
   assert.equal(first.action.type, 'team_paused');
   assert.ok(first.text.includes('| API | Node.js |'));
   assert.ok(first.text.includes('```mermaid'));
@@ -72,6 +74,9 @@ try {
   assert.ok(sectionCalls > 1, 'all stored sections, including beyond ten passages, must be read');
   const sectionsAfterFirst = sectionCalls;
   assert.ok(first.text.includes('## امنیت، حریم خصوصی و عملیات'));
+  assert.ok(first.text.includes('## سرنخ‌های فنی از MCP'));
+  assert.ok(first.text.includes('https://context7.com/nodejs/node'));
+  assert.ok(!first.text.includes('**[S2]** https://context7.com'));
   assert.ok(!first.text.includes('[S99]'));
   const rootId = first.action.nodeId;
   const file = ideaReportPath(pid, first.dossierId, rootId);
@@ -89,7 +94,7 @@ try {
         system.includes('تو تحلیل‌گر متن هستی') || system.includes('تو تحلیل‌گر ساختار یک سند هستی'),
         'resume should not replan');
       return ask({ system, content });
-    }, team });
+    }, team, inspectTools });
   assert.equal(second.action.nodeId, rootId);
   assert.equal(bookSelections, 2, 'a new reference book should invalidate the saved selection');
   assert.ok(second.text.includes('امنیت رزرو پزشک.pdf'));

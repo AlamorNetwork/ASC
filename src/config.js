@@ -56,6 +56,11 @@ const router = routerCreds();
 export const config = {
   root: ROOT,
   openalexApiKey: env.OPENALEX_API_KEY || '',
+  ideaMcp: {
+    githubToken: env.GITHUB_MCP_TOKEN || '',
+    context7Enabled: env.CONTEXT7_MCP_ENABLED === '1',
+    context7Key: env.CONTEXT7_API_KEY || '',
+  },
   // Overridable so the self-check writes somewhere else. It had been creating its
   // dossiers, users and documents in the real database — principal scoping kept them
   // out of anyone's view, but every run still left hundreds of rows behind in the file
