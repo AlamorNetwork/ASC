@@ -54,7 +54,7 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
     : 'در این دور شاهد قابل استناد ثبت نشد؛ تصمیم‌ها مقدماتی‌اند و نیاز به بررسی منابع دارند.';
   const lines = [
     `# ارزیابی ایده: ${plain(title, 200)}`, '',
-    `> نیت پژوهشی #${Number(rootId)} · ${new Date().toISOString().slice(0, 10)} · ${result.incomplete?.length ? 'پیش‌نویس؛ پژوهش ناتمام' : 'گزارش این دور پژوهش'}`,
+    `> نیت پژوهشی #${Number(rootId)} · ${new Date().toISOString().slice(0, 10)} · ${result.incomplete?.length || referenceReview.complete === false ? 'پیش‌نویس؛ پژوهش یا خواندن کتاب ناتمام' : 'گزارش این دور پژوهش'}`,
     '', '## دامنه و کیفیت شواهد', coverage,
     result.incomplete?.length ? `- ${result.incomplete.length} زیرنیت ناتمام مانده است.` : null,
     result.siteError ? `- خطای دسترسی به منبع: ${plain(result.siteError, 300)}` : null,
@@ -62,7 +62,7 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
     '', '## جمع‌بندی اجرایی', plain(proposal.summary || summary || 'هنوز جمع‌بندی مستند آماده نیست.', 1500),
     '', '## مرحلهٔ ۱: کتاب‌ها و منابع مرجع',
     ...(referenceReview.books?.length ? referenceReview.books.map((book) =>
-      `- کتاب #${book.id} «${plain(book.title, 140)}»: ${book.readPages ?? '?'} از ${book.pages ?? '?'} صفحه در بانک ذخیره شده؛ ${book.inspectedPassages} از ${book.storedPassages} گذرگاه در این بررسی به مدل داده شد${book.hasCachedAnalysis ? '؛ تحلیل پیشین در بانک موجود است' : ''}.`)
+      `- کتاب #${book.id} «${plain(book.title, 140)}»: ${book.readPages ?? '?'} از ${book.pages ?? '?'} صفحه متن ذخیره شده؛ ${book.sectionsDone ?? 0} از ${book.sectionsTotal ?? '?'} بخش تحلیل شد${book.complete ? '؛ تحلیل متن ذخیره‌شده کامل است' : '؛ بررسی هنوز ناتمام است'}.${book.analysisUrl ? ` [گزارش کامل بخش‌ها](${book.analysisUrl})` : ''}`)
       : ['- کتاب مرتبطی از بانک محلی در این دور به مدل داده نشد.']),
     plain(referenceReview.note, 500),
     '', '## کاربران، سناریوها و فرض‌ها',
@@ -93,7 +93,7 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
     '', '## روش و محدودیت',
     '- انتخاب فناوری و معماری پیشنهاد مهندسی است، نه حقیقت اثبات‌شده. ارجاع‌ها فقط به منابعی است که عامل‌ها خوانده‌اند.',
     '- برای ادعای «جدیدترین» باید تاریخ انتشار منبع و نسخهٔ فناوری جدا بررسی شود؛ نبود این اطلاعات به معنی تأیید تازگی نیست.',
-    '- این سند طرح و معیار تصمیم است و کد اجرایی نیست. گذرگاه‌های نمونه‌خوانی‌شده جای مطالعهٔ کامل کتاب را نمی‌گیرند.',
+    '- این سند طرح و معیار تصمیم است و کد اجرایی نیست. تحلیل همهٔ بخش‌های متن ذخیره‌شده به معنی OCR درست یا پوشش همهٔ صفحات PDF نیست؛ شمار صفحات بالا را بررسی کنید.',
   ];
   return lines.filter((line) => line !== null).join('\n') + '\n';
 }
