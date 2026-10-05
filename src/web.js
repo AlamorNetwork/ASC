@@ -7,7 +7,7 @@ import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypt
 import { config } from './config.js';
 import * as store from './db.js';
 import * as settings from './settings.js';
-import { motherTurn, MAX_USER_TEXT_CHARS } from './mother.js';
+import { motherTurn, replyDuringWork, MAX_USER_TEXT_CHARS } from './mother.js';
 import { runResearch } from './research.js';
 import { deepInvestigate } from './deep.js';
 import { ingestToDossier, ingestGoogleOcrPages, extractClaimsFor, sha256 } from './ingest.js';
@@ -31,6 +31,7 @@ const sessions = new Map();
 const attempts = new Map();
 const jobs = new Map();
 let running = false;
+let sideConversationRunning = false;
 const secureCookie = config.web.origin.startsWith('https:') ? ' Secure;' : '';
 
 function response(res, status, data, extra = {}) {
@@ -201,12 +202,21 @@ async function saveUploadMeta(meta) {
   await fsp.writeFile(`${files.meta}.tmp`, JSON.stringify(meta), { mode: 0o600 });
   await fsp.rename(`${files.meta}.tmp`, files.meta);
 }
-function startJob(kind, work) {
-  if (running) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
-  cancel.newInstruction(principal());
-  running = true;
+function startJob(kind, work, { sideConversation = false } = {}) {
+  if (sideConversation) {
+    if (!running || sideConversationRunning) {
+      const err = new Error('پاسخ گفت‌وگوی قبلی هنوز در حال آماده‌سازی است.'); err.status = 409; throw err;
+    }
+    sideConversationRunning = true;
+  } else {
+    if (running || sideConversationRunning) {
+      const err = new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.'); err.status = 409; throw err;
+    }
+    cancel.newInstruction(principal());
+    running = true;
+  }
   const id = randomUUID();
-  const job = { id, kind, state: 'running', stage: 'شروع', startedAt: Date.now(), result: null };
+  const job = { id, kind, sideConversation, state: 'running', stage: 'شروع', startedAt: Date.now(), result: null };
   jobs.set(id, job);
   if (jobs.size > 100) jobs.delete(jobs.keys().next().value);
   void (async () => {
@@ -215,7 +225,7 @@ function startJob(kind, work) {
     catch (err) { job.state = 'failed'; job.error = err.message;
       if (err.savedScan) job.savedScan = err.savedScan;
       console.error(`[web] ${kind}:`, err); }
-    finally { job.finishedAt = Date.now(); running = false; }
+    finally { job.finishedAt = Date.now(); if (sideConversation) sideConversationRunning = false; else running = false; }
   })();
   return { id };
 }
@@ -361,7 +371,7 @@ async function servePublic(res, pathname) {
     'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" });
   res.end(body);
 }
-async function route(req, res, runTeam) {
+async function route(req, res, { runTeam, runChat, runSideChat }) {
   const url = new URL(req.url, 'http://localhost');
   if (!url.pathname.startsWith('/api/')) return servePublic(res, url.pathname);
   if (url.pathname === '/api/login' && req.method === 'POST') {
@@ -514,7 +524,10 @@ async function route(req, res, runTeam) {
     }));
   }
   if (url.pathname === '/api/active-job' && req.method === 'GET')
-    return response(res, 200, { job: [...jobs.values()].find((j) => j.state === 'running') ?? null });
+    return response(res, 200, {
+      job: [...jobs.values()].find((j) => j.state === 'running' && !j.sideConversation) ?? null,
+      sideJob: [...jobs.values()].find((j) => j.state === 'running' && j.sideConversation) ?? null,
+    });
   if (url.pathname === '/api/uploads' && req.method === 'GET') {
     const files = await fsp.readdir(uploadDir).catch(() => []);
     const list = await Promise.all(files.filter((x) => /^[a-f0-9-]{36}\.json$/.test(x)).map(async (x) => {
@@ -586,10 +599,16 @@ async function route(req, res, runTeam) {
     if (input.documentId && !focusedDoc) throw new Error('سند انتخاب‌شده پیدا نشد.');
     const dossier = focusedDoc ? requireDossier(pid, focusedDoc.dossier_id)
       : input.dossierId ? requireDossier(pid, input.dossierId) : null;
-    return response(res, 202, startJob('chat', (progress) => motherTurn({
+    const alongside = running && [...jobs.values()].some((job) => job.state === 'running' &&
+      !job.sideConversation && ['chat', 'team', 'research', 'deep'].includes(job.kind));
+    if (alongside) return response(res, 202, startJob('chat', (progress, job) =>
+      runSideChat({ principalId: pid,
+        dossierId: dossier?.id ?? settings.activeDossier(pid) ?? null, userText: message,
+        onDelta: (text) => { job.partial = String(text).slice(0, 4000); progress('در حال نوشتن پاسخ…'); } }),
+    { sideConversation: true }));
+    return response(res, 202, startJob('chat', (progress) => runChat({
       principalId: pid, dossierId: dossier?.id ?? null, userText: message,
-      focusDocumentId: focusedDoc?.id ?? null,
-      onProgress: progress })));
+      focusDocumentId: focusedDoc?.id ?? null, onProgress: progress })));
   }
   if (url.pathname === '/api/research' && req.method === 'POST') {
     const input = await readJson(req);
@@ -670,7 +689,8 @@ async function route(req, res, runTeam) {
   return error(res, 404, 'یافت نشد.');
 }
 
-export function createWebServer({ runTeam = runResearchTeam } = {}) {
+export function createWebServer({ runTeam = runResearchTeam,
+  runChat = motherTurn, runSideChat = replyDuringWork } = {}) {
   if (!config.web.password || config.web.password.length < 16) throw new Error('WEB_PASSWORD must be at least 16 characters.');
   const secure = /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(config.web.origin);
   const localPreview = process.env.NODE_ENV !== 'production' &&
@@ -678,7 +698,7 @@ export function createWebServer({ runTeam = runResearchTeam } = {}) {
   if (!secure && !localPreview) throw new Error('WEB_ORIGIN must be the exact HTTPS origin of the web app.');
   principal();
   return http.createServer((req, res) => {
-    Promise.resolve(route(req, res, runTeam)).catch((err) => {
+    Promise.resolve(route(req, res, { runTeam, runChat, runSideChat })).catch((err) => {
       const badInput = /نامعتبر|نیست|خالی|لازم|سقف|پیدا نشد/.test(err.message);
       if (!badInput && !err.status) console.error('[web]', err);
       if (!res.headersSent && !res.destroyed) {

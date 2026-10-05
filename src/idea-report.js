@@ -30,7 +30,8 @@ export function ideaSources(reports = []) {
   return sources;
 }
 
-export function renderIdeaReport({ title, rootId, summary, result = {}, proposal = {}, sources = [] }) {
+export function renderIdeaReport({ title, rootId, summary, result = {}, proposal = {}, sources = [],
+  referenceReview = { books: [], note: '' } }) {
   const refs = new Set(sources.map((source) => source.id));
   const evidence = (item) => {
     const ids = list(item?.evidence, 6).map(String).filter((id) => refs.has(id));
@@ -49,7 +50,7 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
     ...flow.slice(1).map((item, i) => `  N${i} --> ${item.id}`), '```']
     : ['```mermaid', 'flowchart TD', '  A["نیاز کاربر"] --> B["پژوهش و اعتبارسنجی"]',
       '  B --> C["نمونه اولیه"]', '  C --> D["آزمون و اصلاح"]', '```'];
-  const coverage = sources.length ? `این گزارش از ${sources.length} نقل‌قول ثبت‌شده در پژوهش استفاده می‌کند. انطباق لفظی به‌تنهایی صحت یا مناسب‌بودن مهندسی را ثابت نمی‌کند.`
+  const coverage = sources.length ? `این گزارش از ${sources.length} گذرگاه یا نقل‌قول ثبت‌شده در پژوهش استفاده می‌کند. انطباق لفظی به‌تنهایی صحت یا مناسب‌بودن مهندسی را ثابت نمی‌کند.`
     : 'در این دور شاهد قابل استناد ثبت نشد؛ تصمیم‌ها مقدماتی‌اند و نیاز به بررسی منابع دارند.';
   const lines = [
     `# ارزیابی ایده: ${plain(title, 200)}`, '',
@@ -59,14 +60,28 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
     result.siteError ? `- خطای دسترسی به منبع: ${plain(result.siteError, 300)}` : null,
     '', '## مسئله و هدف', plain(proposal.problem || title, 1200),
     '', '## جمع‌بندی اجرایی', plain(proposal.summary || summary || 'هنوز جمع‌بندی مستند آماده نیست.', 1500),
+    '', '## مرحلهٔ ۱: کتاب‌ها و منابع مرجع',
+    ...(referenceReview.books?.length ? referenceReview.books.map((book) =>
+      `- کتاب #${book.id} «${plain(book.title, 140)}»: ${book.readPages ?? '?'} از ${book.pages ?? '?'} صفحه در بانک ذخیره شده؛ ${book.inspectedPassages} از ${book.storedPassages} گذرگاه در این بررسی به مدل داده شد${book.hasCachedAnalysis ? '؛ تحلیل پیشین در بانک موجود است' : ''}.`)
+      : ['- کتاب مرتبطی از بانک محلی در این دور به مدل داده نشد.']),
+    plain(referenceReview.note, 500),
+    '', '## کاربران، سناریوها و فرض‌ها',
+    '### کاربران و ذی‌نفعان', ...points(proposal.users),
+    '### سناریوهای اصلی و خطا', ...points(proposal.scenarios),
+    '### فرض‌های نیازمند آزمون', ...points(proposal.assumptions),
     '', '## قابلیت‌های ضروری و مفید', ...points(proposal.necessary),
     '', '## گزینه‌های نامناسب یا زودهنگام', ...points(proposal.avoid),
     '', '## معماری و انتخاب فناوری',
     '| لایه | انتخاب پیشنهادی | دلیل و پشتوانه |', '| --- | --- | --- |',
     ...(decisions.length ? decisions : ['| نیازمند بررسی | انتخاب نشده | مستندات و سنجش بیشتر لازم است |']),
     '', '### ملاحظات معماری', ...points(proposal.architecture),
+    '', '### داده، مجوزها و مرز اعتماد', ...points(proposal.dataAndPermissions),
     '', '## جریان کار پیشنهادی', ...diagram,
+    '', '## امنیت، حریم خصوصی و عملیات', ...points(proposal.security),
+    '', '## تجربهٔ کاربر و طراحی محصول', ...points(proposal.experience),
+    '', '### دسترس‌پذیری', ...points(proposal.accessibility),
     '', '## فرایند ساخت و سنجش', ...points(proposal.steps),
+    '', '## معیارهای پذیرش برای عامل پیاده‌ساز', ...points(proposal.acceptance),
     '', '## آینده‌نگری، هزینه و ریسک', ...points(proposal.risks),
     '', '## جایگزین‌ها و معیار تغییر تصمیم', ...points(proposal.alternatives),
     '', '## پرسش‌های باز',
@@ -78,6 +93,7 @@ export function renderIdeaReport({ title, rootId, summary, result = {}, proposal
     '', '## روش و محدودیت',
     '- انتخاب فناوری و معماری پیشنهاد مهندسی است، نه حقیقت اثبات‌شده. ارجاع‌ها فقط به منابعی است که عامل‌ها خوانده‌اند.',
     '- برای ادعای «جدیدترین» باید تاریخ انتشار منبع و نسخهٔ فناوری جدا بررسی شود؛ نبود این اطلاعات به معنی تأیید تازگی نیست.',
+    '- این سند طرح و معیار تصمیم است و کد اجرایی نیست. گذرگاه‌های نمونه‌خوانی‌شده جای مطالعهٔ کامل کتاب را نمی‌گیرند.',
   ];
   return lines.filter((line) => line !== null).join('\n') + '\n';
 }

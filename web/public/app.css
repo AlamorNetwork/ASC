@@ -132,6 +132,10 @@ button:active:not(:disabled){transform:translateY(1px)}
 .message.user .who{color:var(--green)}
 .message.user .who:before{content:'';width:7px;height:7px;border-radius:50%;background:var(--green)}
 .message p{margin:0;font-size:14px;unicode-bidi:plaintext}
+.message.working-message{border-color:var(--line-strong);background:transparent}
+.working-line{color:var(--ink-soft);transition:opacity .18s ease}
+.working-stop{margin-top:9px;padding:2px 0;border:0;background:transparent;color:var(--copper-strong);font-size:11px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.working-stop[hidden]{display:none}
 .message-content{white-space:normal;overflow-wrap:anywhere;font-size:14px;line-height:1.9}
 .message-content p{margin:0 0 10px}
 .message-content h1,.message-content h2,.message-content h3,.message-content h4{margin:22px 0 9px;line-height:1.5;color:var(--ink)}

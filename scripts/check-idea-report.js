@@ -11,6 +11,12 @@ const { ideaReportPath } = await import('../src/idea-report.js');
 const { renderMarkdown } = await import('../web/public/markdown.js');
 try {
   const pid = 'idea-owner';
+  const libraryCase = Number(store.insertDossier({ principalId: pid, topic: 'کتابخانهٔ محصول' }));
+  const libraryDoc = Number(store.insertDocument({ principalId: pid, dossierId: libraryCase,
+    filename: 'راهنمای رزرو پزشک.pdf', kind: 'pdf', extraction: 'local', pages: 20, readPages: 18 }));
+  store.insertChunks(pid, libraryCase, libraryDoc, Array.from({ length: 6 }, (_, seq) => ({
+    seq, page: seq + 1, text: `رزرو پزشک باید هنگام همزمانی درخواست‌ها ظرفیت نوبت را دوباره بررسی کند. بخش ${seq + 1}.`,
+  })));
   const request = 'ایدهٔ من ساخت اپلیکیشن رزرو پزشک است. دربارهٔ معماری، زبان و فناوری‌های مناسب با منابع معتبر تحقیق کن و گزارش Markdown و فلوچارت بده.';
   const plan = normalizePlan({ action: 'respond', reply: 'به نظر خوب است.' }, request);
   assert.equal(plan.action, 'research_team');
@@ -30,7 +36,9 @@ try {
       openQuestions: ['بار همزمان چند کاربر است؟'], reports: [{ question: 'معماری', report: { summary: 'مستندات رسمی مرور شد',
         findings: [{ sourceUrl: 'https://example.org/official', text: 'API service', quote: 'An API service can separate clients from stored records.' }] } }] };
   };
-  const ask = async ({ system }) => ({ data: system.includes('ویراستار گزارش') ? {
+  let bookSelections = 0;
+  const ask = async ({ system }) => ({ data: system.includes('حداکثر دو کتاب واقعاً مرتبط') ?
+    (bookSelections++, { bookIds: [libraryDoc, 9999] }) : system.includes('ویراستار سند') ? {
     problem: 'رزرو نوبت بدون تداخل', summary: 'با نمونهٔ کوچک شروع کن.',
     stack: [{ layer: 'API', choice: 'Node.js', why: 'به سنجش بار نیاز دارد', evidence: ['S1', 'S99'] }],
     avoid: [{ name: 'ریزسرویس زودهنگام', reason: 'هزینهٔ عملیاتی', evidence: [] }],
@@ -41,17 +49,29 @@ try {
   assert.ok(first.text.includes('| API | Node.js |'));
   assert.ok(first.text.includes('```mermaid'));
   assert.ok(first.text.includes('https://example.org/official'));
+  assert.ok(first.text.includes('راهنمای رزرو پزشک.pdf'));
+  assert.ok(first.text.includes('6 از 6 گذرگاه'));
+  assert.ok(first.text.includes('18 از 20 صفحه'));
+  assert.ok(first.text.includes('## امنیت، حریم خصوصی و عملیات'));
   assert.ok(!first.text.includes('[S99]'));
   const rootId = first.action.nodeId;
   const file = ideaReportPath(pid, first.dossierId, rootId);
   assert.ok(fs.existsSync(file));
+  assert.ok(fs.existsSync(file.replace(/\.md$/, '-references.json')));
   assert.ok(first.text.includes(`/api/idea-report?dossierId=${first.dossierId}&rootId=${rootId}`));
+  assert.equal(bookSelections, 1);
+  const newBook = Number(store.insertDocument({ principalId: pid, dossierId: libraryCase,
+    filename: 'امنیت رزرو پزشک.pdf', kind: 'pdf', extraction: 'local', pages: 1, readPages: 1 }));
+  store.insertChunks(pid, libraryCase, newBook, [{ seq: 0, page: 1,
+    text: 'برای رزرو پزشک، دسترسی به سوابق باید محدود و قابل حسابرسی باشد.' }]);
   const second = await motherTurn({ principalId: pid, dossierId: first.dossierId,
     userText: 'ادامه بده', ask: async ({ system }) => {
-      assert.ok(system.includes('ویراستار گزارش'), 'resume should not replan');
+      assert.ok(system.includes('ویراستار سند') || system.includes('حداکثر دو کتاب واقعاً مرتبط'),
+        'resume should not replan');
       return ask({ system });
     }, team });
   assert.equal(second.action.nodeId, rootId);
+  assert.equal(bookSelections, 2, 'a new reference book should invalidate the saved selection');
   assert.equal(calls, 2);
   assert.equal(store.dossierResearchNodes(pid, first.dossierId).filter((n) => !n.parent_id).length, 1);
   assert.ok(fs.readFileSync(file, 'utf8').includes('گزارش این دور پژوهش'));

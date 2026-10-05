@@ -1,6 +1,6 @@
 import { renderMarkdown } from './markdown.js';
 const $ = (id) => document.getElementById(id);
-let csrf = '', selected = null, freshCase = false, activeJob = null, mode = 'chat', busy = false, googleOcrReady = false;
+let csrf = '', selected = null, freshCase = false, activeJob = null, activeJobKind = null, sideChatJob = null, mode = 'chat', busy = false, googleOcrReady = false;
 let investigation = null, progressHideTimer = null, toastTimer = null, monitorSnapshot = '', leadSnapshot = '', monitorTimer = null, monitorNodes = [];
 let currentView = 'chat', latestState = null, libraryDocs = [], activeLibraryDoc = null, focusedSource = null;
 let lastRenderedMessage = null;
@@ -56,10 +56,11 @@ async function refresh() {
   await loadUploads();
   if (currentView === 'library') await loadLibrary();
   if (!activeJob) {
-    const { job } = await api('/api/active-job');
+    const { job, sideJob } = await api('/api/active-job');
     if (job) watch(job.id, ({ import:'خواندن سند', analysis:'تحلیل عمیق سند', deep:'کاوش عمیق',
       research:'تحقیق وب', chat:'در حال پاسخ', claims:'استخراج ادعاها', site:'خواندن وب‌سایت',
-      team:'گروه پژوهش', consult:'مشاور منابع' })[job.kind] || 'در حال کار');
+      team:'گروه پژوهش', consult:'مشاور منابع' })[job.kind] || 'در حال کار', { inlineChat: job.kind === 'chat' });
+    if (sideJob && !sideChatJob) watchSideChat(sideJob.id);
   }
 }
 function render(data) {
@@ -429,7 +430,45 @@ function showChatResult(result) {
   if (last?.classList.contains('assistant') && lastRenderedMessage === result.text) return;
   addMessage('assistant', result.text);
 }
-function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value; $('resume-deep').disabled = value; $('site-form').querySelector('button[type="submit"]').disabled = value; $('consult-form').querySelector('button[type="submit"]').disabled = value; }
+function setBusy(value) { busy = value; $('compose-form').querySelector('button').disabled = value &&
+  (mode === 'deep' || !!sideChatJob || (activeJobKind && !['chat','team','research','deep'].includes(activeJobKind)));
+  $('resume-deep').disabled = value; $('site-form').querySelector('button[type="submit"]').disabled = value;
+  $('consult-form').querySelector('button[type="submit"]').disabled = value; }
+function pendingMessage() {
+  const box = document.createElement('div'); box.className = 'message assistant working-message';
+  const who = document.createElement('div'); who.className = 'who'; who.textContent = 'عامل مادر';
+  const content = document.createElement('div'); content.className = 'message-content';
+  const line = document.createElement('p'); line.className = 'working-line'; line.textContent = 'در حال بررسی…';
+  const stop = document.createElement('button'); stop.className = 'working-stop'; stop.type = 'button';
+  stop.textContent = 'نگه‌داشتن پژوهش'; stop.hidden = true;
+  stop.onclick = async () => { try { await api('/api/stop', { method: 'POST' }); stop.disabled = true;
+    line.textContent = 'درخواست توقف ثبت شد؛ گام جاری پایان می‌یابد.'; } catch (err) { fail(err); } };
+  content.append(line, stop); box.append(who, content); $('messages').append(box);
+  document.querySelector('.conversation').classList.add('has-messages'); $('messages').scrollTop = $('messages').scrollHeight;
+  return { box, line, content, stop };
+}
+async function watchSideChat(id) {
+  sideChatJob = id; setBusy(true);
+  const pending = pendingMessage();
+  while (sideChatJob === id) {
+    try {
+      const job = await api(`/api/jobs/${id}`);
+      if (!pending.box.isConnected) $('messages').append(pending.box);
+      pending.line.textContent = job.partial || job.stage || 'در حال نوشتن…';
+      if (job.state !== 'running') {
+        sideChatJob = null; setBusy(!!activeJob);
+        if (job.state === 'done' && job.result?.text) {
+          pending.box.classList.remove('working-message');
+          pending.content.innerHTML = renderMarkdown(job.result.text);
+          lastRenderedMessage = job.result.text;
+          selectResultDossier(job.result);
+        } else { pending.box.remove(); toast(job.error || 'پاسخ هم‌زمان کامل نشد.'); }
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    } catch (err) { sideChatJob = null; setBusy(!!activeJob); pending.box.remove(); fail(err); break; }
+  }
+}
 async function beginImport(id, visionMode = 'detect') {
   if (busy) return toast('یک کار دیگر در حال اجراست.');
   if (visionMode !== 'detect' && !confirm(visionMode === 'google_ocr'
@@ -444,10 +483,11 @@ async function beginImport(id, visionMode = 'detect') {
     watch(r.id, visionMode === 'google_ocr' ? 'Google Document AI OCR' : visionMode === 'all' ? 'خواندن تا پایان' : visionMode === 'batch' ? 'خواندن ۲۰ صفحه' : 'بررسی سند');
   } catch(e) { fail(e); }
 }
-async function watch(id, title) {
+async function watch(id, title, { inlineChat = false } = {}) {
   if (!id) return;
   clearTimeout(progressHideTimer);
-  activeJob = id; setBusy(true); $('progress').hidden = false; $('progress-title').textContent = title;
+  activeJob = id; activeJobKind = inlineChat ? 'chat' : null; setBusy(true); $('progress').hidden = inlineChat; $('progress-title').textContent = title;
+  const pending = inlineChat ? pendingMessage() : null;
   renderAgentMonitor(monitorNodes);
   $('progress-detail').textContent = 'در حال آماده‌سازی…';
   $('progress-summary').hidden = true;
@@ -458,6 +498,12 @@ async function watch(id, title) {
   while (activeJob === id) {
     try {
       const job = await api(`/api/jobs/${id}`);
+      activeJobKind = job.kind; setBusy(true);
+      if (pending) {
+        if (!pending.box.isConnected) $('messages').append(pending.box);
+        pending.line.textContent = job.stage || 'در حال بررسی…';
+        pending.stop.hidden = !['chat','team','research','deep'].includes(job.kind);
+      }
       $('progress-time').textContent = formatTime(Date.now() - started);
       $('progress-detail').textContent = job.stage || 'در حال انجام…';
       if (job.kind === 'chat' || job.kind === 'team') {
@@ -485,11 +531,12 @@ async function watch(id, title) {
         $('progress-track').setAttribute('aria-valuenow', String(percent));
       } else $('progress-track').removeAttribute('aria-valuenow');
       if (job.state !== 'running') {
-        activeJob = null; setBusy(false); $('progress-fill').classList.remove('indeterminate'); $('progress-fill').style.width = '100%';
+        activeJob = null; activeJobKind = null; setBusy(!!sideChatJob); $('progress-fill').classList.remove('indeterminate'); $('progress-fill').style.width = '100%';
         $('progress-track').setAttribute('aria-valuenow', '100');
         $('progress-detail').textContent = job.state === 'failed' ? `خطا: ${job.error || 'کار ناموفق بود.'}` : job.state === 'done' ? 'کار پایان یافت.' : 'کار متوقف شد.';
         $('stop-job').hidden = true;
         progressHideTimer = setTimeout(() => { if (!activeJob) $('progress').hidden = true; }, job.state === 'failed' ? 12000 : 4500);
+        if (pending) pending.box.remove();
         if (job.state === 'failed') toast(job.savedScan ? `${job.error} · تا صفحه ${job.savedScan.readPages} ذخیره شد.` : job.error || 'کار ناموفق بود.');
         if (job.state === 'done') {
           selectResultDossier(job.result);
@@ -513,7 +560,7 @@ async function watch(id, title) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
-    } catch(e) { activeJob = null; setBusy(false); renderAgentMonitor(monitorNodes); $('progress-detail').textContent = 'ارتباط با وضعیت کار قطع شد. با تازه‌سازی، وضعیت را دوباره بررسی کن.'; $('stop-job').hidden = true; fail(e); break; }
+    } catch(e) { activeJob = null; activeJobKind = null; setBusy(!!sideChatJob); pending?.box.remove(); renderAgentMonitor(monitorNodes); $('progress-detail').textContent = 'ارتباط با وضعیت کار قطع شد. با تازه‌سازی، وضعیت را دوباره بررسی کن.'; $('stop-job').hidden = true; fail(e); break; }
   }
 }
 function addMessage(role, text) {
@@ -617,15 +664,17 @@ for (const [id, value] of [['tab-chat','chat'],['tab-deep','deep']]) $(id).oncli
   $('deep-ceiling').disabled = value !== 'deep';
   $('prompt').placeholder = value === 'deep' ? 'پرسش اصلی کاوش عمیق چیست؟' : 'پرسش یا دستورت را به عامل مادر بگو…';
   $('compose-hint').textContent = value === 'deep' ? 'این مسیر مستقل از گفت‌وگو با عامل مادر است؛ پس از تأیید سقف هزینه آغاز می‌شود و در پرونده ثبت خواهد شد.' : 'با عامل مادر حرف بزن. وقتی صریحاً دستور تحقیق بدهی، خودش زیرنیت‌ها را می‌سازد و عامل‌ها را مأمور می‌کند.';
+  setBusy(busy);
 };
-$('compose-form').onsubmit = async (e) => { e.preventDefault(); if (busy) return;
+$('compose-form').onsubmit = async (e) => { e.preventDefault(); if (sideChatJob || (busy && (mode !== 'chat' || !activeJob))) return;
   const message=$('prompt').value.trim(); if (!message) return;
   const requestMode = mode;
   if (requestMode === 'deep') return startDeep();
-  try { setBusy(true); const r=await api(`/api/${requestMode}`, { method:'POST', json:{ message, question:message, dossierId:selected,
+  try { if (!activeJob) setBusy(true); const r=await api(`/api/${requestMode}`, { method:'POST', json:{ message, question:message, dossierId:selected,
     documentId:focusedSource?.id ?? null } });
     $('prompt').value=''; $('messages').querySelectorAll('.question-box').forEach((box) => box.remove()); addMessage('user',message);
-    if (r.id) watch(r.id,requestMode==='chat'?'عامل مادر در حال بررسی':'در حال تحقیق وب');
+    if (r.id && activeJob && requestMode === 'chat') watchSideChat(r.id);
+    else if (r.id) watch(r.id,requestMode==='chat'?'عامل مادر در حال بررسی':'در حال تحقیق وب', { inlineChat: requestMode === 'chat' });
     else {
       selectResultDossier(r);
       try { await refresh(); } finally { if (requestMode === 'chat') showChatResult(r); }
