@@ -380,8 +380,9 @@ Both are used only for a software-idea report. One small model call chooses the
 technical search terms. MCP results appear as **technical leads**, never as verified
 citations; the quote gate still requires the original source text. Missing credentials
 or an unavailable server does not stop the report. Browser fetching remains in ASC's
-existing web research path. Test the connection without model spend with
-`node scripts/check-mcp.js`.
+existing web research path. `node scripts/check-mcp.js` runs offline protocol
+checks; `node scripts/probe-mcp.js` checks configured services live without
+model calls.
 
 After setting the variables in `/root/ASC/.env`, restart `asc` and `asc-web`.
 
