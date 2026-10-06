@@ -7,6 +7,11 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node index.js",
-    "check": "node scripts/check.js"
+    "check": "node scripts/check.js",
+    "web:install": "npm --prefix web/client ci",
+    "web:dev": "npm --prefix web/client run dev",
+    "web:build": "npm --prefix web/client run build",
+    "web:typecheck": "npm --prefix web/client run typecheck",
+    "web:check": "node scripts/check-dashboard.js && node scripts/check-web-auth.js && node scripts/check-web.js"
   }
 }

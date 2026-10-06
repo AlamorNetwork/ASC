@@ -148,6 +148,11 @@ node scripts/probe-network.js         # measure the route to the provider
 ### Private web workspace
 
 The web workspace uses the same SQLite dossiers and research engine as the Telegram bot.
+Its browser interface is a React/Vite application in `web/client`; the production build
+is written to `web/public` and served by the built-in Node web server. For local UI work,
+run `npm run web:install` once, then `npm run web:dev`. Create a production bundle with
+`npm run web:build`; `scripts/setup-web.sh` installs the locked client dependencies and
+builds that bundle automatically during deployment.
 It uploads PDFs directly from the browser, up to the app's 100 MB limit; it does not
 pass them through Telegram's hosted Bot API. The upload itself never calls a model.
 Select **Read** after upload to extract and index the file. A scanned book asks
@@ -187,9 +192,9 @@ The DNS token is stored in `/etc/letsencrypt/cloudflare.ini` with root-only
 permissions for certificate renewal. The script checks the local origin; verify
 the public URL separately after the Cloudflare rule is active. If 2083 is occupied,
 choose a free `WEB_HTTPS_PORT` and set the Origin Rule to the same port.
-The existing Telegram service keeps running during migration. To run the web smoke
-test without model spend: `node scripts/check-web.js` and
-`node scripts/check-document-analysis.js`.
+The existing Telegram service keeps running during migration. To run the complete web
+contract, authentication, and backend smoke suite without model spend: `npm run web:check`.
+Document-analysis behavior has its own free check: `node scripts/check-document-analysis.js`.
 
 #### Research team and source library
 

@@ -75,6 +75,8 @@ export const config = {
     origin: env.WEB_ORIGIN || '',
     port: Number(env.WEB_PORT || 3000),
     principalId: env.WEB_PRINCIPAL_ID || '',
+    signupEnabled: /^(?:1|true|yes|on)$/i.test(env.WEB_SIGNUP_ENABLED || ''),
+    sessionHours: Number(env.WEB_SESSION_HOURS || 12),
   },
   webExtraction: {
     fallback: (env.WEB_FETCH_FALLBACK || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),

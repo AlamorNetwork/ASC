@@ -40,31 +40,27 @@ try {
   })) throw new Error('deep research can start without an explicit bounded ceiling');
   const page = await fetch(url);
   const markup = await page.text();
-  if (page.status !== 200 || !markup.includes('اطلس پژوهش') ||
-      !markup.includes('id="tab-deep"') || !markup.includes('id="investigation-status"'))
-    throw new Error('web research controls are missing');
-  const markdownAsset = await fetch(`${url}/markdown.js`);
-  if (markdownAsset.status !== 200 || !(await markdownAsset.text()).includes('renderMarkdown'))
-    throw new Error('Markdown viewer asset was not served');
-  for (const [asset, contentType] of [['atlas.png', 'image/png'], ['vazirmatn.woff2', 'font/woff2']]) {
-    const response = await fetch(`${url}/${asset}`);
+  if (page.status !== 200 || !markup.includes('<div id="root"></div>') || !markup.includes('lang="fa"'))
+    throw new Error('React workspace shell is missing');
+  for (const route of ['/login', '/dossiers', '/dashboard', '/sources', '/agents', '/evidence', '/settings']) {
+    const routed = await fetch(`${url}${route}`);
+    if (routed.status !== 200 || !(await routed.text()).includes('<div id="root"></div>'))
+      throw new Error(`SPA route ${route} was not served`);
+  }
+  const scriptPath = markup.match(/<script[^>]+src="([^"]+\.js)"/)?.[1];
+  const stylePath = markup.match(/<link[^>]+href="([^"]+\.css)"/)?.[1];
+  if (!scriptPath || !stylePath) throw new Error('production React assets are not referenced');
+  for (const [asset, contentType, minBytes] of [
+    [scriptPath, 'text/javascript', 100000], [stylePath, 'text/css', 10000],
+    ['/vazirmatn.woff2', 'font/woff2', 1000],
+    ['/landing-assets/hero-atlas-1920x1080.jpg', 'image/jpeg', 10000],
+    ['/landing-assets/dashboard-overview-1600x1000.png', 'image/png', 10000],
+  ]) {
+    const response = await fetch(`${url}${asset.startsWith('/') ? '' : '/'}${asset}`);
     if (response.status !== 200 || !response.headers.get('content-type')?.includes(contentType) ||
-        (await response.arrayBuffer()).byteLength < 1000)
+        (await response.arrayBuffer()).byteLength < minBytes)
       throw new Error(`web design asset ${asset} is unavailable`);
   }
-  if (!markup.includes('id="tab-chat"') || markup.includes('id="tab-research"') ||
-      markup.includes('id="research-node-form"'))
-    throw new Error('web chat still requires manual research routing');
-  for (const id of ['library-page', 'agents-page', 'evidence-page', 'library-search', 'storm-tree'])
-    if (!markup.includes(`id="${id}"`)) throw new Error(`workspace page ${id} is missing`);
-  const script = fs.readFileSync(path.join(import.meta.dirname, '..', 'web', 'public', 'app.js'), 'utf8');
-  if (!script.includes('data-resume-root') || !script.includes('/api/research-nodes/run'))
-    throw new Error('approved queued agents have no direct resume control');
-  const htmlIds = new Set([...markup.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
-  const referencedIds = new Set([...script.matchAll(/\$\('([^']+)'\)/g)].map((match) => match[1]));
-  const dynamicIds = new Set([...script.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
-  const absent = [...referencedIds].filter((id) => !htmlIds.has(id) && !dynamicIds.has(id));
-  if (absent.length) throw new Error(`web script refers to missing DOM ids: ${absent.join(', ')}`);
   const denied = await fetch(`${url}/api/state`);
   if (denied.status !== 401) throw new Error('unauthenticated state was exposed');
   const deniedProgress = await fetch(`${url}/api/research-progress?dossierId=1`);
@@ -378,7 +374,7 @@ try {
   const afterDelete = await fetch(`${url}/api/state`, { headers: { Cookie: cookie } });
   if ((await afterDelete.json()).dossiers.some((item) => item.id === dossierId))
     throw new Error('deleted dossier remains in web case list');
-  console.log('web check passed — four pages, global sources, private PDF, focused reading, safe deletion; 0 model calls');
+  console.log('web check passed — React routes, global sources, private PDF, focused reading, safe deletion; 0 model calls');
 } finally {
   await new Promise((resolve) => server.close(resolve));
   db.close();

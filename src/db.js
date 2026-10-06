@@ -175,6 +175,31 @@ CREATE TABLE IF NOT EXISTS users (
   decided_at    TEXT
 );
 
+-- Web accounts are separate from Telegram membership. Their random principal id is
+-- the tenant key used by every existing dossier/document query.
+CREATE TABLE IF NOT EXISTS web_accounts (
+  principal_id    TEXT PRIMARY KEY,
+  email           TEXT NOT NULL UNIQUE,
+  display_name    TEXT NOT NULL,
+  password_scheme TEXT NOT NULL DEFAULT 'scrypt-v1',
+  password_salt   BLOB NOT NULL,
+  password_hash   BLOB NOT NULL,
+  created_at      TEXT NOT NULL
+);
+
+-- The browser receives the random token; only its digest is persisted. Revocation is
+-- retained so logout remains effective even if a stale cookie is replayed.
+CREATE TABLE IF NOT EXISTS web_sessions (
+  token_hash    TEXT PRIMARY KEY,
+  principal_id  TEXT NOT NULL,
+  csrf_token    TEXT NOT NULL,
+  created_at    TEXT NOT NULL,
+  expires_at    TEXT NOT NULL,
+  revoked_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_web_sessions_principal
+  ON web_sessions(principal_id, expires_at);
+
 CREATE TABLE IF NOT EXISTS intentions (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   principal_id  TEXT    NOT NULL,
@@ -1004,6 +1029,48 @@ export function dossierChunks(principalId, dossierId) {
 }
 
 // ---------------------------------------------------------------------- users
+
+export const createWebAccount = ({ principalId, email, displayName, passwordSalt, passwordHash }) => {
+  db.prepare(`INSERT INTO web_accounts
+    (principal_id, email, display_name, password_scheme, password_salt, password_hash, created_at)
+    VALUES (?, ?, ?, 'scrypt-v1', ?, ?, ?)`)
+    .run(String(principalId), email, displayName, passwordSalt, passwordHash, now());
+  return getWebAccount(principalId);
+};
+
+export const getWebAccountByEmail = (email) => db.prepare(`
+  SELECT principal_id, email, display_name, password_scheme, password_salt, password_hash
+  FROM web_accounts WHERE email = ?
+`).get(email) ?? null;
+
+export const getWebAccount = (principalId) => db.prepare(`
+  SELECT principal_id AS principalId, email, display_name AS displayName, created_at AS createdAt
+  FROM web_accounts WHERE principal_id = ?
+`).get(String(principalId)) ?? null;
+
+export const createWebSession = ({ tokenHash, principalId, csrfToken, expiresAt }) => db.prepare(`
+  INSERT INTO web_sessions
+    (token_hash, principal_id, csrf_token, created_at, expires_at, revoked_at)
+  VALUES (?, ?, ?, ?, ?, NULL)
+`).run(tokenHash, String(principalId), csrfToken, now(), expiresAt);
+
+export const getWebSession = (tokenHash, at = now()) => db.prepare(`
+  SELECT s.principal_id, s.csrf_token, s.expires_at,
+         a.email, a.display_name
+  FROM web_sessions s
+  LEFT JOIN web_accounts a ON a.principal_id = s.principal_id
+  WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
+`).get(tokenHash, at) ?? null;
+
+export const revokeWebSession = (tokenHash) => db.prepare(`
+  UPDATE web_sessions SET revoked_at = ?
+  WHERE token_hash = ? AND revoked_at IS NULL
+`).run(now(), tokenHash).changes;
+
+export const pruneWebSessions = (at = now()) => db.prepare(`
+  DELETE FROM web_sessions
+  WHERE expires_at <= ? OR (revoked_at IS NOT NULL AND revoked_at <= ?)
+`).run(at, new Date(Date.parse(at) - 24 * 60 * 60 * 1000).toISOString()).changes;
 
 export const getUser = (principalId) =>
   db.prepare(`SELECT * FROM users WHERE principal_id = ?`).get(String(principalId));

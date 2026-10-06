@@ -1,0 +1,119 @@
+@font-face{font-family:Vazirmatn;src:url('/vazirmatn.woff2') format('woff2');font-style:normal;font-weight:100 900;font-display:swap}
+
+:root {
+  /* Overlay layers */
+  --z-overlay: 400;
+
+  --z-spotlight: 1000; /* Tutorial spotlights/guided help */
+
+  /* System layers */
+  --z-critical: 2000; /* Critical system notifications */
+
+  /* spacing */
+  --spacing-1: 0.25rem;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --spacing-6: 1.5rem;
+  --spacing-8: 2rem;
+  --spacing-12: 3rem;
+  --spacing-16: 4rem;
+  --spacing-20: 5rem;
+}
+
+:root {
+  --background: #07100d;
+  --foreground: #edf8f2;
+  --surface: #0b1713;
+  --surface-foreground: #edf8f2;
+  --sidebar: #08130f;
+  --sidebar-foreground: #d8e8df;
+  --card: #0e1b16;
+  --card-foreground: #edf8f2;
+  --popup: #102019;
+  --popup-foreground: #edf8f2;
+  --primary: #42e89a;
+  --primary-foreground: #04110b;
+  --secondary: #172820;
+  --secondary-foreground: #d9ebe2;
+  --accent: #42e89a;
+  --accent-foreground: #04110b;
+  --muted: #12231c;
+  --muted-foreground: #87a397;
+  --success: #42e89a;
+  --success-foreground: #04110b;
+  --error: #ff6f7f;
+  --error-foreground: #1e070b;
+  --warning: #f4c86a;
+  --warning-foreground: #1b1303;
+  --info: #7fb8ff;
+  --info-foreground: #05111e;
+  --info-hover: #95c4ff;
+  --info-active: #66a8f7;
+  --border: #1c342a;
+  --font-family-base: 'Vazirmatn', sans-serif;
+  --font-family-display: Georgia, 'Vazirmatn', serif;
+  --font-family-monospace: Consolas, 'Courier New', monospace;
+  --font-family-cursive: 'Vazirmatn', sans-serif;
+  --shadow: 0 8px 24px rgba(0, 0, 0, .22);
+  --shadow-md: 0 16px 40px rgba(0, 0, 0, .28);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, .34);
+  --shadow-focus: 0 0 0 3px rgba(66, 232, 154, .2);
+  --radius-sm: 6px;
+  --radius: 9px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 999px;
+  --animation-duration-fast: 120ms;
+  --animation-duration-normal: 220ms;
+  --animation-duration-slow: 420ms;
+  --chart-color-1: #42e89a;
+  --chart-color-2: #7fb8ff;
+  --chart-color-3: #f4c86a;
+  --chart-color-4: #d793ff;
+  --chart-color-5: #ff6f7f;
+}
+
+*{box-sizing:border-box}
+html{color-scheme:dark;min-width:320px;background:var(--background);scroll-behavior:smooth}
+body{margin:0;min-width:320px;min-height:100%;background:var(--background);color:var(--foreground);font-family:var(--font-family-base);font-size:14px;line-height:1.75}
+button,input,textarea,select{font:inherit}
+button,a{touch-action:manipulation}
+button{cursor:pointer}
+button:disabled{cursor:not-allowed}
+:focus-visible{outline:2px solid #f0cf86;outline-offset:3px}
+::selection{background:#315f48;color:#fff}
+.route-loading{min-height:100dvh;display:grid;place-items:center;background:#04100c;color:#d4e2d5;font:600 14px Vazirmatn,sans-serif}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+.dark {
+  --background: #07100d;
+  --foreground: #edf8f2;
+  --surface: #0b1713;
+  --surface-foreground: #edf8f2;
+  --sidebar: #08130f;
+  --sidebar-foreground: #d8e8df;
+  --card: #0e1b16;
+  --card-foreground: #edf8f2;
+  --popup: #102019;
+  --popup-foreground: #edf8f2;
+  --primary: #42e89a;
+  --primary-foreground: #04110b;
+  --secondary: #172820;
+  --secondary-foreground: #d9ebe2;
+  --accent: #42e89a;
+  --accent-foreground: #04110b;
+  --muted: #12231c;
+  --muted-foreground: #87a397;
+  --success: #42e89a;
+  --success-foreground: #04110b;
+  --error: #ff6f7f;
+  --error-foreground: #1e070b;
+  --warning: #f4c86a;
+  --warning-foreground: #1b1303;
+  --info: #7fb8ff;
+  --info-foreground: #05111e;
+  --info-hover: #95c4ff;
+  --info-active: #66a8f7;
+  --border: #1c342a;
+}

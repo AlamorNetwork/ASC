@@ -56,7 +56,8 @@ let text = fs.readFileSync(file, 'utf8');
 const existing = /^WEB_PASSWORD=(.*)$/m.exec(text)?.[1]?.replace(/^["']|["']$/g, '');
 const password = existing || crypto.randomBytes(24).toString('hex');
 for (const [key, value] of Object.entries({ WEB_PASSWORD: password,
-  WEB_ORIGIN: `https://${domain}${port === '443' ? '' : `:${port}`}`, WEB_PORT: '3000' })) {
+  WEB_ORIGIN: `https://${domain}${port === '443' ? '' : `:${port}`}`, WEB_PORT: '3000',
+  WEB_SIGNUP_ENABLED: 'true', WEB_SESSION_HOURS: '12' })) {
   const re = new RegExp(`^${key}=.*$`, 'm');
   text = re.test(text) ? text.replace(re, `${key}=${value}`) : `${text.trimEnd()}\n${key}=${value}\n`;
 }
@@ -64,6 +65,9 @@ fs.writeFileSync(file, text, { mode: 0o600 });
 if (!existing) console.log(`Web password (shown once): ${password}`);
 NODE
 chmod 600 "$DIR/.env"
+
+echo '==> building ASC web interface'
+(cd "$DIR" && npm --prefix web/client ci && npm --prefix web/client run build)
 
 echo '==> checking ASC web configuration'
 if ! (cd "$DIR" && NODE_ENV=production node --input-type=module -e "import('./src/web.js').then(m => m.createWebServer())"); then

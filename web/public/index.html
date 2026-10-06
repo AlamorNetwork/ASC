@@ -1,146 +1,15 @@
 <!doctype html>
 <html lang="fa" dir="rtl">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#060a08">
-  <meta name="description" content="فضای خصوصی پژوهش ASC برای گفت‌وگو، بررسی منابع و پیگیری شاهدها.">
-  <title>ASC · اطلس پژوهش</title>
-  <link rel="stylesheet" href="/app.css">
-</head>
-<body>
-  <a class="skip-link" href="#workspace-main">رفتن به گفت‌وگو</a>
-  <section id="login" class="login-shell">
-    <div class="login-art" aria-hidden="true"><div class="art-index">ASC / RESEARCH ATLAS<br>FIELD NOTES · 01—∞</div><div class="art-caption">هر سرنخ، نقطه‌ای برای پرسش بعدی.</div></div>
-    <div class="login-card">
-      <div class="login-mark" aria-hidden="true">A<span>↗</span></div>
-      <div class="eyebrow">ALAMOR NETWORK / PRIVATE WORKSPACE</div>
-      <h1>جایی برای<br><em>کشفِ دقیق‌تر.</em></h1>
-      <p>با دستیار پژوهش گفت‌وگو کن. اسناد، سرنخ‌ها و مسیر هر بررسی در پروندهٔ تو می‌ماند.</p>
-      <form id="login-form">
-        <label for="password">رمز فضای پژوهش</label>
-        <input id="password" type="password" autocomplete="current-password" minlength="16" required placeholder="••••••••••••••••">
-        <button class="primary" type="submit">ورود به اطلس <span aria-hidden="true">↖</span></button>
-      </form>
-      <div id="login-error" class="form-error" role="alert"></div>
-      <div class="login-footer">ASC / SECURE RESEARCH WORKSPACE</div>
-    </div>
-  </section>
-
-  <div id="app" class="app-shell" hidden>
-    <aside id="rail" class="rail">
-      <div class="rail-brand"><div class="mini-seal">A<span>↗</span></div><div><strong>ASC</strong><small>RESEARCH ATLAS / 01</small></div></div>
-      <div class="rail-label">میز پژوهش</div>
-      <button id="new-case" class="rail-action active"><span aria-hidden="true">＋</span> <span>گفت‌وگوی تازه</span></button>
-      <nav class="view-nav" aria-label="بخش‌های پژوهش">
-        <button type="button" class="view-link active" data-view="chat" aria-current="page"><span aria-hidden="true">◌</span> گفت‌وگو با مادر</button>
-        <button type="button" class="view-link" data-view="library"><span aria-hidden="true">▤</span> کتابخانهٔ منابع</button>
-        <button type="button" class="view-link" data-view="agents"><span aria-hidden="true">⌁</span> درخت عامل‌ها</button>
-        <button type="button" class="view-link" data-view="evidence"><span aria-hidden="true">◇</span> شاهدها و ادعاها</button>
-      </nav>
-      <div class="rail-divider"></div>
-      <div class="rail-heading"><span>پرونده‌ها</span><span id="case-count">۰</span></div>
-      <div id="case-list" class="case-list"></div>
-      <div class="rail-bottom"><div class="rail-note">از یک پرسش آغاز کن. مسیر هر تحقیق اینجا می‌ماند.</div><div class="signal"><i></i> فضای پژوهش آماده است</div><button id="logout" class="text-button">خروج امن ↗</button></div>
-    </aside>
-
-    <main id="workspace-main" class="main">
-      <header class="topbar">
-        <button id="mobile-menu" class="icon-button" aria-label="فهرست پرونده‌ها" aria-controls="rail" aria-expanded="false">☰</button>
-        <div class="topbar-title"><div class="eyebrow">WORKSPACE / پروندهٔ فعال</div><div id="breadcrumb" class="breadcrumb">گفت‌وگوی تازه</div></div>
-        <div class="top-actions"><span id="activity-signal" class="top-mark" role="status" aria-live="polite"><i></i><span id="activity-label">فضای پژوهش آماده است</span></span><button id="mobile-dossier" class="mobile-dossier" type="button" aria-controls="inspector" aria-expanded="false">دفتر پرونده</button><button id="refresh" class="icon-button" title="تازه‌سازی" aria-label="تازه‌سازی">↻</button></div>
-      </header>
-
-      <div class="workspace">
-        <section class="conversation">
-          <div class="hero">
-            <div class="hero-copy">
-              <div class="hero-kicker"><span>01 / 03</span> همراه پژوهش شما</div>
-              <h2>هر پرسش،<br><em>یک مسیر تازه.</em></h2>
-              <p>ایده‌ات را بگو. دستیار مادر گفت‌وگو می‌کند، سرنخ‌ها را دنبال می‌کند و اگر بخواهی، عامل‌ها را برای بررسی مأمور می‌کند.</p>
-              <div class="hero-steps"><span>گفت‌وگو</span><b>←</b><span>بررسی</span><b>←</b><span>شاهد</span></div>
-            </div>
-            <div class="hero-art" aria-hidden="true"></div>
-          </div>
-
-          <div id="messages" class="messages" aria-live="polite" aria-label="گفت‌وگو"></div>
-
-          <div id="progress" class="progress-card" hidden>
-            <div class="progress-head"><span class="pulse"></span><strong id="progress-title">در حال کار</strong><span id="progress-time">۰ ثانیه</span></div>
-            <div id="progress-track" class="progress-track" role="progressbar" aria-label="پیشرفت کار" aria-valuemin="0" aria-valuemax="100"><i id="progress-fill"></i></div>
-            <p id="progress-detail" role="status">در حال آماده‌سازی…</p>
-            <p id="progress-summary" class="progress-summary" hidden></p>
-            <button id="stop-job" class="text-button">■ نگه دار</button>
-          </div>
-
-          <div class="composer-wrap">
-            <div id="source-focus" class="source-focus" hidden><span id="source-focus-title"></span><button id="clear-source-focus" type="button" aria-label="بستن سند انتخاب‌شده">×</button></div>
-            <div class="composer-tabs" role="group" aria-label="مسیر درخواست"><button id="tab-chat" class="selected" type="button" aria-pressed="true"><span class="tab-dot"></span> گفت‌وگو با عامل مادر</button><button id="tab-deep" type="button" aria-pressed="false">کاوش عمیق <span class="tab-arrow">↗</span></button></div>
-            <div id="deep-options" class="deep-options" hidden><label for="deep-ceiling">سقف توقف این نوبت (دلار آمریکا)</label><input id="deep-ceiling" type="number" min="0" max="20" step="any" value="0.16" inputmode="decimal" required disabled><small>توقف بین دورهای تحقیق بررسی می‌شود؛ هزینهٔ دور جاری ممکن است از سقف عبور کند. پیش از شروع تأیید می‌گیریم.</small></div>
-            <form id="compose-form" class="composer"><label class="sr-only" for="prompt">پیام به عامل مادر</label><textarea id="prompt" rows="2" placeholder="چه چیزی ذهن تو را مشغول کرده؟" required></textarea><button class="send-button" type="submit" aria-label="ارسال پیام">↖</button></form>
-            <div id="compose-hint" class="compose-hint">برای شروع پژوهش بگو «دربارهٔ ... تحقیق کن». دستیار مادر مسیر را می‌سازد.</div>
-          </div>
-        </section>
-
-        <aside id="inspector" class="inspector" aria-label="دفتر پرونده">
-          <div class="inspector-title"><span class="eyebrow">DOSSIER / LIVE NOTES</span><h3>دفتر پرونده<span aria-hidden="true">↗</span></h3><p id="inspector-subtitle">پرسش‌ها، منابع و شاهدها در یک نگاه.</p></div>
-          <div class="inspector-stat"><div><strong id="stat-cases">۰</strong><span>پرونده</span></div><div><strong id="stat-verified">۰</strong><span>تأییدشده</span></div><div><strong id="stat-claims">۰</strong><span>ادعا</span></div></div>
-          <div class="inspector-tabs" role="tablist" aria-label="بخش‌های دفتر پرونده">
-            <button type="button" role="tab" id="inspector-tab-live" data-inspector-tab="live" aria-controls="inspector-panel-live" aria-selected="true">پیگیری</button>
-            <button type="button" role="tab" id="inspector-tab-sources" data-inspector-tab="sources" aria-controls="inspector-panel-sources" aria-selected="false" tabindex="-1">منابع</button>
-            <button type="button" role="tab" id="inspector-tab-evidence" data-inspector-tab="evidence" aria-controls="inspector-panel-evidence" aria-selected="false" tabindex="-1">شاهدها</button>
-          </div>
-          <div id="inspector-panel-live" class="inspector-panel" role="tabpanel" aria-labelledby="inspector-tab-live">
-          <section class="inspector-section agent-control" aria-labelledby="agent-control-heading"><div class="section-heading"><span id="agent-control-heading">اتاق کنترل عامل‌ها</span><small>LIVE AGENTS</small></div><div id="agent-monitor" class="agent-monitor" aria-live="polite"><p class="muted">برای دیدن وضعیت عامل‌ها، پرونده‌ای انتخاب کن.</p></div><div class="section-heading lead-heading"><span>سرنخ و تصمیم مادر</span><small>LEAD REVIEW</small></div><div id="lead-monitor" aria-live="polite"><p class="muted">هنوز سرنخی بررسی نشده است.</p></div></section>
-          <div class="inspector-section"><div class="section-heading"><span>کاوش عمیق</span><small>INVESTIGATION</small></div><div id="investigation-status" class="investigation-status" aria-live="polite"><p class="muted">برای دیدن وضعیت کاوش، پرونده‌ای انتخاب کن.</p></div><div id="resume-options" class="resume-options" hidden><label for="resume-ceiling">سقف توقف نوبت بعد (دلار آمریکا)</label><input id="resume-ceiling" type="number" min="0" max="20" step="any" value="0.16" inputmode="decimal"><button id="resume-deep" class="small-action" type="button">ادامهٔ کاوش</button></div></div>
-          <section class="inspector-section" aria-labelledby="research-heading"><div class="section-heading"><span id="research-heading">درخت نیت پژوهش</span><small>RESEARCH INTENT</small></div>
-            <p class="section-note">برای پیگیری یک مسیر تازه، به عامل مادر در گفت‌وگو بگو. وضعیت و گزارش‌ها اینجا نمایش داده می‌شوند.</p>
-            <div id="research-tree" class="research-tree"><p class="muted">برای دیدن پرسش‌ها، پرونده‌ای انتخاب کن.</p></div>
-          </section>
-          </div>
-          <div id="inspector-panel-sources" class="inspector-panel" role="tabpanel" aria-labelledby="inspector-tab-sources" hidden>
-          <section class="inspector-section" aria-labelledby="sources-heading"><div class="section-heading"><span id="sources-heading">فهرست منابع</span><small>LOCAL SOURCES</small></div>
-            <div id="source-list" class="source-list"><p class="muted">برای دیدن منابع، پرونده‌ای انتخاب کن.</p></div>
-            <form id="site-form" class="inspector-form" hidden>
-              <label for="site-url">افزودن نشانی وب</label><input id="site-url" name="url" type="url" inputmode="url" dir="ltr" placeholder="https://example.org" required>
-              <button class="small-action" type="submit">خواندن وب‌سایت</button><p id="site-form-status" class="form-feedback" role="status"></p>
-            </form>
-            <form id="consult-form" class="inspector-form" hidden>
-              <label for="consult-question">پرسش برای مشاور منابع (اختیاری و هزینه‌دار)</label>
-              <input id="consult-question" maxlength="1000" autocomplete="off" placeholder="مثلاً منشأ روایت این نویسنده چیست؟">
-              <button class="small-action" type="submit">پیشنهاد منبع با Perplexity</button>
-              <p id="consult-form-status" class="form-feedback" role="status"></p>
-            </form>
-          </section>
-          <div class="inspector-section"><div class="section-heading"><span>اسناد</span><small>DOCUMENTS</small></div>
-            <div id="upload-target" class="upload-target">مقصد فایل بعدی: پروندهٔ تازه</div>
-            <label id="drop-zone" class="drop-zone" for="file-input"><input id="file-input" class="sr-only" type="file" accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp"><span class="drop-icon">⌁</span><strong>کتاب یا سندت را اینجا بگذار</strong><small>PDF، متن یا تصویر · تا ۱۰۰ مگابایت</small></label>
-            <div class="upload-status">آپلود رایگان است. برای PDF اسکن‌شده، «۲۰ صفحه» یک بسته می‌خواند و «تا پایان» از صفحهٔ ذخیره‌شده تا آخر می‌رود. هر دو ممکن است هزینه داشته باشند.</div>
-            <div id="upload-status" class="upload-status"></div><div id="upload-list" class="upload-list"></div><div id="document-list" class="document-list"></div>
-          </div>
-          </div>
-          <div id="inspector-panel-evidence" class="inspector-panel" role="tabpanel" aria-labelledby="inspector-tab-evidence" hidden>
-          <div class="inspector-section"><div class="section-heading"><span>یافته‌ها</span><small>EVIDENCE</small></div><div id="claims-list" class="claims-list"><p class="muted">هنوز شاهدی ثبت نشده است.</p></div></div>
-          <button id="ledger" class="ledger-button" disabled><span>↧</span> دریافت دفترچهٔ پژوهش <small>MARKDOWN</small></button>
-          </div>
-        </aside>
-      </div>
-      <section id="library-page" class="atlas-page" aria-labelledby="library-heading" hidden>
-        <div class="page-intro"><span class="eyebrow">ARCHIVE / ALL DOSSIERS</span><h2 id="library-heading">کتابخانهٔ منابع</h2><p>همهٔ سندهای خوانده‌شده، مستقل از پرونده‌ای که در آن بارگذاری شده‌اند. متن و فایل اصلی را جدا ببین.</p><a class="library-export" href="/api/library-index">دریافت فهرست منابع · MD ↗</a></div>
-        <div class="library-layout"><div class="library-browser"><label class="sr-only" for="library-search">جست‌وجوی منابع</label><input id="library-search" type="search" placeholder="عنوان، موضوع یا نام پرونده…" autocomplete="off"><div id="library-count" class="library-count"></div><div id="library-list" class="library-list"></div></div><article id="library-detail" class="library-detail"><p class="muted">برای دیدن جزئیات، یک منبع را انتخاب کن.</p></article></div>
-      </section>
-      <section id="agents-page" class="atlas-page" aria-labelledby="agents-heading" hidden>
-        <div class="page-intro"><span class="eyebrow">YGGDRASIL / LIVE RESEARCH</span><h2 id="agents-heading">درخت عامل‌ها</h2><p>هر شاخه یک نیت یا زیرنیت است. وضعیت «در صف» یعنی هنوز اجرا نشده؛ گام جاری فقط از دادهٔ ثبت‌شده نشان داده می‌شود.</p></div>
-        <div id="storm-summary" class="storm-summary" role="status"></div><div id="storm-tree" class="storm-tree"></div>
-      </section>
-      <section id="evidence-page" class="atlas-page" aria-labelledby="evidence-heading" hidden>
-        <div class="page-intro"><span class="eyebrow">EVIDENCE / CLAIM REVIEW</span><h2 id="evidence-heading">شاهدها و ادعاها</h2><p>وضعیت روش بررسی، عبارت شاهد و منبع را کنار هم ببین. تطبیق عبارت به‌تنهایی اثبات حقیقت تاریخی نیست.</p></div>
-        <div id="evidence-board" class="evidence-board"></div>
-      </section>
-    </main>
-    <button id="panel-backdrop" class="panel-backdrop" type="button" aria-label="بستن پنل" hidden></button>
-  </div>
-  <div id="toast" class="toast" role="status" hidden></div>
-  <script type="module" src="/app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#04100c" />
+    <meta name="description" content="ASC؛ فضای پژوهش فارسی برای گفت‌وگو، منابع، عامل‌ها و شواهد قابل‌ردیابی." />
+    <title>ASC — فضای پژوهش خصوصی</title>
+    <script type="module" crossorigin src="/assets/index-Ckp3nyjm.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CaTDgTyC.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
 </html>

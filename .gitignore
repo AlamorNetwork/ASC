@@ -1,4 +1,7 @@
 .env
 data/
 node_modules/
+web/client/node_modules/
+.tmp/
+web/public/_cdn/
 *.log

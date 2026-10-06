@@ -3,9 +3,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { config } from './config.js';
 import * as store from './db.js';
+import * as auth from './web-auth.js';
 import * as settings from './settings.js';
 import { motherTurn, replyDuringWork, MAX_USER_TEXT_CHARS } from './mother.js';
 import { runResearch } from './research.js';
@@ -27,12 +28,11 @@ import * as cancel from './cancel.js';
 
 const publicDir = path.join(config.root, 'web', 'public');
 const uploadDir = path.join(path.dirname(config.dbPath), 'web-uploads');
-const sessions = new Map();
 const attempts = new Map();
 const jobs = new Map();
-let running = false;
-let sideConversationRunning = false;
-const secureCookie = config.web.origin.startsWith('https:') ? ' Secure;' : '';
+const running = new Set();
+const sideConversationRunning = new Set();
+
 
 function response(res, status, data, extra = {}) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8',
@@ -40,11 +40,6 @@ function response(res, status, data, extra = {}) {
   res.end(JSON.stringify(data, (_key, value) => typeof value === 'bigint' ? Number(value) : value));
 }
 function error(res, status, message) { response(res, status, { error: message }); }
-function principal() {
-  const id = config.web.principalId || store.getSetting('owner_chat_id') || config.ownerChatId;
-  if (!id) throw new Error('WEB_PRINCIPAL_ID is not set and the Telegram owner is unknown. Add WEB_PRINCIPAL_ID to .env.');
-  return String(id);
-}
 function readJson(req, limit = 16384) {
   return new Promise((resolve, reject) => {
     let size = 0, text = '', tooLarge = false;
@@ -70,14 +65,6 @@ function readJson(req, limit = 16384) {
 }
 function sameOrigin(req) {
   return req.headers.origin === config.web.origin;
-}
-function session(req) {
-  const token = /(?:^|;\s*)asc_session=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '')?.[1];
-  const item = token && sessions.get(token);
-  if (!item) return null;
-  if (item.expires < Date.now()) { sessions.delete(token); return null; }
-  item.expires = Date.now() + 12 * 60 * 60 * 1000;
-  return item;
 }
 function guardMutation(req, res, s) {
   if (!sameOrigin(req) || req.headers['x-csrf-token'] !== s.csrf) {
@@ -129,8 +116,8 @@ async function upload(req, res, name, pid, targetId, newDossier) {
     await fsp.writeFile(files.meta, JSON.stringify(meta), { flag: 'wx', mode: 0o600 });
     // Detect and index text-layer PDFs locally as soon as upload finishes. Image pages
     // still stop for explicit vision approval; this job makes no model calls.
-    const job = /\.pdf$/i.test(name) && !running && await pdftotextAvailable()
-      ? startJob('import', (progress) => importFile(pid, { uploadId: id, dossierId, localOnly: true }, progress))
+    const job = /\.pdf$/i.test(name) && !running.has(String(pid)) && await pdftotextAvailable()
+      ? startJob(pid, 'import', (progress) => importFile(pid, { uploadId: id, dossierId, localOnly: true }, progress))
       : null;
     response(res, 201, { ...meta, jobId: job?.id ?? null });
   } catch (err) {
@@ -202,32 +189,41 @@ async function saveUploadMeta(meta) {
   await fsp.writeFile(`${files.meta}.tmp`, JSON.stringify(meta), { mode: 0o600 });
   await fsp.rename(`${files.meta}.tmp`, files.meta);
 }
-function startJob(kind, work, { sideConversation = false } = {}) {
+function startJob(principalId, kind, work, { sideConversation = false } = {}) {
+  const pid = String(principalId);
   if (sideConversation) {
-    if (!running || sideConversationRunning) {
+    if (!running.has(pid) || sideConversationRunning.has(pid)) {
       const err = new Error('پاسخ گفت‌وگوی قبلی هنوز در حال آماده‌سازی است.'); err.status = 409; throw err;
     }
-    sideConversationRunning = true;
+    sideConversationRunning.add(pid);
   } else {
-    if (running || sideConversationRunning) {
+    if (running.has(pid) || sideConversationRunning.has(pid)) {
       const err = new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.'); err.status = 409; throw err;
     }
-    cancel.newInstruction(principal());
-    running = true;
+    cancel.newInstruction(pid);
+    running.add(pid);
   }
   const id = randomUUID();
-  const job = { id, kind, sideConversation, state: 'running', stage: 'شروع', startedAt: Date.now(), result: null };
+  const job = { id, principalId: pid, kind, sideConversation, state: 'running',
+    stage: 'شروع', startedAt: Date.now(), result: null };
   jobs.set(id, job);
-  if (jobs.size > 100) jobs.delete(jobs.keys().next().value);
+  const old = [...jobs.values()].filter((item) => item.principalId === pid && item.state !== 'running');
+  if (old.length > 100) jobs.delete(old[0].id);
   void (async () => {
     try { job.result = await work((stage) => { job.stage = String(stage).slice(0, 300); }, job);
       job.state = job.result?.needsVision ? 'needs_vision' : 'done'; }
     catch (err) { job.state = 'failed'; job.error = err.message;
       if (err.savedScan) job.savedScan = err.savedScan;
       console.error(`[web] ${kind}:`, err); }
-    finally { job.finishedAt = Date.now(); if (sideConversation) sideConversationRunning = false; else running = false; }
+    finally { job.finishedAt = Date.now();
+      if (sideConversation) sideConversationRunning.delete(pid); else running.delete(pid); }
   })();
   return { id };
+}
+function publicJob(job) {
+  if (!job) return null;
+  const { principalId: _principalId, ...view } = job;
+  return view;
 }
 function requireDossier(pid, id) {
   const d = store.getDossier(pid, Number(id));
@@ -361,48 +357,74 @@ function state(pid, dossierId, fresh = false) {
     stats: store.stats(pid) };
 }
 async function servePublic(res, pathname) {
-  const name = pathname === '/' ? 'index.html' : pathname.slice(1);
-  if (!['index.html', 'app.css', 'app.js', 'markdown.js', 'atlas.png', 'vazirmatn.woff2'].includes(name)) return error(res, 404, 'یافت نشد.');
-  const type = name.endsWith('.html') ? 'text/html' : name.endsWith('.css') ? 'text/css'
-    : name.endsWith('.png') ? 'image/png' : name.endsWith('.woff2') ? 'font/woff2' : 'text/javascript';
-  const body = await fsp.readFile(path.join(publicDir, name));
-  res.writeHead(200, { 'Content-Type': ['image/png', 'font/woff2'].includes(type) ? type : `${type}; charset=utf-8`, 'Cache-Control': 'no-store',
+  const appRoutes = new Set(['/', '/login', '/dossiers', '/dashboard', '/sources', '/agents', '/evidence', '/settings']);
+  let name;
+  try { name = appRoutes.has(pathname) ? 'index.html' : decodeURIComponent(pathname).replace(/^\/+/, ''); }
+  catch { return error(res, 400, 'نشانی نامعتبر است.'); }
+  if (!name || name.includes('\0')) return error(res, 404, 'یافت نشد.');
+  const file = path.resolve(publicDir, name);
+  const relative = path.relative(publicDir, file);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return error(res, 404, 'یافت نشد.');
+  let stat;
+  try { stat = await fsp.stat(file); } catch { return error(res, 404, 'یافت نشد.'); }
+  if (!stat.isFile()) return error(res, 404, 'یافت نشد.');
+  const ext = path.extname(file).toLowerCase();
+  const types = { '.html':'text/html; charset=utf-8', '.css':'text/css; charset=utf-8',
+    '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8',
+    '.json':'application/json; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg',
+    '.jpeg':'image/jpeg', '.webp':'image/webp', '.svg':'image/svg+xml', '.woff2':'font/woff2',
+    '.ico':'image/x-icon', '.txt':'text/plain; charset=utf-8' };
+  const type = types[ext];
+  if (!type) return error(res, 404, 'یافت نشد.');
+  const immutable = name.startsWith('assets/');
+  res.writeHead(200, { 'Content-Type': type,
+    'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-store',
     'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" });
-  res.end(body);
+    'Content-Security-Policy': "default-src 'self'; base-uri 'self'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self'; form-action 'self'; frame-ancestors 'none'" });
+  fs.createReadStream(file).pipe(res);
 }
 async function route(req, res, { runTeam, runChat, runSideChat }) {
   const url = new URL(req.url, 'http://localhost');
   if (!url.pathname.startsWith('/api/')) return servePublic(res, url.pathname);
+  if (url.pathname === '/api/signup' && req.method === 'POST') {
+    if (!sameOrigin(req)) return error(res, 403, 'مبدأ درخواست مجاز نیست.');
+    const input = await readJson(req);
+    const account = await auth.createAccount(input);
+    const created = auth.issueSession(account);
+    return response(res, 201, auth.publicSession(created),
+      { 'Set-Cookie': auth.sessionCookie(created.token) });
+  }
   if (url.pathname === '/api/login' && req.method === 'POST') {
     if (!sameOrigin(req)) return error(res, 403, 'مبدأ درخواست مجاز نیست.');
     const ip = req.socket.remoteAddress;
     const old = attempts.get(ip) ?? { n: 0, until: 0 };
     if (old.until > Date.now()) return error(res, 429, 'چند دقیقه بعد دوباره تلاش کن.');
-    const { password } = await readJson(req);
-    const salt = Buffer.from('asc-web-password-v1');
-    const expected = scryptSync(config.web.password, salt, 32);
-    const actual = scryptSync(String(password ?? ''), salt, 32);
-    if (!timingSafeEqual(expected, actual)) {
+    const input = await readJson(req);
+    let account;
+    try {
+      account = Object.hasOwn(input, 'email')
+        ? await auth.authenticateAccount(input.email, input.password)
+        : await auth.authenticateLegacy(input.password);
+    } catch (err) {
+      if (err.status !== 401) throw err;
       const n = old.n + 1;
       attempts.set(ip, { n, until: n >= 5 ? Date.now() + 15 * 60 * 1000 : 0 });
-      return error(res, 401, 'رمز درست نیست.');
+      throw err;
     }
     attempts.delete(ip);
-    const token = randomBytes(32).toString('hex');
-    const item = { csrf: randomBytes(24).toString('hex'), expires: Date.now() + 12 * 60 * 60 * 1000 };
-    sessions.set(token, item);
-    return response(res, 200, { csrf: item.csrf }, { 'Set-Cookie': `asc_session=${token}; HttpOnly;${secureCookie} SameSite=Strict; Path=/; Max-Age=43200` });
+    const created = auth.issueSession(account);
+    return response(res, 200, auth.publicSession(created),
+      { 'Set-Cookie': auth.sessionCookie(created.token) });
   }
-  const s = session(req);
+  const s = auth.readSession(req.headers.cookie);
   if (!s) return error(res, 401, 'وارد حساب شو.');
-  if (url.pathname === '/api/session' && req.method === 'GET') return response(res, 200, { csrf: s.csrf });
+  if (url.pathname === '/api/session' && req.method === 'GET')
+    return response(res, 200, auth.publicSession(s));
   if (req.method !== 'GET' && !guardMutation(req, res, s)) return;
-  const pid = principal();
+  const pid = s.principalId;
   if (url.pathname === '/api/logout' && req.method === 'POST') {
-    const token = /asc_session=([a-f0-9]{64})/.exec(req.headers.cookie || '')?.[1];
-    sessions.delete(token);
-    return response(res, 200, { ok: true }, { 'Set-Cookie': `asc_session=; HttpOnly;${secureCookie} SameSite=Strict; Path=/; Max-Age=0` });
+    auth.revokeSession(s.token);
+    return response(res, 200, { ok: true }, { 'Set-Cookie': auth.sessionCookie() });
   }
   if (url.pathname === '/api/state' && req.method === 'GET')
     return response(res, 200, state(pid, url.searchParams.get('dossierId'), url.searchParams.get('fresh') === '1'));
@@ -495,7 +517,7 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     if (!['pending','paused','failed'].includes(node.status)) throw new Error('این نیت آمادهٔ اجرا نیست.');
     if (settings.budget() !== null && settings.budget() <= 0)
       throw new Error('سقف هزینهٔ پژوهش صفر است؛ عامل‌ها شروع نشدند.');
-    return response(res, 202, startJob('team', (progress) =>
+    return response(res, 202, startJob(pid, 'team', (progress) =>
       runTeam({ principalId: pid, dossierId: node.dossier_id, nodeId: node.id, onProgress: progress })));
   }
   if (url.pathname === '/api/site-crawl' && req.method === 'POST') {
@@ -505,7 +527,7 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     try { siteUrl = new URL(String(input.url ?? '')); }
     catch { throw new Error('نشانی سایت نامعتبر است.'); }
     if (!['http:', 'https:'].includes(siteUrl.protocol)) throw new Error('نشانی سایت نامعتبر است.');
-    return response(res, 202, startJob('site', (progress) =>
+    return response(res, 202, startJob(pid, 'site', (progress) =>
       collectSite({ principalId: pid, dossierId: dossier.id, url: siteUrl.href,
         maxPages: 10, onProgress: progress })));
   }
@@ -514,7 +536,7 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     const dossier = requireDossier(pid, input.dossierId);
     const question = String(input.question ?? '').trim().slice(0, 1000);
     if (!question) throw new Error('پرسش مشاور منابع لازم است.');
-    return response(res, 202, startJob('consult', async (progress) => {
+    return response(res, 202, startJob(pid, 'consult', async (progress) => {
       progress('مشاور منابع: یک درخواست OpenRouter');
       const found = await consultSources(question);
       for (const candidate of found.sources) store.addSourceCandidate({ principalId: pid,
@@ -525,8 +547,10 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
   }
   if (url.pathname === '/api/active-job' && req.method === 'GET')
     return response(res, 200, {
-      job: [...jobs.values()].find((j) => j.state === 'running' && !j.sideConversation) ?? null,
-      sideJob: [...jobs.values()].find((j) => j.state === 'running' && j.sideConversation) ?? null,
+      job: publicJob([...jobs.values()].find((j) => j.principalId === pid &&
+        j.state === 'running' && !j.sideConversation)),
+      sideJob: publicJob([...jobs.values()].find((j) => j.principalId === pid &&
+        j.state === 'running' && j.sideConversation)),
     });
   if (url.pathname === '/api/uploads' && req.method === 'GET') {
     const files = await fsp.readdir(uploadDir).catch(() => []);
@@ -552,7 +576,7 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
   if (url.pathname === '/api/delete-dossier' && req.method === 'POST') {
     const { dossierId, expectedTopic } = await readJson(req);
     const dossier = requireDossier(pid, dossierId);
-    if (running) return error(res, 409, 'یک کار در حال اجراست؛ پس از پایان یا توقف آن پرونده را حذف کن.');
+    if (running.has(pid)) return error(res, 409, 'یک کار در حال اجراست؛ پس از پایان یا توقف آن پرونده را حذف کن.');
     if (String(expectedTopic) !== dossier.topic)
       return error(res, 409, 'نام پرونده عوض شده است؛ صفحه را تازه کن و دوباره بررسی کن.');
     const removed = store.deleteDossier(pid, dossier.id);
@@ -573,7 +597,7 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     if (!input.uploadId) throw new Error('فایل انتخاب نشده است.');
     if (input.visionMode && !['all', 'batch', 'google_ocr'].includes(input.visionMode)) throw new Error('حالت خواندن نامعتبر است.');
     await uploaded(input.uploadId, pid);
-    return response(res, 202, startJob('import', (progress) => importFile(pid, input, progress)));
+    return response(res, 202, startJob(pid, 'import', (progress) => importFile(pid, input, progress)));
   }
   if (url.pathname === '/api/ocr-text' && req.method === 'GET') {
     const meta = await uploaded(url.searchParams.get('uploadId'), pid);
@@ -599,14 +623,14 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     if (input.documentId && !focusedDoc) throw new Error('سند انتخاب‌شده پیدا نشد.');
     const dossier = focusedDoc ? requireDossier(pid, focusedDoc.dossier_id)
       : input.dossierId ? requireDossier(pid, input.dossierId) : null;
-    const alongside = running && [...jobs.values()].some((job) => job.state === 'running' &&
-      !job.sideConversation && ['chat', 'team', 'research', 'deep'].includes(job.kind));
-    if (alongside) return response(res, 202, startJob('chat', (progress, job) =>
+    const alongside = running.has(pid) && [...jobs.values()].some((job) => job.principalId === pid &&
+      job.state === 'running' && !job.sideConversation && ['chat', 'team', 'research', 'deep'].includes(job.kind));
+    if (alongside) return response(res, 202, startJob(pid, 'chat', (progress, job) =>
       runSideChat({ principalId: pid,
         dossierId: dossier?.id ?? settings.activeDossier(pid) ?? null, userText: message,
         onDelta: (text) => { job.partial = String(text).slice(0, 4000); progress('در حال نوشتن پاسخ…'); } }),
     { sideConversation: true }));
-    return response(res, 202, startJob('chat', (progress) => runChat({
+    return response(res, 202, startJob(pid, 'chat', (progress) => runChat({
       principalId: pid, dossierId: dossier?.id ?? null, userText: message,
       focusDocumentId: focusedDoc?.id ?? null, onProgress: progress })));
   }
@@ -616,7 +640,7 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     if (!question) throw new Error('سؤال تحقیق خالی است.');
     const dossier = input.dossierId ? requireDossier(pid, input.dossierId) : null;
     const dossierId = dossier?.id ?? Number(store.insertDossier({ principalId: pid, topic: question, question }));
-    return response(res, 202, startJob('research', (progress) => cancel.underway(pid, 'تحقیق وب', () => runResearch({
+    return response(res, 202, startJob(pid, 'research', (progress) => cancel.underway(pid, 'تحقیق وب', () => runResearch({
       principalId: pid, dossierId, topic: dossier?.topic ?? question, question,
       onProgress: (e) => progress(e.detail || e.stage || 'تحقیق…'),
     }))));
@@ -626,12 +650,12 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     const question = String(input.question ?? '').trim().slice(0, 1000);
     if (!question) throw new Error('پرسش کاوش خالی است.');
     const ceilingUsd = deepCeiling(input.ceilingUsd);
-    if (running) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
+    if (running.has(pid)) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
     const dossier = input.dossierId ? requireDossier(pid, input.dossierId) : null;
     const dossierId = dossier?.id ?? Number(store.insertDossier({ principalId: pid,
       topic: question, question, state: 'open' }));
     settings.setActiveDossier(pid, dossierId);
-    const started = startJob('deep', (progress, job) =>
+    const started = startJob(pid, 'deep', (progress, job) =>
       runDeepJob(pid, dossierId, question, ceilingUsd, null, progress, job));
     store.addMessage({ principalId: pid, dossierId, role: 'user', text: question });
     return response(res, 202, started);
@@ -642,14 +666,15 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     const run = store.getInvestigation(pid, input.runId);
     if (!run) throw new Error('این کاوش پیدا نشد.');
     if (run.state !== 'paused') throw new Error('این کاوش در حالت توقف نیست.');
-    if (running) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
+    if (running.has(pid)) throw new Error('یک کار در حال اجراست؛ تا پایان آن صبر کن.');
     settings.setActiveDossier(pid, run.dossier_id);
-    return response(res, 202, startJob('deep', (progress, job) =>
+    return response(res, 202, startJob(pid, 'deep', (progress, job) =>
       runDeepJob(pid, run.dossier_id, run.question, ceilingUsd, run.id, progress, job)));
   }
   if (url.pathname === '/api/stop' && req.method === 'POST') {
     cancel.request(pid);
-    const deepJob = [...jobs.values()].find((job) => job.state === 'running' && job.kind === 'deep');
+    const deepJob = [...jobs.values()].find((job) => job.principalId === pid &&
+      job.state === 'running' && job.kind === 'deep');
     if (deepJob?.runId) store.requestStop(pid, deepJob.runId);
     return response(res, 200, { ok: true });
   }
@@ -657,19 +682,19 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
     const { documentId } = await readJson(req);
     if (!documentId) throw new Error('شمارهٔ سند لازم است.');
     if (!store.getDocument(pid, Number(documentId))) throw new Error('سند پیدا نشد.');
-    return response(res, 202, startJob('claims', (progress) => extractClaimsFor({
+    return response(res, 202, startJob(pid, 'claims', (progress) => extractClaimsFor({
       principalId: pid, documentId: Number(documentId), onProgress: progress })));
   }
   if (url.pathname === '/api/analyze-document' && req.method === 'POST') {
     const { documentId } = await readJson(req);
     const doc = store.getDocument(pid, Number(documentId));
     if (!doc) throw new Error('سند پیدا نشد.');
-    return response(res, 202, startJob('analysis', (progress) => cancel.underway(pid,
+    return response(res, 202, startJob(pid, 'analysis', (progress) => cancel.underway(pid,
       'تحلیل عمیق سند', () => analyzeDocument({ principalId: pid, documentId: doc.id, onProgress: progress }))));
   }
   if (url.pathname.startsWith('/api/jobs/') && req.method === 'GET') {
     const job = jobs.get(url.pathname.slice('/api/jobs/'.length));
-    return job ? response(res, 200, job) : error(res, 404, 'کار پیدا نشد.');
+    return job?.principalId === pid ? response(res, 200, publicJob(job)) : error(res, 404, 'کار پیدا نشد.');
   }
   if (url.pathname === '/api/ledger' && req.method === 'GET') {
     const d = requireDossier(pid, url.searchParams.get('dossierId'));
@@ -691,12 +716,17 @@ async function route(req, res, { runTeam, runChat, runSideChat }) {
 
 export function createWebServer({ runTeam = runResearchTeam,
   runChat = motherTurn, runSideChat = replyDuringWork } = {}) {
-  if (!config.web.password || config.web.password.length < 16) throw new Error('WEB_PASSWORD must be at least 16 characters.');
+  if (config.web.password && config.web.password.length < 16)
+    throw new Error('WEB_PASSWORD must be at least 16 characters.');
+  if (!config.web.password && !config.web.signupEnabled)
+    throw new Error('Set WEB_PASSWORD or enable WEB_SIGNUP_ENABLED.');
+  if (!Number.isFinite(config.web.sessionHours) || config.web.sessionHours <= 0 || config.web.sessionHours > 720)
+    throw new Error('WEB_SESSION_HOURS must be greater than 0 and at most 720.');
   const secure = /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(config.web.origin);
   const localPreview = process.env.NODE_ENV !== 'production' &&
     /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/i.test(config.web.origin);
   if (!secure && !localPreview) throw new Error('WEB_ORIGIN must be the exact HTTPS origin of the web app.');
-  principal();
+  if (config.web.password) auth.legacyPrincipalId();
   return http.createServer((req, res) => {
     Promise.resolve(route(req, res, { runTeam, runChat, runSideChat })).catch((err) => {
       const badInput = /نامعتبر|نیست|خالی|لازم|سقف|پیدا نشد/.test(err.message);
@@ -709,17 +739,19 @@ export function createWebServer({ runTeam = runResearchTeam,
 }
 
 export function runWeb() {
-  const pid = principal();
-  try { refreshLibraryIndex(pid); }
+  const pid = config.web.password ? auth.legacyPrincipalId() : null;
+  if (pid) try { refreshLibraryIndex(pid); }
   catch (err) { console.warn('[asc-web] source index refresh failed:', err); }
   store.pauseInterruptedResearchNodes();
   store.pauseInterruptedSiteCrawls();
-  const activeKey = `web.deep.active_run.${pid}`;
-  const interrupted = store.getSetting(activeKey);
-  if (interrupted) {
-    if (store.pauseInterruptedInvestigation(pid, interrupted))
-      console.warn(`[asc-web] investigation #${interrupted} interrupted; resume is available`);
-    store.setSetting(activeKey, '');
+  if (pid) {
+    const activeKey = `web.deep.active_run.${pid}`;
+    const interrupted = store.getSetting(activeKey);
+    if (interrupted) {
+      if (store.pauseInterruptedInvestigation(pid, interrupted))
+        console.warn(`[asc-web] investigation #${interrupted} interrupted; resume is available`);
+      store.setSetting(activeKey, '');
+    }
   }
   const server = createWebServer();
   server.listen(config.web.port, '127.0.0.1', () => console.log(`[asc-web] http://127.0.0.1:${config.web.port}`));
